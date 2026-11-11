@@ -38,7 +38,7 @@ from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 EASY_VERSION = "1.1.0"
-REPO = "scheidlerbalint1103-dev/beammp-easyserver"
+REPO = "Csabika-dev/beammp-easyserver"
 BEAMMP_REPO = "BeamMP/BeamMP-Server"
 IS_WIN = os.name == "nt"
 HERE = os.path.dirname(os.path.abspath(__file__))
