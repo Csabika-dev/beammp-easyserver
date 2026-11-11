@@ -23,7 +23,7 @@ Open `http://<server-ip>:30815` from any PC or phone at home, or use the **BeamM
 | **Updates** | Checks for new BeamMP server and EasyServer versions, installs server updates in one click |
 | **Logs** | Live server log, with hints that explain common errors in plain English |
 | **Notifications** | Crashes, unexpected stops, updates, blocked mods, failed logins, player joins. Shown in the dashboard and optionally sent to **Discord** and/or **email** |
-| **Settings** | Notifications, password, **two-step login**, **access from the internet (HTTPS)**, **backup / import / export** |
+| **Settings** | Notifications, password, **two-step login** (scan a QR code), **access from the internet (HTTPS)**, **hide your IP / DDoS protection**, **backup / import / export** |
 
 Also: **dark / light mode** (follows your system, or switch with the moon icon), and it works on phones. Before anything changes your network (server port, internet access, HTTPS) the dashboard shows exactly what will change and asks first; the firewall on the server is updated for you, your router never is.
 
@@ -178,6 +178,8 @@ Friends on the **same Wi-Fi** can join right away using the LAN address shown at
 
 For friends **anywhere else**, forward port **30814** (both **TCP and UDP**) on your router to the server computer. Search for "*your router model* port forwarding" for instructions. Then your server shows up in the BeamMP server list (if you chose public), or friends can connect with your public IP.
 
+**Worried about DDoS?** Forwarding the port means players connect straight to your home IP. Under **Settings → Hide your IP** (off by default) players can join through a relay instead - playit.gg, a VPN with port forwarding, or your own VPS. Much less chance of a DDoS hitting your home, but a bit more lag. On Linux there's also optional **flood protection** for the game port. See [PROTECT-YOUR-IP.md](PROTECT-YOUR-IP.md).
+
 ## 🛡️ Mod virus check
 
 Every mod is checked **before** players can download it, whichever way you add it (web page, folder, drag & drop or command). Mods that fail are refused, or moved to `Resources/Quarantine` with a note explaining why.
@@ -266,7 +268,7 @@ Suggestions are welcome; open an issue.
 - **Security alerts (on by default):** password guessing, websites probing the dashboard ("DNS rebinding"), mods that fail the virus check, tampered server files (planted links), zip bombs in imports and connection floods raise an alert. It goes to every channel you set up (dashboard banner, Discord, email - even if their normal switch is off, plus pop-ups on devices where you allowed them) and repeats every 15 minutes until you click **Got it - stop alerts** (or the link / pop-up in the message). Both can be turned off under Settings -> Security alerts.
 - On your home network the dashboard uses plain HTTP unless you turn on HTTPS in Settings - turn it on if other people share your Wi-Fi.
 
-**Worried about DDoS / your home IP?** See [PROTECT-YOUR-IP.md](PROTECT-YOUR-IP.md) for how to hide your IP with a tunnel.
+**Worried about DDoS / your home IP?** Turn on **Settings → Hide your IP** and see [PROTECT-YOUR-IP.md](PROTECT-YOUR-IP.md).
 
 **Found a security bug?** Please don't open a public issue - report it privately with the **Report a vulnerability** button on the [Security tab](https://github.com/Csabika-dev/beammp-easyserver/security) or email **beammp.easyserver.security@gmail.com**. See [SECURITY.md](SECURITY.md).
 
