@@ -384,7 +384,7 @@ VIEWS.overview = async m => {
   if (d.update_available) banners.push(`<div class="banner info"><b>A BeamMP server update is available.</b><span class="spacer"></span><button class="btn sm" data-go="updates">See update</button></div>`);
   if (d.quarantined) banners.push(`<div class="banner warn"><b>${d.quarantined} mod(s) blocked by the virus check.</b><span class="spacer"></span><button class="btn sm" data-go="mods">Review</button></div>`);
   m.innerHTML = `
-    <div class="row"><div><h1>${esc(d.name || "BeamMP server")}</h1><p class="sub">${esc(d.lan_ip)}:${esc(d.port)} · ${esc(d.map || "?")} · ${d.private ? "Private" : "Public"}</p></div><span class="spacer"></span>${statePill(s.state)}</div>
+    <div class="row"><div><h1>${esc(d.name || "BeamMP server")}</h1><p class="sub">${esc(d.lan_ip)}:${esc(d.port)} · ${esc(d.map || "?")} · ${d.private ? "Private" : "Public"}${d.relay ? " · players join via " + esc(d.relay) : ""}</p></div><span class="spacer"></span>${statePill(s.state)}</div>
     ${banners.join("")}
     <div class="grid g4">
       <div class="card stat"><div class="label">Players online</div><div class="value">${online.length}<span class="muted small"> / ${esc(d.max_players ?? "?")}</span></div><div class="note">${online.length ? esc(online.slice(0, 3).join(", ")) + (online.length > 3 ? "…" : "") : "Nobody right now"}</div></div>
@@ -768,8 +768,9 @@ VIEWS.network = async m => {
       <button class="btn" id="again">Check again</button><button class="btn primary" id="deep">Check server list</button></div>
       <div class="grid g3" style="margin-bottom:16px">
         <div class="card stat"><div class="label">Home network address</div><div class="value mono">${esc(d.lan_ip)}:${esc(d.port)}</div><div class="note">For friends on your Wi-Fi</div></div>
-        <div class="card stat"><div class="label">Internet address</div><div class="value mono">${esc(d.public_ip || "unknown")}${d.public_ip ? ":" + esc(d.port) : ""}</div><div class="note">For friends anywhere else</div></div>
-        <div class="card stat"><div class="label">Port</div><div class="value">${esc(d.port)}</div><div class="note">Forward TCP + UDP on your router</div></div>
+        ${d.relay ? `<div class="card stat"><div class="label">Internet address (relay)</div><div class="value mono">${esc(d.relay)}</div><div class="note">Your home address is hidden</div></div>`
+          : `<div class="card stat"><div class="label">Internet address</div><div class="value mono">${esc(d.public_ip || "unknown")}${d.public_ip ? ":" + esc(d.port) : ""}</div><div class="note">For friends anywhere else</div></div>`}
+        <div class="card stat"><div class="label">Port</div><div class="value">${esc(d.port)}</div><div class="note">${d.relay ? "No router port forward needed" : "Forward TCP + UDP on your router"}</div></div>
       </div>
       <div class="card tight">${d.checks.map(c => `<div class="check"><span class="mark ${mk[c.state][0]}">${mk[c.state][1]}</span><div><b>${esc(c.name)}</b><div class="small muted">${esc(c.detail)}</div></div></div>`).join("")}</div>
       ${d.tips.length ? `<div class="card" style="margin-top:16px"><h2>What to do</h2><ul>${d.tips.map(t => `<li>${esc(t)}</li>`).join("")}</ul></div>` : ""}
@@ -903,6 +904,32 @@ VIEWS.settings = async m => {
     ${s.cert_fingerprint ? `<p class="small">Certificate fingerprint (SHA-256): <span class="mono">${esc(s.cert_fingerprint)}</span></p>` : ""}
     <button class="btn" id="saveremote">Apply</button></div>
 
+  <div class="card" style="margin-top:16px" id="relaycard"><h2>Hide your IP (DDoS protection) <span class="badge ${s.relay_enabled ? "good" : ""}">${s.relay_enabled ? "On" : "Off"}</span></h2>
+    <p class="small muted">Normally players connect straight to your home internet address. Everyone who plays on your server can see it, and someone could use it to flood (DDoS) your connection so your whole home loses internet. With this on, players join through a relay instead.</p>
+    <div class="grid g2" style="margin:10px 0">
+      <div class="card tight" style="padding:10px 14px"><b style="color:var(--good-ink)">✓ Much less chance of DDoS</b><div class="small muted">Your home address stays hidden. Attacks hit the relay, which is built to take them - not your home.</div></div>
+      <div class="card tight" style="padding:10px 14px"><b style="color:var(--warn-ink)">✕ Higher latency (more lag)</b><div class="small muted">Every packet makes a detour through the relay: usually +10-40 ms with a relay in your country, more if it's far away. Pick one close to you and your players.</div></div>
+    </div>
+    ${tg("relay_enabled", "Hide my IP - players join through a relay", "Off by default. You need a relay first (see below)", s.relay_enabled)}
+    <details style="margin:8px 0"><summary class="small"><b>How do I get a relay?</b></summary><ul class="small">
+      <li><b>playit.gg</b> - easiest: install their app on this computer and make a tunnel to port ${esc((s.relay_servers[0] || {}).port || 30814)}. BeamMP needs TCP and UDP, which needs playit Premium.</li>
+      <li><b>A VPN with port forwarding</b> (for example Proton VPN or PIA - many big VPNs don't offer it). The forwarded port can change when the VPN reconnects.</li>
+      <li><b>Your own VPS</b> (about €4/month) with WireGuard - most work to set up, but you control it and the address never changes.</li>
+      <li>Step-by-step: <a href="https://github.com/Csabika-dev/beammp-easyserver/blob/main/PROTECT-YOUR-IP.md" target="_blank" rel="noopener noreferrer">PROTECT-YOUR-IP guide</a></li></ul></details>
+    <label class="f"><span>Relay address</span><input type="text" id="relay_host" value="${esc(s.relay_host || "")}" placeholder="e.g. your-name.playit.gg or 203.0.113.5" autocomplete="off" spellcheck="false"><small>The host name or IP address the relay gave you, without the port</small></label>
+    ${s.relay_servers.map(r => `<label class="f"><span>Port on the relay${s.relay_servers.length > 1 ? " for " + esc(r.name) : ""}</span><input type="number" min="1" max="65535" data-rp="${esc(r.id)}" value="${esc(r.relay_port ?? "")}" placeholder="${esc(r.port ?? "")}" style="max-width:220px"><small>Leave empty if the relay uses the same port as the server (${esc(r.port ?? "?")})</small></label>`).join("")}
+    <div class="small" style="margin:8px 0 12px"><b>When it's on:</b><ul style="margin:4px 0">
+      <li>Remove the port forward for the game port from your router - otherwise your home address is still reachable.</li>
+      <li>Make the server private (Config → Private server) and share the relay address. The public server list shows the address the server reports from, which is usually your home IP.</li>
+      <li>If your home IP was already shared, restart your router - most providers then give you a new address.</li>
+      ${s.remote_enabled ? `<li>"Access from the internet" is on, so the dashboard is still reachable at your home address.</li>` : ""}</ul></div>
+    <div class="row"><button class="btn primary" id="saverelay">Save</button><button class="btn" id="testrelay">Test the relay</button></div>
+    <div id="relayres"></div>
+    <hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
+    ${s.platform === "linux" ? `${tg("flood_protect", "Flood protection", "Off by default. Limits how fast one address can connect to and send to your game server. Stops floods from single computers; it can't stop a big DDoS - only hiding your IP can. Your home network is never limited.", s.flood_protect)}<div class="small muted" id="floodst"></div>`
+      : `<p class="small muted"><b>Flood protection</b> (per-address limits on the game port) is only available on Linux. On Windows, hiding your IP is the protection that matters.</p>`}
+  </div>
+
   <div class="card" style="margin-top:16px"><h2>Backup / move to another computer</h2>
     <p class="small muted">Export your server settings (and optionally all mods) into one file, then import it on another server. Keys and passwords are never exported.</p>
     <div class="row"><a class="btn" href="/api/export?srv=${encodeURIComponent(SERVER)}" download>Export settings</a><a class="btn" href="/api/export?mods=1&srv=${encodeURIComponent(SERVER)}" download>Export settings + mods</a>
@@ -929,6 +956,29 @@ VIEWS.settings = async m => {
   const popNote = () => { $("#popupnote").textContent = !window.Notification ? (window.isSecureContext ? "This browser has no pop-ups" : "Pop-ups need HTTPS (turn it on below) or http://localhost") : Notification.permission === "granted" ? "On for this browser" : Notification.permission === "denied" ? "Blocked - allow notifications for this site in the browser settings" : ""; };
   popNote();
   $("#popups").onclick = async () => { if (window.Notification) { await Notification.requestPermission(); popNote(); if (Notification.permission === "granted") new Notification("BeamMP dashboard", { body: "Security alerts will pop up here while the dashboard is open." }); } else popNote(); };
+  $("#relay_host").onchange = () => {   // pasted "host:port"? split it
+    const v = $("#relay_host").value.trim().replace(/^[a-z]+:\/\//i, "").replace(/\/.*$/, ""), m = v.match(/^([^:\s]+):(\d{1,5})$/);
+    $("#relay_host").value = m ? m[1] : v;
+    const first = document.querySelector("[data-rp]");
+    if (m && first && !first.value) first.value = m[2];
+  };
+  const relayBody = () => { const ports = {}; document.querySelectorAll("[data-rp]").forEach(i => ports[i.dataset.rp] = i.value === "" ? null : Number(i.value)); return { relay_enabled: $("#relay_enabled").checked, relay_host: $("#relay_host").value.trim(), relay_ports: ports }; };
+  $("#saverelay").onclick = async () => { try { await api("/api/settings", { json: relayBody() }); toast($("#relay_enabled").checked ? "Hide my IP is on - players now get the relay address" : "Saved"); show("settings"); } catch (e) { toast(e.message); } };
+  $("#testrelay").onclick = async () => {
+    const b = $("#testrelay"); b.disabled = true; b.textContent = "Testing…";
+    try {
+      const body = relayBody(); delete body.relay_enabled;
+      await api("/api/settings", { json: body });
+      const r = await api("/api/relay-check");
+      $("#relayres").innerHTML = `<div class="card tight" style="margin-top:12px">${r.results.map(x => `<div class="check"><span class="mark ${x.ok ? "ok" : "bad"}">${x.ok ? "✓" : "✕"}</span><div><b>${esc(x.name)} - ${esc(x.address)}</b><div class="small muted">${x.ok ? "Reachable (about " + esc(x.ms) + " ms from here to the relay and back). UDP can't be tested from here - join once to be sure." : "Nothing answers. Is the relay running, and does it forward TCP and UDP to this computer?"}</div></div></div>`).join("") || `<p class="small muted">No servers to test.</p>`}</div>`;
+    } catch (e) { toast(e.message); }
+    b.disabled = false; b.textContent = "Test the relay";
+  };
+  if ($("#flood_protect")) {
+    const fst = async () => { try { const f = await api("/api/flood-status"); $("#floodst").textContent = f.active ? "Active - blocked " + f.dropped + " packets since it was turned on" : ($("#flood_protect").checked ? "Starting…" : ""); } catch (e) { } };
+    $("#flood_protect").onchange = async () => { try { await api("/api/settings", { json: { flood_protect: $("#flood_protect").checked } }); toast($("#flood_protect").checked ? "Flood protection is on" : "Flood protection is off"); setTimeout(fst, 1500); } catch (e) { toast(e.message); $("#flood_protect").checked = !$("#flood_protect").checked; } };
+    fst();
+  }
   $("#savevt").onclick = async () => { const v = $("#vt").value.trim(); try { await api("/api/settings", { json: { vt_key: v === "off" ? "" : v } }); toast(v === "off" ? "VirusTotal turned off" : "Saved"); show("settings"); } catch (e) { toast(e.message); } };
   $("#savepw").onclick = async () => { try { await api("/api/password", { json: { current: $("#pw_cur").value, new: $("#pw_new").value } }); toast("Password changed"); $("#pw_cur").value = $("#pw_new").value = ""; } catch (e) { toast(e.message); } };
   const on = $("#tfaon");
