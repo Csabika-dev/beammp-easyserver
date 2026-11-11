@@ -1,0 +1,9 @@
+# Donation button ("Sponsor" heart at the top of the GitHub page).
+# Remove the "#" in front of the services you use and put in your username.
+# Delete this file if you don't want a donation button.
+
+# github: YOUR-GITHUB-USERNAME        # GitHub Sponsors (needs approval from GitHub)
+# ko_fi: YOUR-KOFI-NAME               # https://ko-fi.com/YOUR-KOFI-NAME
+# buy_me_a_coffee: YOUR-BMC-NAME      # https://buymeacoffee.com/YOUR-BMC-NAME
+# patreon: YOUR-PATREON-NAME
+# custom: ["https://paypal.me/YOUR-PAYPAL-NAME"]
