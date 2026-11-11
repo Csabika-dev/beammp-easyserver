@@ -26,7 +26,10 @@ OUT = "/run/beammp-easyserver-ctl-out"
 LIB = "/usr/local/lib/beammp-easyserver"
 SERVER_DIR = "/opt/beammp-server"
 INSTALL_ENV = "/etc/beammp-easyserver/install.env"
+SERVERS = SERVER_DIR + "/servers"              # extra servers: servers/<id>/
+LIMITS_DIR = "/etc/beammp-easyserver/limits"   # upload limits, re-applied when a server starts
 SECRET_NAMES = {"MODS_PASSWORD", "VT_API_KEY", "DISCORD_WEBHOOK", "SMTP_PASSWORD", "TOTP_SECRET", "BEAMMP_AUTH_KEY"}
+ID_RE = re.compile(r"[a-z0-9]{1,12}")
 RELEASE_BASE = "https://github.com/BeamMP/BeamMP-Server/releases/latest/download/"
 
 
@@ -34,9 +37,188 @@ def run(cmd, **kw):
     return subprocess.run(cmd, capture_output=True, text=True, timeout=kw.pop("timeout", 120), **kw)
 
 
+def unit_for(server):
+    server = server or "main"
+    if server == "main":
+        return "beammp-server"
+    if not ID_RE.fullmatch(str(server)) or not os.path.isdir(os.path.join(SERVERS, server)):
+        raise ValueError("unknown server")
+    return "beammp-server@%s" % server
+
+
 def systemctl(action, unit="beammp-server"):
     r = run(["systemctl", action, unit], timeout=90)
     return {"ok": r.returncode == 0, "msg": "done" if r.returncode == 0 else (r.stderr.strip()[-300:] or "failed")}
+
+
+def server_port(server):
+    path = os.path.join(SERVER_DIR if server == "main" else os.path.join(SERVERS, server), "ServerConfig.toml")
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            m = re.search(r"(?m)^\s*Port\s*=\s*(\d+)", f.read())
+        return int(m.group(1)) if m else None
+    except OSError:
+        return None
+
+
+# ---------------------------------------------------------------- extra servers
+def create_server(server, config, start):
+    if not ID_RE.fullmatch(str(server or "")) or server == "main":
+        return {"ok": False, "msg": "bad server id"}
+    if not isinstance(config, str) or not 10 < len(config) < 60000 or "[General]" not in config:
+        return {"ok": False, "msg": "bad config"}
+    d = os.path.join(SERVERS, server)
+    if os.path.lexists(d):
+        return {"ok": False, "msg": "a server with this id already exists"}
+    u = pwd.getpwnam("beammp")
+    dash = pwd.getpwnam("beammp-dash")
+    os.makedirs(SERVERS, exist_ok=True)
+    os.chown(SERVERS, 0, 0)
+    os.chmod(SERVERS, 0o755)
+    os.mkdir(d)
+    for sub in ("Resources/Client", "Resources/Client-disabled", "Resources/Quarantine", "Resources/Server/EasyServerStats"):
+        os.makedirs(os.path.join(d, sub), exist_ok=True)
+    with open(os.path.join(d, "ServerConfig.toml"), "w", encoding="utf-8") as f:
+        f.write(config if config.endswith("\n") else config + "\n")
+    src = os.path.join(SERVER_DIR, "Resources/Server/EasyServerStats/main.lua")
+    if os.path.isfile(src) and not os.path.islink(src):
+        shutil.copyfile(src, os.path.join(d, "Resources/Server/EasyServerStats/main.lua"))
+    for root, dirs, files in os.walk(d):
+        for x in dirs + files:
+            os.lchown(os.path.join(root, x), u.pw_uid, u.pw_gid)
+    os.chown(d, u.pw_uid, u.pw_gid)
+    os.chmod(d, 0o2770)
+    os.chmod(os.path.join(d, "ServerConfig.toml"), 0o660)
+    for sub in ("Resources/Client", "Resources/Client-disabled", "Resources/Server/EasyServerStats"):
+        os.chmod(os.path.join(d, sub), 0o2775)
+    q = os.path.join(d, "Resources/Quarantine")
+    os.chown(q, dash.pw_uid, u.pw_gid)
+    os.chmod(q, 0o2775)
+    run([LIB + "/apply.sh", "--record", server])
+    run(["systemctl", "enable", "beammp-mods-apply@%s.path" % server, "beammp-server@%s" % server], timeout=60)
+    run(["systemctl", "start", "beammp-mods-apply@%s.path" % server], timeout=60)
+    port = server_port(server)
+    fw = firewall_game(None, port)["msg"] if port else ""
+    res = systemctl("start", "beammp-server@%s" % server) if start else {"ok": True}
+    return {"ok": res["ok"], "msg": "created. " + fw if res["ok"] else "created, but it didn't start: " + res["msg"]}
+
+
+def delete_server(server):
+    if not ID_RE.fullmatch(str(server or "")) or server == "main":
+        return {"ok": False, "msg": "bad server id"}
+    d = os.path.join(SERVERS, server)
+    if os.path.islink(d) or not os.path.isdir(d) or os.path.realpath(d) != d:
+        return {"ok": False, "msg": "no such server"}
+    port = server_port(server)
+    run(["systemctl", "disable", "--now", "beammp-server@%s" % server, "beammp-mods-apply@%s.path" % server], timeout=120)
+    set_limits(server, 0, 0, 0)
+    try:
+        os.remove(os.path.join(LIMITS_DIR, server + ".conf"))
+    except OSError:
+        pass
+    shutil.rmtree("/etc/systemd/system.control/beammp-server@%s.service.d" % server, ignore_errors=True)
+    run(["systemctl", "daemon-reload"])
+    run([LIB + "/secrets.sh", "unset", "BEAMMP_AUTH_KEY_" + server.upper()])
+    try:
+        os.remove("/var/lib/beammp-easyserver/applied-%s" % server)
+    except OSError:
+        pass
+    if port:
+        firewall_game(port, None, close_only=True)
+    shutil.rmtree(d)
+    return {"ok": True, "msg": "deleted"}
+
+
+# ---------------------------------------------------------------- resource limits
+def set_limits(server, cpu_cores, ram_mb, upload_kbps):
+    try:
+        unit = unit_for(server)
+        cpu = float(cpu_cores or 0)
+        ram = int(ram_mb or 0)
+        up = int(upload_kbps or 0)
+        assert 0 <= cpu <= 256 and 0 <= ram <= 1048576 and 0 <= up <= 10000000
+    except (TypeError, ValueError, AssertionError):
+        return {"ok": False, "msg": "bad limits"}
+    props = ["CPUQuota=%d%%" % round(cpu * 100) if cpu else "CPUQuota=",
+             "MemoryMax=%dM" % ram if ram else "MemoryMax=infinity"]
+    r = run(["systemctl", "set-property", unit + ".service"] + props, timeout=60)
+    msgs = []
+    if r.returncode != 0:
+        msgs.append("CPU/RAM limit failed: " + (r.stderr.strip()[-200:] or "?"))
+    os.makedirs(LIMITS_DIR, exist_ok=True)
+    conf = os.path.join(LIMITS_DIR, (server or "main") + ".conf")
+    if up:
+        with open(conf, "w") as f:
+            f.write("UPLOAD_KBPS=%d\n" % up)
+    elif os.path.exists(conf):
+        os.remove(conf)
+    msgs.append(shape())
+    return {"ok": r.returncode == 0, "msg": "; ".join(m for m in msgs if m)}
+
+
+SAFE_ROOT_QDISCS = ("fq_codel", "pfifo_fast", "mq", "noqueue", "fq ", "pfifo ")
+
+
+def shape():
+    """Rebuild the upload (mod download) speed limits with tc: one HTB class per
+    limited server, matching TCP traffic sent from its port. Everything else goes
+    through a 10 Gbit/s default class, i.e. is not slowed down."""
+    rules = []
+    try:
+        names = sorted(os.listdir(LIMITS_DIR))
+    except OSError:
+        names = []
+    for n in names:
+        sid = n[:-5]
+        if not n.endswith(".conf") or not (sid == "main" or ID_RE.fullmatch(sid)):
+            continue
+        try:
+            with open(os.path.join(LIMITS_DIR, n)) as f:
+                m = re.search(r"UPLOAD_KBPS=(\d+)", f.read())
+            kbps, port = int(m.group(1)) if m else 0, server_port(sid)
+        except OSError:
+            continue
+        if kbps and port:
+            rules.append((port, kbps))
+    if not shutil.which("tc") or not shutil.which("ip"):
+        return "upload limit needs the 'tc' and 'ip' tools (package iproute2)" if rules else ""
+    devs = []
+    for fam in ("-4", "-6"):
+        for line in run(["ip", fam, "-o", "route", "show", "default"]).stdout.splitlines():
+            m = re.search(r"\bdev (\S+)", line)
+            if m and m.group(1) not in devs:
+                devs.append(m.group(1))
+    notes = []
+    for dev in devs:
+        cur = run(["tc", "qdisc", "show", "dev", dev, "root"]).stdout
+        ours = "htb 1: root" in cur and "default 0x270f" in cur
+        if ours:
+            run(["tc", "qdisc", "del", "dev", dev, "root"])
+        elif rules and cur.strip() and not any(q in cur + " " for q in SAFE_ROOT_QDISCS):
+            notes.append("%s already has custom traffic shaping - left it alone" % dev)
+            continue
+        if not rules:
+            continue
+        cmds = [["qdisc", "replace", "dev", dev, "root", "handle", "1:", "htb", "default", "9999"],
+                ["class", "add", "dev", dev, "parent", "1:", "classid", "1:9999", "htb", "rate", "10gbit"],
+                ["qdisc", "add", "dev", dev, "parent", "1:9999", "fq_codel"]]
+        for i, (port, kbps) in enumerate(rules):
+            c = "1:%d" % (10 + i)
+            cmds += [["class", "add", "dev", dev, "parent", "1:", "classid", c, "htb", "rate", "%dkbit" % kbps, "ceil", "%dkbit" % kbps],
+                     ["qdisc", "add", "dev", dev, "parent", c, "fq_codel"],
+                     ["filter", "add", "dev", dev, "parent", "1:", "protocol", "ip", "prio", "1", "u32",
+                      "match", "ip", "protocol", "6", "0xff", "match", "ip", "sport", str(port), "0xffff", "flowid", c],
+                     ["filter", "add", "dev", dev, "parent", "1:", "protocol", "ipv6", "prio", "2", "u32",
+                      "match", "ip6", "protocol", "6", "0xff", "match", "ip6", "sport", str(port), "0xffff", "flowid", c]]
+        for c in cmds:
+            r = run(["tc"] + c)
+            if r.returncode != 0:
+                notes.append("tc failed on %s: %s" % (dev, r.stderr.strip()[-160:]))
+                run(["tc", "qdisc", "del", "dev", dev, "root"])
+                break
+    if rules and not notes:
+        notes.append("upload limit active on " + ", ".join(devs) if devs else "no network interface found")
+    return "; ".join(notes)
 
 
 def read_env():
@@ -68,12 +250,14 @@ def update_server():
         u = pwd.getpwnam("beammp")
         os.chown(tmp, u.pw_uid, u.pw_gid)
         os.chmod(tmp, 0o755)
-        was_active = run(["systemctl", "is-active", "beammp-server"]).stdout.strip() == "active"
-        if was_active:
-            systemctl("stop")
+        units = ["beammp-server"] + ["beammp-server@%s" % x for x in sorted(os.listdir(SERVERS))
+                                     if ID_RE.fullmatch(x)] if os.path.isdir(SERVERS) else ["beammp-server"]
+        active = [u_ for u_ in units if run(["systemctl", "is-active", u_]).stdout.strip() == "active"]
+        for u_ in active:
+            systemctl("stop", u_)
         os.replace(tmp, os.path.join(SERVER_DIR, "BeamMP-Server"))
-        if was_active:
-            systemctl("start")
+        for u_ in active:
+            systemctl("start", u_)
         return {"ok": True, "msg": "updated"}
     except Exception as e:
         return {"ok": False, "msg": "update failed: %s" % e.__class__.__name__}
@@ -83,7 +267,7 @@ def update_server():
 
 
 def set_secret(name, value):
-    if name not in SECRET_NAMES:
+    if name not in SECRET_NAMES and not re.fullmatch(r"BEAMMP_AUTH_KEY_[A-Z0-9]{1,12}", str(name)):
         return {"ok": False, "msg": "unknown key name"}
     if not isinstance(value, str) or len(value) > 2048 or "\n" in value or "\r" in value:
         return {"ok": False, "msg": "invalid value"}
@@ -115,8 +299,22 @@ def firewall(state, port):
     return {"ok": True, "msg": ", ".join(msgs) or "No firewall is active on this computer - nothing to change"}
 
 
-def firewall_game(old, new):
+def firewall_game(old, new, close_only=False):
     """The game server port changed: open the new one (TCP + UDP), close the old one."""
+    if close_only:
+        try:
+            old = int(old)
+            assert 1024 <= old <= 65535
+        except (TypeError, ValueError, AssertionError):
+            return {"ok": False, "msg": "bad port"}
+        if shutil.which("ufw") and "Status: active" in run(["ufw", "status"]).stdout:
+            for proto in ("tcp", "udp"):
+                run(["ufw", "delete", "allow", "%d/%s" % (old, proto)])
+        elif shutil.which("firewall-cmd") and run(["firewall-cmd", "--state"]).returncode == 0:
+            for proto in ("tcp", "udp"):
+                run(["firewall-cmd", "--permanent", "--remove-port=%d/%s" % (old, proto)])
+            run(["firewall-cmd", "--reload"])
+        return {"ok": True, "msg": "closed %d" % old}
     try:
         new = int(new)
         assert 1024 <= new <= 65535
@@ -157,7 +355,13 @@ def firewall_status():
 def handle(req):
     a = req.get("action")
     if a in ("start", "stop", "restart"):
-        return systemctl(a)
+        return systemctl(a, unit_for(req.get("server")))
+    if a == "create-server":
+        return create_server(req.get("server"), req.get("config"), bool(req.get("start")))
+    if a == "delete-server":
+        return delete_server(req.get("server"))
+    if a == "set-limits":
+        return set_limits(req.get("server"), req.get("cpu_cores"), req.get("ram_mb"), req.get("upload_kbps"))
     if a == "update-server":
         return update_server()
     if a == "set-secret":
@@ -238,4 +442,8 @@ def main():
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--shape"]:
+        if os.geteuid() == 0:
+            print(shape() or "no upload limits")
+        sys.exit(0)
     main()
