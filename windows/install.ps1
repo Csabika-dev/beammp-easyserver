@@ -16,7 +16,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'   # makes downloads much faster
-$EasyVersion  = '1.2.0'
+$EasyVersion  = '1.2.1'
 $DefaultDir   = 'C:\BeamMP-Server'
 $StateFile    = Join-Path $env:ProgramData 'BeamMP-EasyServer\install-dir.txt'
 $ServerUrl    = 'https://github.com/BeamMP/BeamMP-Server/releases/latest/download/BeamMP-Server.exe'
@@ -116,6 +116,37 @@ function Stop-Dashboard {
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 }
 
+# Wait until the dashboard really answers. If it doesn't, say so and show why
+# (the dashboard writes its errors to EasyServer\data\dashboard.log).
+function Test-Dashboard([string]$esDir) {
+    for ($i = 0; $i -lt 20; $i++) {
+        Start-Sleep -Seconds 1
+        try {
+            $r = Invoke-WebRequest -Uri "http://127.0.0.1:$DashPort/api/session" -UseBasicParsing -TimeoutSec 3
+            if ($r.StatusCode -eq 200) { Ok "Dashboard is running on port $DashPort"; return $true }
+        } catch {
+            # HTTPS turned on earlier: any answer at all means it runs
+            try {
+                Invoke-WebRequest -Uri "https://127.0.0.1:$DashPort/api/session" -UseBasicParsing -TimeoutSec 3 | Out-Null
+                Ok "Dashboard is running on port $DashPort"; return $true
+            } catch {
+                if ($_.Exception.Response) { Ok "Dashboard is running on port $DashPort"; return $true }
+            }
+        }
+    }
+    Warn "The dashboard did not start (nothing answers on port $DashPort)."
+    $log = Join-Path $esDir 'data\dashboard.log'
+    if (Test-Path $log) {
+        Warn "Last lines of ${log}:"
+        Get-Content $log -Tail 12 | ForEach-Object { Write-Host "       $_" -ForegroundColor Yellow }
+    } else {
+        $task = Get-ScheduledTaskInfo -TaskName $DashTask -ErrorAction SilentlyContinue
+        if ($task) { Warn ("The start task's last result: 0x{0:X} at {1}" -f $task.LastTaskResult, $task.LastRunTime) }
+    }
+    Warn 'Please send this window to the BeamMP EasyServer issue page on GitHub.'
+    return $false
+}
+
 function Install-Dashboard($dir) {
     Step 'Installing the web dashboard'
     $esDir = Join-Path $dir 'EasyServer'
@@ -154,6 +185,7 @@ function Install-Dashboard($dir) {
     Register-ScheduledTask -TaskName $DashTask -Action $action -Trigger $trigger -Settings $set -RunLevel Limited | Out-Null
     Start-ScheduledTask -TaskName $DashTask
     Ok 'Dashboard starts automatically when you log in'
+    [void](Test-Dashboard $esDir)
 
     $url = Join-Path ([Environment]::GetFolderPath('Desktop')) 'BeamMP Dashboard.url'
     [IO.File]::WriteAllText($url, "[InternetShortcut]`r`nURL=http://localhost:$DashPort/`r`nIconFile=$env:SystemRoot\System32\shell32.dll`r`nIconIndex=13`r`n")
@@ -530,7 +562,13 @@ UpdateReminderTime = "30s"
     $lan = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
             Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' -and $_.PrefixOrigin -ne 'WellKnown' } |
             Select-Object -First 1).IPAddress
-    try { $pub = (Invoke-WebRequest -Uri 'https://api.ipify.org' -UseBasicParsing -TimeoutSec 5).Content.Trim() } catch { $pub = 'unknown' }
+    $pub = 'unknown'
+    foreach ($u in 'https://api.ipify.org', 'https://ifconfig.me/ip', 'https://icanhazip.com') {
+        try {
+            $ip = (Invoke-WebRequest -Uri $u -UseBasicParsing -TimeoutSec 6).Content.Trim()
+            if ($ip -match '^[0-9a-fA-F.:]{3,45}$') { $pub = $ip; break }
+        } catch { }
+    }
 
     # start through the shortcut via Explorer so it runs as you (not as admin);
     # that way the mod tool can restart it later
