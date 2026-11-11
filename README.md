@@ -14,8 +14,9 @@ Open `http://<server-ip>:30815` from any PC or phone at home, or use the **BeamM
 
 | Page | What you can do |
 |---|---|
-| **Overview** | Server status, who's online, uptime, start / stop / restart |
-| **Config** | Edit every server setting (max players, cars per player, map, port, private…) in a simple form, or as text, **without touching files**. Every change is checked first (wrong types, bad ports, unknown maps, duplicate lines…) and you get plain-English errors with line numbers. Also **Who can join**: an allow-list that makes the server invite-only |
+| **Overview** | Server status, who's online, uptime, start / stop / restart, **switch the map in one click** |
+| **Servers** | Run **several BeamMP servers on one computer**, each with its own port, mods, config and allow-list, and set **CPU, RAM and mod download limits** per server |
+| **Config** | Edit every server setting (max players, cars per player, map, port, private…) in a simple form, or as text, **without touching files**. Every change is checked first (wrong types, bad ports, unknown maps, duplicate lines…) and you get plain-English errors with line numbers. Also **Who can join** (an allow-list that makes the server invite-only), **Map vote** (players type `/vote` in chat) and **Join alerts** (Discord ping when your friends join) |
 | **Mods** | Drag & drop mods, turn them on/off, pick map mods, see the virus check result for each |
 | **Players** | Player analytics: players per day, busiest hours, a week heatmap, top players, sessions, peak and usage |
 | **Network** | Port checker: is the server listening, reachable at home, reachable from the internet, listed in the BeamMP server list? Tells you what to fix |
@@ -25,6 +26,22 @@ Open `http://<server-ip>:30815` from any PC or phone at home, or use the **BeamM
 | **Settings** | Notifications, password, **two-step login**, **access from the internet (HTTPS)**, **backup / import / export** |
 
 Also: **dark / light mode** (follows your system, or switch with the moon icon), and it works on phones. Before anything changes your network (server port, internet access, HTTPS) the dashboard shows exactly what will change and asks first; the firewall on the server is updated for you, your router never is.
+
+### Several servers on one computer
+
+**Servers → Add a server**: give it a name and a free port, and it's up in seconds, starting from your main server's settings, with its own empty mods folder. Pick which server the other pages manage with the **Server** menu at the top of the sidebar. Every server runs on its own, so one crashing doesn't affect the others. All of them use the same BeamMP program, so one update updates them all. Each server that should be in the public list needs its own AuthKey (make as many as you want on keymaster.beammp.com) and its own port forwarded on your router.
+
+**Limits** per server: **CPU** (e.g. 1.5 cores), **RAM** (the server is restarted if it goes over) and **mod download speed** (so players downloading 2 GB of mods don't slow down the game for everyone else).
+- Linux: systemd CPU/memory limits, plus `tc` for the download speed. Applied right away, and again at every start.
+- Windows: a Windows job object caps CPU and RAM while the dashboard is running. The download speed limit is a Windows QoS policy, so Windows asks once for permission on the server PC.
+
+### Map: one-click switch and voting
+
+The **Map** card on Overview switches the map and restarts the server. With **Config → Map vote** turned on, players type `/vote` in the game chat to see the maps you picked, then `/vote 2` (or `/vote utah`). When more than half of the players online agree, everyone is told and the server switches about 30 seconds later. At most one change every 5 minutes.
+
+### Join alerts (automatic invites)
+
+**Config → Join alerts** posts in your Discord channel when one of your chosen players joins ("Dani just joined - 3/8 online, come and play!"), optionally pinging people or a role (`@here`, `<@user id>`, `<@&role id>`) and including the address. When someone who isn't on your allow-list tries to join, the Discord message has an **Approve** link: tap it, confirm, and they can join right away.
 
 ### Invite-only servers (allow-list)
 
@@ -216,7 +233,7 @@ Mods folder locations: `C:\BeamMP-Server\Resources\Client` (Windows) and `/opt/b
 
 ## Changing the map
 
-Run the installer again, or edit `ServerConfig.toml`:
+Easiest: the **Map** card on the dashboard's Overview page (or let players vote, see above). Without the dashboard, run the installer again, or edit `ServerConfig.toml`:
 
 ```toml
 Map = "/levels/west_coast_usa/info.json"
