@@ -239,7 +239,7 @@ async function boot() {
   store.set("es-server", SERVER);
   renderShell();
   const hash = location.hash.slice(1);
-  if (hash.startsWith("approve=")) return approveFromLink(decodeURIComponent(hash.slice(8)));
+  if (hash.startsWith("approve=")) { let n = ""; try { n = decodeURIComponent(hash.slice(8)).slice(0, 40); } catch (e) {} return approveFromLink(n); }
   show(TABS.some(t => t[0] === hash) ? hash : "overview");
 }
 
