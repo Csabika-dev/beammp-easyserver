@@ -88,7 +88,7 @@ h2{font-size:15px;margin:0 0 12px;letter-spacing:-.005em}
 label.f{display:block;margin-bottom:14px}
 label.f>span{display:block;font-weight:550;margin-bottom:5px}
 label.f>small{display:block;color:var(--muted);font-size:12.5px;margin-top:4px}
-input[type=text],input[type=password],input[type=number],input[type=email],select,textarea{width:100%;background:var(--surface);border:1px solid var(--line-strong);border-radius:8px;padding:8px 10px;outline:none}
+input[type=text],input[type=password],input[type=number],input[type=email],input[type=time],select,textarea{width:100%;background:var(--surface);border:1px solid var(--line-strong);border-radius:8px;padding:8px 10px;outline:none}
 input:focus,select:focus,textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
 textarea{font-family:var(--mono);font-size:13px;line-height:1.55;min-height:420px;resize:vertical;tab-size:4}
 .toggle{display:flex;align-items:flex-start;gap:12px;padding:10px 0;border-bottom:1px solid var(--line);cursor:pointer}
@@ -500,7 +500,7 @@ VIEWS.servers = async m => {
 
 /* ---------------- config */
 VIEWS.config = async m => {
-  const [d, al, mv, ja] = await Promise.all([api("/api/config"), api("/api/allowlist"), api("/api/mapvote"), api("/api/joinalerts")]);
+  const [d, al, mv, ja, ex] = await Promise.all([api("/api/config"), api("/api/allowlist"), api("/api/mapvote"), api("/api/joinalerts"), api("/api/extras")]);
   const mode = store.get("es-config-mode", "form");
   const issuesHtml = list => list.length ? list.map(i => `<div class="issue ${i.level}"><span class="ic">${i.level === "error" ? "!" : i.level === "warning" ? "⚠" : "i"}</span><span>${esc(i.message)}</span>${i.line ? `<span class="ln">line ${i.line}</span>` : ""}</div>`).join("") : `<div class="issue info"><span class="ic">✓</span><span>No problems found.</span></div>`;
   const opts = (cur) => {
@@ -549,6 +549,27 @@ VIEWS.config = async m => {
       <label class="toggle"><input type="checkbox" id="mv_on" ${mv.enabled ? "checked" : ""}><span><b>Let players vote for the map</b><small>Pick at least two maps below</small></span></label>
       <div class="row" style="flex-wrap:wrap;gap:6px;margin-top:8px">${mv.available.map(x => `<label class="badge" style="cursor:pointer"><input type="checkbox" data-vm="${esc(x)}" ${mv.maps.includes(x) || (!mv.maps.length) ? "checked" : ""}> ${esc(x)}</label>`).join("")}</div>
       <div class="row" style="margin-top:14px"><button class="btn primary" id="mv_save">Save map vote</button></div>
+    </div>
+    <div class="card" style="margin-top:16px" id="excard"><div class="row"><h2 style="margin:0">Cars &amp; chat</h2><span class="spacer"></span>
+        <span class="pill ${ex.clear ? "good" : ""}"><span class="dot"></span>${ex.clear ? "Cleanup " + (ex.every === 24 ? "daily " + esc(ex.at) : "every " + ex.every + " h") : "Cleanup off"}</span></div>
+      <p class="small muted">Keeps the map tidy and adds a few chat commands. Everything here works right away - no restart, and players don't need to install anything.</p>
+      ${ex.plugin ? "" : `<div class="issue warning"><span class="ic">⚠</span><span>The EasyServerStats plugin is missing on this server, so these can't work. Run the installer again once.</span></div>`}
+      <label class="toggle"><input type="checkbox" id="ex_clear" ${ex.clear ? "checked" : ""}><span><b>Remove all cars on a schedule</b><small>Clears wrecks and forgotten cars. Players get a countdown in the chat first, then can spawn a fresh car right away. On by default.</small></span></label>
+      <div class="grid g3" style="gap:12px;margin:4px 0 8px">
+        <label class="f" style="margin:0"><span>How often</span><select id="ex_every">${ex.every_choices.map(n => `<option value="${n}" ${n === ex.every ? "selected" : ""}>${n === 24 ? "Once a day" : "Every " + n + " hour" + (n === 1 ? "" : "s")}</option>`).join("")}</select><small>Busy server? Clear more often.</small></label>
+        <label class="f" style="margin:0"><span id="ex_at_label">${ex.every === 24 ? "At" : "Starting at"}</span><input type="time" id="ex_at" value="${esc(ex.at)}" style="color-scheme:light dark;color:inherit"><small>This computer's time</small></label>
+        <label class="f" style="margin:0"><span>Countdown in chat</span><select id="ex_warn">${ex.warn_choices.map(n => `<option value="${n}" ${n === ex.warn ? "selected" : ""}>${n ? n + " min before" : "No countdown"}</option>`).join("")}</select><small>Then reminders at 15, 10, 5, 2, 1 min, 30 s and 10…1</small></label>
+      </div>
+      <p class="small muted" id="ex_next">${ex.next_clear ? "Next cleanup: <b>" + esc(new Date(ex.next_clear * 1000).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })) + "</b>" : ""}</p>
+      <label class="toggle"><input type="checkbox" id="ex_afk" ${ex.afk ? "checked" : ""}><span><b>Remove abandoned cars</b><small>A car that hasn't moved for the time below is removed (its owner gets a warning 1 minute before). Covers AFK players and spare cars left at intersections. Cars of players who leave are removed by BeamMP itself.</small></span></label>
+      <label class="f" style="max-width:220px"><span>After (minutes)</span><input type="number" id="ex_afkmin" min="2" max="120" value="${esc(ex.afk_minutes)}"></label>
+      <h2 style="margin-top:16px">Chat commands</h2>
+      <label class="toggle"><input type="checkbox" id="ex_countdown" ${ex.countdown ? "checked" : ""}><span><b>/countdown</b><small>Anyone can type <span class="mono">/countdown 5</span> for a "3… 2… 1… GO!" in the chat - for drag races and touge runs</small></span></label>
+      <label class="toggle"><input type="checkbox" id="ex_tag" ${ex.tag ? "checked" : ""}><span><b>/tag</b><small>Players pick a tag that shows in front of their chat messages, like <span class="mono">[DRIFT] Dani: anyone tandem?</span>. <span class="mono">/tag off</span> removes it</small></span></label>
+      <label class="f"><span>Tags players can choose (comma-separated)</span><input type="text" id="ex_tags" value="${esc(ex.tags.join(", "))}" maxlength="300"><small>Letters, numbers and - only, up to 12 characters each</small></label>
+      <label class="toggle"><input type="checkbox" id="ex_top" ${ex.top ? "checked" : ""}><span><b>/top server records</b><small>Tracks top speed, distance driven and the longest drive without a reset. <span class="mono">/top</span> shows the leaders, <span class="mono">/top me</span> your own. Also shown on the Players page</small></span></label>
+      <p class="small muted">Players can type <span class="mono">/help</span> to see the commands that are on.</p>
+      <div class="row" style="margin-top:14px"><button class="btn primary" id="ex_save">Save cars &amp; chat</button></div>
     </div>
     <div class="card" style="margin-top:16px" id="jacard"><div class="row"><h2 style="margin:0">Join alerts (Discord)</h2><span class="spacer"></span>
         <span class="pill ${ja.enabled ? "good" : ""}"><span class="dot"></span>${ja.enabled ? "On" : "Off"}</span></div>
@@ -602,6 +623,13 @@ VIEWS.config = async m => {
                    mention: $("#ja_mention").value, address: $("#ja_addr").checked, test };
     try { const r = await api("/api/joinalerts", { json: body }); toast(r.note); if (!test) show("config"); } catch (e) { toast(e.message); }
   };
+  $("#ex_every").onchange = () => { $("#ex_at_label").textContent = $("#ex_every").value === "24" ? "At" : "Starting at"; };
+  $("#ex_save").onclick = async () => {
+    const body = { clear: $("#ex_clear").checked, every: Number($("#ex_every").value), at: $("#ex_at").value, warn: Number($("#ex_warn").value),
+                   afk: $("#ex_afk").checked, afk_minutes: Number($("#ex_afkmin").value), countdown: $("#ex_countdown").checked,
+                   tag: $("#ex_tag").checked, top: $("#ex_top").checked, tags: $("#ex_tags").value.split(",").map(x => x.trim()).filter(Boolean) };
+    try { const r = await api("/api/extras", { json: body }); toast(r.note, 6000); show("config"); } catch (e) { toast(e.message); }
+  };
   $("#ja_save").onclick = () => jaSave(false);
   $("#ja_test").onclick = () => jaSave(true);
   $("#mv_save").onclick = async () => {
@@ -623,12 +651,16 @@ VIEWS.config = async m => {
 /* ---------------- mods */
 VIEWS.mods = async m => {
   const d = await api("/api/mods");
+  setTimeout(() => { const t = $("#descsize"); if (t) t.onchange = async () => { try { const r = await api("/api/mods/desc", { json: { enabled: t.checked } }); toast(r.note, 7000); } catch (e) { toast(e.message); t.checked = !t.checked; } }; }, 0);
   const B = { clean: ["good", "✓ safe"], warning: ["warn", "⚠ check"], unchecked: ["", "not checked yet"] };
   m.innerHTML = `
     <h1>Mods</h1><p class="sub">Drop mod .zip files here. Every mod is virus-checked before players can download it.</p>
     <div class="drop" id="drop"><b>Drag &amp; drop mods here</b><br><span class="muted">or click to choose files</span><input id="file" type="file" accept=".zip" multiple hidden></div>
     <div id="uploads"></div>
     <p class="small muted" style="margin:10px 0 16px">🛡 Active checks: ${esc(d.checks.join(" + "))}. ${d.auto_apply ? "The server restarts by itself ~15 s after a change." : "Restart the server after changes."}</p>
+    <div class="card" style="margin-bottom:16px"><div class="row"><div><div class="small muted">Players download before they can join</div><div style="font-size:22px;font-weight:650">${d.download ? fmtSize(d.download) : "Nothing - vanilla"}</div>
+      ${d.maps_size ? `<div class="small muted">${fmtSize(d.maps_size)} of that is map mods. Turn off maps you're not playing on to make joining faster.</div>` : ""}</div></div>
+      <label class="toggle" style="margin-top:10px"><input type="checkbox" id="descsize" ${d.desc_modsize ? "checked" : ""}><span><b>Show the download size in the server description</b><small>Adds "| Mods: ${esc(d.download ? fmtSize(d.download) : "0")}" to the end of the description in the BeamMP server list and keeps it up to date. Takes effect after the server restarts</small></span></label></div>
     <div class="card tight"><table><thead><tr><th>Mod</th><th class="num">Size</th><th></th></tr></thead><tbody>
       ${d.mods.length ? d.mods.map(x => `<tr><td><b class="${x.enabled ? "" : "muted"}">${esc(x.name)}</b><span class="badge ${B[x.safety][0]}">${B[x.safety][1]}</span>${x.enabled ? "" : '<span class="badge">off</span>'}${x.maps.map(mp => `<span class="badge">map: ${esc(mp)}</span>`).join("")}
         ${x.reasons.length ? `<div class="small" style="color:var(--warn-ink);margin-top:4px">${x.reasons.map(esc).join("<br>")}</div>` : ""}</td>
@@ -749,7 +781,14 @@ VIEWS.players = async m => {
       <div class="card tight"><table><thead><tr><th>Recent sessions</th><th class="num">Started</th><th class="num">Length</th></tr></thead><tbody>
         ${d.recent.length ? d.recent.slice(0, 12).map(r => `<tr><td>${esc(r.name)}</td><td class="num muted">${esc(fmtTime(r.start))}</td><td class="num">${esc(r.minutes)} min</td></tr>`).join("") : `<tr><td colspan="3" class="muted">No sessions yet</td></tr>`}
       </tbody></table></div>
-    </div>`;
+    </div>
+    ${(() => {
+      const R = d.records || {}, any = ["speed", "dist", "streak"].some(k => (R[k] || []).length);
+      if (!any && !d.records_on) return "";
+      const col = (title, list, val) => `<div class="card tight"><table><thead><tr><th>${title}</th><th class="num"></th></tr></thead><tbody>${(list || []).length ? list.map((r, i) => `<tr><td>${i + 1}. <b>${esc(r.name)}</b></td><td class="num">${val(r)}</td></tr>`).join("") : `<tr><td colspan="2" class="muted">Nobody yet</td></tr>`}</tbody></table></div>`;
+      return `<h2 style="margin:22px 0 10px">Server records</h2>${d.records_on ? "" : `<p class="small muted">Records are paused - turn on "/top server records" under Config → Cars &amp; chat.</p>`}
+        <div class="grid g3">${col("Top speed", R.speed, r => esc(Math.round(r.speed)) + " km/h")}${col("Distance driven", R.dist, r => esc(r.dist.toFixed(1)) + " km")}${col("Longest drive without a reset", R.streak, r => fmtDur(r.streak))}</div>`;
+    })()}`;
   const dl = d.days.map(x => x.date.slice(5).replace("-", "/"));
   barChart($("#daily"), d.days.map(x => x.players), dl, i => `<b>${esc(d.days[i].date)}</b><br>${d.days[i].players} players · peak ${d.days[i].peak} · ${d.days[i].hours} h played`, { title: "Players per day", labelsMax: 10 });
   barChart($("#hourly"), d.hourly, d.hourly.map((_, i) => String(i).padStart(2, "0")), i => `<b>${String(i).padStart(2, "0")}:00</b><br>${d.hourly[i]} players on average`, { title: "Average players by hour", labelsMax: 8, h: 170 });
