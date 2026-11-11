@@ -280,7 +280,8 @@ function renderSetup() {
     <button class="btn primary" id="go">Create password</button>`);
   $("#go").onclick = async () => {
     if ($("#p1").value !== $("#p2").value) return toast("The passwords don't match");
-    try { await api("/api/setup", { json: { password: $("#p1").value } }); boot(); } catch (e) { toast(e.message); }
+    const b = $("#go"); if (b.disabled) return; b.disabled = true;   // no double submit
+    try { await api("/api/setup", { json: { password: $("#p1").value } }); boot(); } catch (e) { b.disabled = false; toast(e.message); }
   };
 }
 
