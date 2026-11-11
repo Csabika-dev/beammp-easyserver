@@ -16,7 +16,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'   # makes downloads much faster
-$EasyVersion  = '1.3.0'
+$EasyVersion  = '1.4.0'
 $DefaultDir   = 'C:\BeamMP-Server'
 $StateFile    = Join-Path $env:ProgramData 'BeamMP-EasyServer\install-dir.txt'
 $ServerUrl    = 'https://github.com/BeamMP/BeamMP-Server/releases/latest/download/BeamMP-Server.exe'
@@ -171,6 +171,12 @@ function Install-Dashboard($dir) {
     $plug = Join-Path $dir 'Resources\Server\EasyServerStats'
     New-Item -ItemType Directory -Force -Path $plug | Out-Null
     Copy-Item -Force (Join-Path $src 'EasyServerStats\main.lua') (Join-Path $plug 'main.lua')
+    # extra servers made in the dashboard get the same plugin
+    Get-ChildItem -Path (Join-Path $dir 'servers') -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        $p = Join-Path $_.FullName 'Resources\Server\EasyServerStats'
+        New-Item -ItemType Directory -Force -Path $p | Out-Null
+        Copy-Item -Force (Join-Path $src 'EasyServerStats\main.lua') (Join-Path $p 'main.lua')
+    }
     Ok 'Dashboard files installed'
 
     # firewall: the dashboard itself only lets in your home network unless you allow more
