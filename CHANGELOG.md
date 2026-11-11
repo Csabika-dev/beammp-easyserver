@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.2 - Security fix
+
+- Dashboard: when a request was refused before it was read completely (for example the "create password" form sent twice), the rest of it - which could contain the password - was taken as the start of the next request, shown in an error page and written to the log. Such connections are now closed, error pages no longer repeat what was sent, and the log only records the method and path.
+- The "Create password" button can't be clicked twice while it's saving.
+
+**If you set your dashboard password with 1.2.1 or earlier,** update, then change the password under Settings, and on Windows delete `C:\BeamMP-Server\EasyServer\data\dashboard.log`.
+
 ## 1.2.1 - Windows fixes
 
 - Windows: the installer now checks that the dashboard really started. If it didn't, it says so and shows the reason.
