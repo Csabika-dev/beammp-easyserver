@@ -16,9 +16,9 @@ Open `http://<server-ip>:30815` from any PC or phone at home, or use the **BeamM
 |---|---|
 | **Overview** | Server status, who's online, uptime, start / stop / restart, **switch the map in one click** |
 | **Servers** | Run **several BeamMP servers on one computer**, each with its own port, mods, config and allow-list, and set **CPU, RAM and mod download limits** per server |
-| **Config** | Edit every server setting (max players, cars per player, map, port, private…) in a simple form, or as text, **without touching files**. Every change is checked first (wrong types, bad ports, unknown maps, duplicate lines…) and you get plain-English errors with line numbers. Also **Who can join** (an allow-list that makes the server invite-only), **Map vote** (players type `/vote` in chat) and **Join alerts** (Discord ping when your friends join) |
-| **Mods** | Drag & drop mods, turn them on/off, pick map mods, see the virus check result for each |
-| **Players** | Player analytics: players per day, busiest hours, a week heatmap, top players, sessions, peak and usage |
+| **Config** | Edit every server setting (max players, cars per player, map, port, private…) in a simple form, or as text, **without touching files**. Every change is checked first (wrong types, bad ports, unknown maps, duplicate lines…) and you get plain-English errors with line numbers. Also **Who can join** (an allow-list that makes the server invite-only), **Map vote** (players type `/vote` in chat), **Join alerts** (Discord ping when your friends join) and **Cars & chat** (scheduled car cleanup, abandoned-car removal, chat commands - see below) |
+| **Mods** | Drag & drop mods, turn them on/off, pick map mods, see the virus check result for each. Shows how much players have to **download before joining**, and can put it in the server description ("\| Mods: 1.2 GB") |
+| **Players** | Player analytics: players per day, busiest hours, a week heatmap, top players, sessions, peak and usage, plus **server records** (top speed, distance, longest drive without a reset) |
 | **Network** | Port checker: is the server listening, reachable at home, reachable from the internet, listed in the BeamMP server list? Tells you what to fix |
 | **Updates** | Checks for new BeamMP server and EasyServer versions, installs server updates in one click |
 | **Logs** | Live server log, with hints that explain common errors in plain English |
@@ -34,6 +34,18 @@ Also: **dark / light mode** (follows your system, or switch with the moon icon),
 **Limits** per server: **CPU** (e.g. 1.5 cores), **RAM** (the server is restarted if it goes over) and **mod download speed** (so players downloading 2 GB of mods don't slow down the game for everyone else).
 - Linux: systemd CPU/memory limits, plus `tc` for the download speed. Applied right away, and again at every start.
 - Windows: a Windows job object caps CPU and RAM while the dashboard is running. The download speed limit is a Windows QoS policy, so Windows asks once for permission on the server PC.
+
+### Cars & chat (Config page)
+
+All of this runs in the small EasyServerStats plugin on the server, so players don't need to install anything. Changes work right away, without a restart.
+
+- **Scheduled car cleanup (on by default):** removes every car once a day at 04:00, or every 1, 2, 3, 4, 6, 8 or 12 hours if your server is busy. Players get a countdown in the chat first (30 minutes by default, then 15, 10, 5, 2, 1 minute, 30 seconds and 10…1), and can spawn a fresh car right after.
+- **Abandoned cars (off by default):** a car that hasn't moved for 5 minutes (adjustable) is removed; its owner gets a warning 1 minute before. Cars of players who leave are removed by BeamMP itself.
+- **Chat commands (off by default):**
+  - `/countdown 5` - a "3… 2… 1… GO!" in the chat for drag races and touge runs
+  - `/tag drift` - shows `[DRIFT]` in front of your chat messages (you choose which tags exist); `/tag off` removes it
+  - `/top` - server records: top speed, distance driven and the longest drive without a reset; `/top me` for your own
+  - `/help` lists the commands that are on
 
 ### Map: one-click switch and voting
 
@@ -252,6 +264,9 @@ Ideas for future versions (not built yet):
 - **AI troubleshooting assistant**: reads the server log and explains errors in plain English with suggested fixes (today the Logs page has simple built-in hints)
 - **Plugin ecosystem**: let developers add their own pages and tools to the dashboard
 - More analytics: per-map statistics and mod download stats
+- **Public player page**: a read-only page without login where players can see who's online, the current map and the mods before they launch the game (live car positions if the BeamMP server makes them available)
+- **Game-side commands**: `/tp <player>` with `/tpaccept`, a `/repair` cooldown for realism/RP servers, and blocking heavy props and articulated trailers. These need a small mod that players download automatically when they join, because the server alone can't move or repair cars
+- **Light modpack mode**: only send players the map mod that's actually being played, instead of every map
 
 Suggestions are welcome; open an issue.
 
