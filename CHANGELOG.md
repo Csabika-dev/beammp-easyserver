@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.3.0 - Hide your IP (DDoS protection)
+
+New section **Settings → Hide your IP (DDoS protection)**. Everything in it is **off by default**, and the settings page explains the trade-off: much less chance of a DDoS hitting your home, but more lag.
+
+- **Hide my IP:** players join through a relay (playit.gg, a VPN with port forwarding, or your own VPS) instead of your home address. Enter the relay's address and port, and the dashboard, Discord join alerts and the network check give players that address instead of your home IP.
+- **Test the relay** checks every server through the relay and shows roughly how long the detour takes.
+- The **Network** page checks for leaks while it's on: a router port forward that still exposes your home, or your home IP showing up in the public server list.
+- **Flood protection (Linux):** optional per-address limits on the game ports (about 20 new connections a minute, about 1000 packets a second). Floods from single computers are cut off and raise a security alert. Your home network is never limited.
+- Flood alerts now suggest restarting your router (most providers then give you a new IP address).
+- New guide: [PROTECT-YOUR-IP.md](PROTECT-YOUR-IP.md) - relays, VPNs with port forwarding, WireGuard on a VPS, OpenWrt and what each one really protects against.
+
 ## 1.2.3 - QR code for two-step login
 
 - Settings → Two-step login now shows a QR code you can scan with your authenticator app, instead of only a key to type.
