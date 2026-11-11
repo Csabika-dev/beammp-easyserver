@@ -61,6 +61,7 @@ CLIENT_DIR = os.path.join(RES, "Client")
 DISABLED_DIR = os.path.join(RES, "Client-disabled")
 QUAR_DIR = os.path.join(RES, "Quarantine")
 STATS_DIR = os.path.join(RES, "Server", "EasyServerStats")
+ALLOW_FILE = os.path.join(STATS_DIR, "allowlist.txt")
 CONFIG = os.path.join(SERVER_DIR, "ServerConfig.toml")
 SERVER_LOG = os.path.join(SERVER_DIR, "Server.log")
 UPLOAD_TMP = os.path.join(DATA_DIR, "uploading")
@@ -86,7 +87,7 @@ DEFAULT_SETTINGS = {
     "https": False,
     "remote_enabled": False,
     "notify": {"crash": True, "stopped": True, "update": True, "mod_blocked": True,
-               "login_failed": True, "player_join": False},
+               "login_failed": True, "player_join": False, "player_denied": True},
     "discord_enabled": False,
     "email_enabled": False,
     "smtp_host": "", "smtp_port": 587, "smtp_security": "starttls",
@@ -799,6 +800,73 @@ def server_name():
         return ""
 
 
+# ----------------------------------------------------------------------------- allow-list
+ALLOW_NAME = re.compile(r"[^\x00-\x1f\x7f#]{1,40}")
+ALLOW_MAX = 1000
+
+
+def read_allowlist():
+    on, names = False, []
+    try:
+        with open(ALLOW_FILE, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                m = re.fullmatch(r"mode\s*=\s*(\w+)", line)
+                if m:
+                    on = m.group(1).lower() == "on"
+                elif line and not line.startswith("#"):
+                    names.append(line)
+    except OSError:
+        pass
+    return on, names
+
+
+def clean_allow_names(raw):
+    out, seen = [], set()
+    for n in raw if isinstance(raw, list) else str(raw or "").splitlines():
+        n = str(n).strip()
+        if not n:
+            continue
+        if not ALLOW_NAME.fullmatch(n) or n.lower().startswith("mode"):
+            raise ValueError("\"%s\" is not a valid player name" % n[:40])
+        if n.lower() not in seen:
+            seen.add(n.lower())
+            out.append(n)
+    if len(out) > ALLOW_MAX:
+        raise ValueError("The list can hold at most %d names" % ALLOW_MAX)
+    return out
+
+
+def write_allowlist(on, names):
+    os.makedirs(STATS_DIR, exist_ok=True)
+    tmp = ALLOW_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+        f.write("# Managed by the BeamMP EasyServer dashboard (Config -> Who can join).\n")
+        f.write("# mode=on: only the names below can join. Names are not case-sensitive.\n")
+        f.write("mode=%s\n" % ("on" if on else "off"))
+        for n in names:
+            f.write(n + "\n")
+    try:
+        os.chmod(tmp, 0o664)
+    except OSError:
+        pass
+    os.replace(tmp, ALLOW_FILE)
+
+
+def recent_denied(days=7):
+    seen, out = set(), []
+    for e in reversed(read_events(now() - days * 86400)):
+        if e.get("ev") == "denied":
+            n = str(e.get("name", ""))[:40]
+            if n.lower() in seen:
+                continue
+            seen.add(n.lower())
+            out.append({"name": n, "t": e["t"], "guest": bool(e.get("guest"))})
+            if len(out) >= 20:
+                break
+    return out
+
+
 # ----------------------------------------------------------------------------- analytics
 def read_events(since=0):
     evs = []
@@ -1272,15 +1340,26 @@ class App:
                             f.seek(ev_pos)
                             chunk = f.read(256 * 1024)
                             ev_pos += len(chunk.encode("utf-8"))
-                        joined = []
+                        joined, denied = [], []
                         for line in chunk.splitlines():
                             try:
                                 e = json.loads(line)
                             except ValueError:
                                 continue
-                            if e.get("ev") == "join" and isinstance(e.get("t"), int) and e["t"] > last_join_t:
+                            if not isinstance(e.get("t"), int) or e["t"] < last_join_t:
+                                continue
+                            if e.get("ev") == "join" and e["t"] > last_join_t:
                                 last_join_t = e["t"]
                                 joined.append(str(e.get("name", "?"))[:64])
+                            elif e.get("ev") == "denied":
+                                n = str(e.get("name", "?"))[:64] + (" (guest)" if e.get("guest") else "")
+                                if n not in denied:
+                                    denied.append(n)
+                        if denied:
+                            self.notifier.add("player_denied",
+                                              ("%s was refused" % denied[0]) if len(denied) == 1 else "%d players were refused" % len(denied),
+                                              "Not on the allow-list: %s. Add them under Config -> Who can join." % ", ".join(denied[:20]),
+                                              "info")
                         if len(joined) == 1:
                             self.notifier.add("player_join", "%s joined" % joined[0], "A player joined your server.", "info")
                         elif joined:
@@ -1716,10 +1795,41 @@ class Handler(BaseHTTPRequestHandler):
         errors = [i for i in issues if i["level"] == "error"]
         if errors:
             return self.send(400, {"ok": False, "error": "Fix the errors first", "issues": issues})
+        old_port = (toml_parse(app.read_config_text())[0].get("General") or {}).get("Port")
         text = app.move_plaintext_authkey(text)
         app.write_config_text(text)
-        _, issues = validate_config(text, app.settings.get("port"), app.secrets.has("BEAMMP_AUTH_KEY"))
-        self.send(200, {"ok": True, "issues": issues, "note": app.applied_note()})
+        data, issues = validate_config(text, app.settings.get("port"), app.secrets.has("BEAMMP_AUTH_KEY"))
+        new_port = (toml_parse(text)[0].get("General") or {}).get("Port")
+        network = ""
+        if isinstance(new_port, int) and new_port != old_port:
+            if IS_WIN:
+                network = "Windows firewall: the BeamMP server program is already allowed on any port."
+            else:
+                network = control("firewall-game", old=old_port if isinstance(old_port, int) else None,
+                                  new=new_port, timeout=30).get("msg", "")
+            network = (network.rstrip(". ") + ". " if network else "") + \
+                "Remember to forward port %d (TCP + UDP) on your router instead of %s." % (new_port, old_port)
+            app.notifier.add("network", "Server port changed", "Port %s -> %d. %s" % (old_port, new_port, network.strip()))
+        self.send(200, {"ok": True, "issues": issues, "note": app.applied_note(), "network": network.strip()})
+
+    def get_allowlist(self, q):
+        on, names = read_allowlist()
+        self.send(200, {"enabled": on, "names": names, "denied": recent_denied(),
+                        "plugin": os.path.exists(os.path.join(STATS_DIR, "main.lua"))})
+
+    def post_allowlist(self, q):
+        b = self.body_json()
+        names = clean_allow_names(b.get("names", []))
+        on = bool(b.get("enabled"))
+        if on and not names:
+            return self.fail(400, "Add at least one player name before turning the list on")
+        was_on, _ = read_allowlist()
+        write_allowlist(on, names)
+        if on != was_on:
+            APP.notifier.add("player_denied", "Allow-list turned " + ("on" if on else "off"),
+                             ("Only these %d players can join now." % len(names)) if on else "Everyone can join again.", "info", send=False)
+        self.send(200, {"ok": True, "enabled": on, "names": names,
+                        "note": "Saved - works right away, no restart needed." + (" Players already online stay connected." if on else "")})
 
     def post_authkey(self, q):
         key = re.sub(r"\s", "", str(self.body_json().get("key", "")))
@@ -2003,10 +2113,17 @@ class Handler(BaseHTTPRequestHandler):
             extra = [x for x in (public_ip(),) if x]
             tlsgen.generate(TLS_DIR, extra)
         https_changed = want_https != app.settings.get("https")
+        was_remote = app.settings.get("remote_enabled")
         app.settings.update({"https": want_https, "remote_enabled": want_remote})
-        if not IS_WIN:
-            control("firewall-remote", state="on" if want_remote else "off", port=app.settings.get("port"), timeout=30)
-        self.send(200, {"ok": True, "restart": https_changed,
+        network = ""
+        if want_remote != bool(was_remote):
+            if IS_WIN:
+                network = "Windows firewall: the dashboard port was already allowed by the installer."
+            else:
+                network = control("firewall-remote", state="on" if want_remote else "off",
+                                  port=app.settings.get("port"), timeout=30).get("msg", "")
+            app.notifier.add("network", "Internet access turned " + ("on" if want_remote else "off"), network)
+        self.send(200, {"ok": True, "restart": https_changed, "network": network,
                         "url": "%s://%s:%d" % ("https" if want_https else "http", lan_ip(), app.settings.get("port"))})
         if https_changed:
             threading.Thread(target=restart_dashboard, daemon=True).start()
@@ -2032,6 +2149,8 @@ class Handler(BaseHTTPRequestHandler):
             with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
                 z.writestr("ServerConfig.toml", text)
                 z.writestr("easyserver-export.json", json.dumps(meta, indent=1))
+                if os.path.exists(ALLOW_FILE):
+                    z.write(ALLOW_FILE, "allowlist.txt")
                 if include_mods:
                     for m in mods:
                         src = os.path.join(CLIENT_DIR if m["enabled"] else DISABLED_DIR, m["name"])
@@ -2081,11 +2200,21 @@ class Handler(BaseHTTPRequestHandler):
                             allowed["notify"] = cur
                         app.settings.update(allowed)
                         report["settings"] = True
+                if "allowlist.txt" in names and z.getinfo("allowlist.txt").file_size < 256 * 1024:
+                    lines = z.read("allowlist.txt").decode("utf-8", "replace").splitlines()
+                    on = any(re.fullmatch(r"mode\s*=\s*on", l.strip(), re.I) for l in lines)
+                    try:
+                        listed = clean_allow_names([l for l in lines if l.strip() and not l.strip().startswith("#")
+                                                    and not re.fullmatch(r"mode\s*=\s*\w+", l.strip())])
+                        write_allowlist(on and bool(listed), listed)
+                        report["allowlist"] = len(listed)
+                    except ValueError:
+                        report["skipped"].append("allowlist.txt")
                 if q.get("mods", "1") == "1":
                     for n in names:
                         m = re.fullmatch(r"(mods|mods-disabled)/([^/]+)", n)
                         if not m:
-                            if n not in ("ServerConfig.toml", "easyserver-export.json") and not n.endswith("/"):
+                            if n not in ("ServerConfig.toml", "easyserver-export.json", "allowlist.txt") and not n.endswith("/"):
                                 report["skipped"].append(n[:120])
                             continue
                         name = safe_zip_name(m.group(2))
