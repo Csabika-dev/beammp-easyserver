@@ -18,7 +18,7 @@ jobs:
       - name: Check Linux scripts
         run: |
           bash -n linux/install.sh
-          python3 -m py_compile linux/modscan.py linux/modmanager.py
+          python3 -m py_compile dashboard/*.py linux/control.py
 
       - name: Build ZIPs
         run: |
@@ -26,6 +26,8 @@ jobs:
           chmod +x linux/install.sh "linux/Install BeamMP Server.desktop"
           cp README.md LICENSE windows/
           cp README.md LICENSE linux/
+          cp -r dashboard windows/dashboard
+          cp -r dashboard linux/dashboard
           (cd windows && zip -r ../dist/BeamMP-EasyServer-Windows.zip . -x '__pycache__/*')
           (cd linux && zip -r ../dist/BeamMP-EasyServer-Linux.zip . -x '__pycache__/*')
 
