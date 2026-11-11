@@ -340,7 +340,7 @@ VIEWS.overview = async m => {
 
 /* ---------------- config */
 VIEWS.config = async m => {
-  const d = await api("/api/config");
+  const [d, al] = await Promise.all([api("/api/config"), api("/api/allowlist")]);
   const mode = store.get("es-config-mode", "form");
   const issuesHtml = list => list.length ? list.map(i => `<div class="issue ${i.level}"><span class="ic">${i.level === "error" ? "!" : i.level === "warning" ? "⚠" : "i"}</span><span>${esc(i.message)}</span>${i.line ? `<span class="ln">line ${i.line}</span>` : ""}</div>`).join("") : `<div class="issue info"><span class="ic">✓</span><span>No problems found.</span></div>`;
   const opts = (cur) => {
@@ -374,23 +374,58 @@ VIEWS.config = async m => {
       </div>
       <div class="row" style="margin-top:16px"><button class="btn primary" id="saveform">Save changes</button><span class="muted small" id="note"></span></div>
     </div>
+    <div class="card" style="margin-top:16px" id="whocard"><div class="row"><h2 style="margin:0">Who can join</h2><span class="spacer"></span>
+        <span class="pill ${al.enabled ? "good" : ""}"><span class="dot"></span>${al.enabled ? "Invite-only" : "Anyone can join"}</span></div>
+      <p class="small muted">BeamMP has no join password, so this works like a guest list: when it's on, only the BeamMP usernames below can join and everyone else gets a friendly "invite-only" message. Guests (players without an account) are refused while it's on. Changes work immediately - no restart.</p>
+      ${al.plugin ? "" : `<div class="issue warning"><span class="ic">⚠</span><span>The EasyServerStats plugin is missing, so the list can't be enforced. Run the installer's Update once.</span></div>`}
+      <label class="toggle"><input type="checkbox" id="al_on" ${al.enabled ? "checked" : ""}><span><b>Only let in players on the list</b><small>Players already online are not kicked</small></span></label>
+      <label class="f"><span>Allowed players (one BeamMP username per line, not case-sensitive)</span><textarea id="al_names" rows="6" spellcheck="false" placeholder="Bazsi&#10;Dani&#10;Zoli" style="min-height:120px">${esc(al.names.join("\n"))}</textarea><small>${al.names.length} on the list</small></label>
+      ${(al.denied = al.denied.filter(x => !al.names.some(n => n.toLowerCase() === x.name.toLowerCase()))).length ? `<p class="small" style="margin:14px 0 6px"><b>Recently refused</b> <span class="muted">(last 7 days)</span></p><div class="row" style="flex-wrap:wrap;gap:6px">${al.denied.map(x => `<span class="badge">${esc(x.name)}${x.guest ? " · guest" : ""} · ${esc(ago(x.t))}${x.guest ? "" : ` <a href="#" data-allow="${esc(x.name)}">+ allow</a>`}</span>`).join("")}</div>` : ""}
+      <div class="row" style="margin-top:14px"><button class="btn primary" id="al_save">Save list</button></div>
+    </div>
     <div id="rawmode" class="${mode === "raw" ? "" : "hidden"}" style="margin-top:12px">
       <div class="card"><textarea id="raw" spellcheck="false">${esc(d.raw)}</textarea>
       <div class="row" style="margin-top:12px"><button class="btn primary" id="saveraw">Save</button><button class="btn" id="checkraw">Check</button><span class="muted small">Your AuthKey isn't shown here - it's stored encrypted.</span></div></div>
     </div>`;
   m.querySelectorAll("[data-mode]").forEach(b => b.onclick = () => { store.set("es-config-mode", b.dataset.mode); show("config"); });
   const showIssues = list => { $("#issues").innerHTML = issuesHtml(list || []); };
+  const portOk = newPort => {
+    const oldPort = String(d.fields.find(f => f.key === "Port")?.value ?? "");
+    if (!newPort || String(newPort) === oldPort) return true;
+    return confirm("This changes your network settings:\n\n" +
+      "• Server port " + oldPort + " → " + newPort + "\n" +
+      "• This computer's firewall: port " + newPort + " is opened (TCP + UDP) and " + oldPort + " is closed\n" +
+      "• Your router is NOT changed - forward port " + newPort + " there yourself for internet play\n" +
+      "• Players who saved your server must use the new port\n\nContinue?");
+  };
+  const networkNote = r => { if (r.network) setTimeout(() => toast("🌐 " + r.network, 9000), 2600); };
   $("#saveform").onclick = async () => {
     const fields = d.fields.map(f => { const el = $("#f_" + f.section + "_" + f.key); return { section: f.section, key: f.key, value: f.type === "bool" ? el.checked : el.value }; });
-    try { const r = await api("/api/config/save", { json: { fields } }); showIssues(r.issues); toast(r.note); }
+    if (!portOk((fields.find(f => f.key === "Port") || {}).value)) return;
+    try { const r = await api("/api/config/save", { json: { fields } }); showIssues(r.issues); toast(r.note); networkNote(r); }
     catch (e) { showIssues(e.data && e.data.issues); toast(e.message); }
   };
   let tmr;
   $("#raw").oninput = () => { clearTimeout(tmr); tmr = setTimeout(async () => { try { showIssues((await api("/api/config/validate", { json: { raw: $("#raw").value } })).issues); } catch (e) {} }, 500); };
   $("#checkraw").onclick = async () => showIssues((await api("/api/config/validate", { json: { raw: $("#raw").value } })).issues);
   $("#saveraw").onclick = async () => {
-    try { const r = await api("/api/config/save", { json: { raw: $("#raw").value } }); showIssues(r.issues); toast(r.note); }
+    const m2 = $("#raw").value.match(/^\s*Port\s*=\s*(\d+)/m);
+    if (!portOk(m2 && m2[1])) return;
+    try { const r = await api("/api/config/save", { json: { raw: $("#raw").value } }); showIssues(r.issues); toast(r.note); networkNote(r); }
     catch (e) { showIssues(e.data && e.data.issues); toast(e.message); }
+  };
+  m.querySelectorAll("[data-allow]").forEach(a => a.onclick = e => {
+    e.preventDefault();
+    const ta = $("#al_names"), have = ta.value.split("\n").map(x => x.trim().toLowerCase());
+    if (!have.includes(a.dataset.allow.toLowerCase())) ta.value = (ta.value.trim() ? ta.value.trim() + "\n" : "") + a.dataset.allow;
+    toast(a.dataset.allow + " added - press Save list");
+  });
+  $("#al_save").onclick = async () => {
+    const on = $("#al_on").checked, names = $("#al_names").value.split("\n").map(x => x.trim()).filter(Boolean);
+    if (on && !names.length) { toast("Add at least one player name first"); return; }
+    if (on && !al.enabled && !confirm("Make the server invite-only?\n\n• Only these " + names.length + " player(s) can join: " + names.slice(0, 8).join(", ") + (names.length > 8 ? ", …" : "") + "\n• Everyone else and all guests get an \"invite-only\" message\n• Players already online stay connected\n\nContinue?")) return;
+    if (!on && al.enabled && !confirm("Turn the allow-list off? Anyone will be able to join again.")) return;
+    try { const r = await api("/api/allowlist", { json: { enabled: on, names } }); toast(r.note); show("config"); } catch (e) { toast(e.message); }
   };
   $("#saveak").onclick = async () => {
     try { const r = await api("/api/authkey", { json: { key: $("#ak").value } }); $("#ak").value = ""; toast(r.note); show("config"); } catch (e) { toast(e.message); }
@@ -632,6 +667,7 @@ VIEWS.settings = async m => {
       ${tg("n_mod_blocked", "Blocked mods", "A mod failed the virus check", N.mod_blocked)}
       ${tg("n_login_failed", "Security", "Someone keeps typing a wrong dashboard password", N.login_failed)}
       ${tg("n_player_join", "Player joins", "Every time someone joins (can be a lot)", N.player_join)}
+      ${tg("n_player_denied", "Refused players", "Someone not on the allow-list tried to join", N.player_denied)}
       ${s.platform === "windows" ? tg("auto_restart", "Restart after a crash", "Start the server again automatically", s.auto_restart) : ""}
       ${tg("update_check", "Check for updates", "Every 6 hours", s.update_check)}
       <p class="small muted" style="margin-top:12px">Notifications always appear on the Notifications page. Also send them to:</p>
@@ -685,7 +721,7 @@ VIEWS.settings = async m => {
   m.querySelectorAll("[data-test]").forEach(b => b.onclick = async () => { b.disabled = true; try { await saveNotif(true); await api("/api/notifications/test", { json: { channel: b.dataset.test } }); toast("Test sent"); } catch (e) { toast(e.message); } b.disabled = false; });
   async function saveNotif(quiet) {
     const body = { notify: {} };
-    ["crash", "stopped", "update", "mod_blocked", "login_failed", "player_join"].forEach(k => body.notify[k] = $("#n_" + k).checked);
+    ["crash", "stopped", "update", "mod_blocked", "login_failed", "player_join", "player_denied"].forEach(k => body.notify[k] = $("#n_" + k).checked);
     ["discord_enabled", "email_enabled", "update_check"].forEach(k => body[k] = $("#" + k).checked);
     if ($("#auto_restart")) body.auto_restart = $("#auto_restart").checked;
     ["smtp_host", "smtp_port", "smtp_user", "smtp_to", "smtp_security"].forEach(k => body[k] = $("#" + k).value);
@@ -710,10 +746,19 @@ VIEWS.settings = async m => {
   const off = $("#tfaoff");
   if (off) off.onclick = async () => { const p = prompt("Enter your password to turn off two-step login"); if (!p) return; try { await api("/api/2fa/disable", { json: { password: p } }); toast("Two-step login turned off"); show("settings"); } catch (e) { toast(e.message); } };
   $("#saveremote").onclick = async () => {
+    const wantRemote = $("#remote_enabled").checked, wantHttps = $("#https").checked || wantRemote;
+    const lines = [];
+    if (wantRemote !== !!s.remote_enabled) lines.push(wantRemote
+      ? "• Internet access ON: this computer's firewall opens port " + s.port + " (TCP) for the dashboard\n• Your router is NOT changed - forward port " + s.port + " there yourself"
+      : "• Internet access OFF: this computer's firewall closes port " + s.port + " again");
+    if (wantHttps !== !!s.https) lines.push("• The dashboard restarts on " + (wantHttps ? "https://" : "http://") + " - your browser reconnects by itself" + (wantHttps ? "\n• The first time, your browser warns about the self-made certificate" : ""));
+    if (!lines.length) { toast("Nothing changed"); return; }
+    if (!confirm("This changes your network settings:\n\n" + lines.join("\n") + "\n\nContinue?")) return;
     try {
       toast("Applying… (creating a certificate can take a few seconds)", 8000);
       const r = await api("/api/remote", { json: { https: $("#https").checked, remote_enabled: $("#remote_enabled").checked } });
-      if (r.restart) { toast("Restarting the dashboard - you'll be taken to the new address", 6000); setTimeout(() => location.href = r.url.replace(/\/\/[^:/]+/, "//" + location.hostname), 4500); }
+      if (r.network) toast("🌐 " + r.network, 7000);
+      if (r.restart) { setTimeout(() => toast("Restarting the dashboard - you'll be taken to the new address", 6000), r.network ? 1500 : 0); setTimeout(() => location.href = r.url.replace(/\/\/[^:/]+/, "//" + location.hostname), 4500); }
       else { toast("Saved"); show("settings"); }
     } catch (e) { toast(e.message); }
   };
