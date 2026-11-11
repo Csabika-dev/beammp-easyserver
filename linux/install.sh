@@ -25,7 +25,7 @@ LOGIND_DROPIN="/etc/systemd/logind.conf.d/99-beammp-easyserver.conf"
 RELEASE_BASE="https://github.com/BeamMP/BeamMP-Server/releases/latest/download"
 # Where the extra files (mod page, virus scanner) are downloaded from when this
 # script is run with "curl ... | sudo bash" instead of from the downloaded ZIP:
-REPO_RAW="https://raw.githubusercontent.com/scheidlerbalint1103-dev/beammp-easyserver/main"
+REPO_RAW="https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/main"
 # Root-owned locations (the "beammp" user must never be able to change these)
 ES_DIR="/usr/local/lib/beammp-easyserver"     # scripts
 SECRETS_KEY_DIR="/etc/beammp-easyserver"       # unlock key + settings
