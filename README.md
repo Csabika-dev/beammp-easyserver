@@ -53,7 +53,7 @@ Forgot the password or lost your phone? On Linux run `sudo beammp reset-login`. 
 
 ## Windows
 
-1. Download **BeamMP-EasyServer-Windows.zip** from the [Releases page](https://github.com/scheidlerbalint1103-dev/beammp-easyserver/releases/latest) and extract it (or use the green **Code** button → **Download ZIP** and open the `windows` folder)
+1. Download **BeamMP-EasyServer-Windows.zip** from the [Releases page](https://github.com/Csabika-dev/beammp-easyserver/releases/latest) and extract it (or use the green **Code** button → **Download ZIP** and open the `windows` folder)
 2. Double-click **`Install-BeamMP-Server.bat`**
 3. Click **Yes** when Windows asks for permission
 4. Fill in the window (paste your AuthKey) and press **Install**
@@ -87,12 +87,12 @@ Linux runs the server in the background as a service. It starts by itself when t
 Open a terminal and paste:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/scheidlerbalint1103-dev/beammp-easyserver/main/linux/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/main/linux/install.sh | sudo bash
 ```
 
 ### Option B: download and run
 
-1. Download **BeamMP-EasyServer-Linux.zip** from the [Releases page](https://github.com/scheidlerbalint1103-dev/beammp-easyserver/releases/latest) and extract it
+1. Download **BeamMP-EasyServer-Linux.zip** from the [Releases page](https://github.com/Csabika-dev/beammp-easyserver/releases/latest) and extract it
 2. Double-click **`install.sh`** and choose **Run in Terminal**
    - Doesn't run? Right-click inside the folder → **Open in Terminal**, then type `bash install.sh` and press Enter
 3. Enter your password and answer the questions
