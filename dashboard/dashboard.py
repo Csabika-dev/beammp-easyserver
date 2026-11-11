@@ -38,7 +38,7 @@ import zipfile
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-EASY_VERSION = "1.2.3"
+EASY_VERSION = "1.3.0"
 REPO = "Csabika-dev/beammp-easyserver"
 BEAMMP_REPO = "BeamMP/BeamMP-Server"
 IS_WIN = os.name == "nt"
@@ -90,6 +90,13 @@ DEFAULT_SETTINGS = {
     "update_check": True,
     "security_alerts": True,       # attacks: alert on every channel that is set up
     "security_reminders": True,    # ...and repeat every 15 minutes until "Stop alerts" is clicked
+    # Hide my IP: players join through a relay (playit.gg, a VPN with port
+    # forwarding, your own VPS) instead of your home address. Off by default:
+    # it makes DDoS attacks on your home much harder, but adds lag.
+    "relay_enabled": False,
+    "relay_host": "",
+    "relay_ports": {},             # server id -> port players use on the relay
+    "flood_protect": False,        # Linux: per-address limits on the game ports (nftables)
 }
 SECURITY_FILE = os.path.join(DATA_DIR, "security.json")
 SECURITY_REPEAT = 15 * 60
@@ -1501,6 +1508,43 @@ def _public_ip():
     return None
 
 
+def relay_ports():
+    rp = APP.settings.get("relay_ports") if APP else None
+    return rp if isinstance(rp, dict) else {}
+
+
+def relay_servers():
+    with LOCK:
+        insts = sorted(INSTANCES.values(), key=lambda i: (i.id != "main", i.id))
+    rp = relay_ports()
+    return [{"id": i.id, "name": i.name, "port": i.port(), "relay_port": rp.get(i.id)} for i in insts]
+
+
+def game_ports():
+    with LOCK:
+        insts = list(INSTANCES.values())
+    return sorted({p for p in (i.port() for i in insts) if isinstance(p, int) and 1024 <= p <= 65535})
+
+
+def relay_on():
+    return bool(APP and APP.settings.get("relay_enabled") and APP.settings.get("relay_host"))
+
+
+def game_address(inst=None):
+    """(host, port, via_relay): the address players should use to join a server.
+    With "Hide my IP" on it's the relay, never the home address."""
+    inst = inst or I()
+    port = inst.port() or 30814
+    if relay_on():
+        rp = relay_ports().get(inst.id)
+        return APP.settings.get("relay_host"), (rp if isinstance(rp, int) else port), True
+    return public_ip() or lan_ip(), port, False
+
+
+def fmt_addr(host, port):
+    return ("[%s]:%s" if ":" in str(host) else "%s:%s") % (host, port)
+
+
 def tcp_open(host, port, timeout=3.0):
     try:
         with socket.create_connection((host, port), timeout=timeout):
@@ -1588,7 +1632,38 @@ def network_check(cfg, status, deep):
           ("Friends on your Wi-Fi can connect to %s:%d" % (lip, port)) if ok else
           "Couldn't connect via %s - a firewall may be blocking it" % lip)
     pip = public_ip()
-    if pip:
+    if relay_on():
+        rhost, rport, _ = game_address()
+        c("Hide my IP", "ok", "On - players join through the relay at %s instead of your home address" % fmt_addr(rhost, rport))
+        if running and tcp:
+            ok = tcp_open(rhost, rport, timeout=5)
+            c("Reachable through the relay (quick test)", "ok" if ok else "bad",
+              "The relay forwards to this server" if ok else
+              "Nothing answers at %s. Check that the relay (playit.gg, VPN or your VPS tunnel) is running "
+              "and forwards TCP and UDP to port %d on this computer." % (fmt_addr(rhost, rport), port))
+            if pip:
+                direct = tcp_open(pip, port, timeout=4)
+                c("Direct access to your home", "warn" if direct else "ok",
+                  ("Port %d is still open on your home IP %s - remove the port forward on your router, "
+                   "otherwise attackers can still find and hit you directly." % (port, pip)) if direct else
+                  "Closed (or your router blocks this test) - players can only come in through the relay")
+        if not private:
+            c("Public server list", "warn",
+              "Your server is on the public list. The list shows the address the server reports from - with "
+              "playit.gg and most relays that's your home IP. Make the server private (Config → Private server) "
+              "and give players the relay address, unless all of this computer's traffic goes through the relay.")
+        if deep and pip and not private:
+            try:
+                if server_list_lookup(pip, port)["listed"]:
+                    c("Server list leak", "bad", "The server list shows your HOME address (%s). Make the server "
+                      "private, or send the server's internet traffic through the relay as well." % pip)
+                    tips.append("If your home IP has already been shared, restart your router - most providers "
+                                "then give you a new IP address.")
+                else:
+                    c("Server list leak", "ok", "Your home address isn't in the server list")
+            except Exception as e:
+                c("Server list leak", "warn", "Couldn't download the server list (%s)" % e.__class__.__name__)
+    elif pip:
         c("Public IP address", "ok", "Friends over the internet connect to %s:%d" % (pip, port))
         if running and tcp:
             ok = tcp_open(pip, port, timeout=4)
@@ -1601,7 +1676,7 @@ def network_check(cfg, status, deep):
                             "\"<your router model> port forwarding\"." % (port, lip))
     else:
         c("Public IP address", "warn", "Couldn't find your public IP (no internet?)")
-    if deep and pip:
+    if deep and pip and not relay_on():
         if private:
             c("Public server list", "info", "Your server is private, so it's hidden from the list on purpose")
         else:
@@ -1619,9 +1694,12 @@ def network_check(cfg, status, deep):
         fw = control("firewall-status", timeout=20)
         if fw.get("ok") and fw.get("data"):
             c("Firewall", "info", fw["data"])
-    if pip and ipaddress.ip_address(pip) in ipaddress.ip_network("100.64.0.0/10"):
+    if pip and not relay_on() and ipaddress.ip_address(pip) in ipaddress.ip_network("100.64.0.0/10"):
         tips.append("Your provider uses CGNAT (shared IP) - port forwarding won't work. Ask them for a public IPv4 address.")
-    return {"port": port, "lan_ip": lip, "public_ip": pip, "checks": checks, "tips": tips}
+    if relay_on():
+        pip = None      # don't show the home address on a page that's about the relay
+    return {"port": port, "lan_ip": lip, "public_ip": pip, "checks": checks, "tips": tips,
+            "relay": fmt_addr(*game_address()[:2]) if relay_on() else None}
 
 
 # ----------------------------------------------------------------------------- updates
@@ -1973,6 +2051,10 @@ class App:
         self.locked = {}
         self.global_fails = []
         self.totp_last = 0
+        self.flood_applied = None      # (on, ports) last sent to the root helper
+        self.flood_dropped = None
+        self.flood_next = 0
+        self.flood_lock = threading.Lock()
         self.state = read_json(STATE_FILE, {})
         self.updates = self.state.get("updates", {})
         with open(os.path.join(HERE, "webui.html"), encoding="utf-8") as f:
@@ -2088,11 +2170,52 @@ class App:
             except Exception as e:
                 sys.stderr.write("security alerts: %s\n" % short_err(e))
             try:
+                self.flood_tick()
+            except Exception as e:
+                sys.stderr.write("flood protection: %s\n" % short_err(e))
+            try:
                 if self.settings.get("update_check") and now() >= next_update:
                     next_update = now() + 6 * 3600
                     self.check_updates(notify=True)
             except Exception as e:
                 sys.stderr.write("updates: %s\n" % short_err(e))
+
+    def flood_tick(self):
+        """Keep the flood rules in place (they're gone after a reboot and must
+        follow port changes) and raise an alert when they block a flood."""
+        if IS_WIN:
+            return
+        with self.flood_lock:      # the monitor and a settings change can call this at the same time
+            self._flood_tick()
+
+    def _flood_tick(self):
+        want = bool(self.settings.get("flood_protect"))
+        ports = game_ports() if want else []
+        key = (want and bool(ports), tuple(ports))
+        if key != self.flood_applied:
+            if want or self.flood_applied is not None:
+                r = control("flood-protect", state="on" if key[0] else "off", ports=ports, timeout=30)
+                if want and not r.get("ok"):
+                    self.notifier.add("network", "Flood protection couldn't be turned on", r.get("msg", ""), "warning")
+            self.flood_applied = key
+            self.flood_dropped = None
+            self.flood_next = now() + 60
+        if not key[0] or now() < self.flood_next:
+            return
+        self.flood_next = now() + 60
+        st = control("flood-status", timeout=20)
+        if not st.get("active"):
+            self.flood_applied = None          # rules were removed (another firewall tool?) - put them back
+            return
+        d = int(st.get("dropped") or 0)
+        if self.flood_dropped is not None and d - self.flood_dropped >= 2000:
+            self.alerts.raise_("gameflood", "Your game server is being flooded",
+                               "Flood protection blocked %d packets in the last minute. Players should still be "
+                               "able to play. If your whole internet slows down or drops, it's a bigger attack "
+                               "that only a relay can stop: restart your router (most providers then give you "
+                               "a new IP address) and turn on Settings → Hide my IP before sharing your server "
+                               "again." % (d - self.flood_dropped))
+        self.flood_dropped = d
 
     def _monitor_init(self, inst):
         st = inst.server.status()
@@ -2248,8 +2371,8 @@ class App:
         g = toml_parse(self.read_config_text())[0].get("General", {})
         where = ""
         if ja.get("address"):
-            host = public_ip() or lan_ip()
-            where = "\nAddress: `%s:%s`" % (host, g.get("Port"))
+            host, gport, _ = game_address(inst)
+            where = "\nAddress: `%s`" % fmt_addr(host, gport)
         if not g.get("Private"):
             where += "\nFind **%s** in the BeamMP server list." % inst.name
         who = hits[0] if len(hits) == 1 else ", ".join(hits[:-1]) + " and " + hits[-1]
@@ -2904,6 +3027,7 @@ class Handler(BaseHTTPRequestHandler):
             "status": st, "name": re.sub(r"\^.", "", str(g.get("Name", ""))),
             "map": map_name(g.get("Map")), "port": g.get("Port"), "max_players": g.get("MaxPlayers"),
             "private": g.get("Private"), "online": online, "lan_ip": lan_ip(),
+            "relay": fmt_addr(*game_address()[:2]) if relay_on() else None,
             "config_errors": sum(1 for i in issues if i["level"] == "error"),
             "config_warnings": sum(1 for i in issues if i["level"] == "warning"),
             "has_authkey": I().has_authkey(),
@@ -3144,6 +3268,29 @@ class Handler(BaseHTTPRequestHandler):
                 pass
         self.send(200, {"ok": True})
 
+    # ---------- hide my IP
+    def get_relay_check(self, q):
+        """Test every server through the relay (TCP; UDP can't be tested from here)."""
+        if not APP.settings.get("relay_host"):
+            return self.fail(400, "Enter the relay address first")
+        out = []
+        for r in relay_servers():
+            host = APP.settings.get("relay_host")
+            port = r["relay_port"] or r["port"]
+            if not port:
+                continue
+            t0 = time.time()
+            ok = tcp_open(host, port, timeout=5)
+            out.append({"id": r["id"], "name": r["name"], "address": fmt_addr(host, port), "ok": ok,
+                        "ms": int((time.time() - t0) * 1000) if ok else None})
+        self.send(200, {"results": out})
+
+    def get_flood_status(self, q):
+        if IS_WIN:
+            return self.send(200, {"available": False})
+        r = control("flood-status", timeout=20)
+        self.send(200, {"available": True, "active": bool(r.get("active")), "dropped": int(r.get("dropped") or 0)})
+
     # ---------- network
     def get_network(self, q):
         data, _, _ = toml_parse(APP.read_config_text())
@@ -3237,6 +3384,7 @@ class Handler(BaseHTTPRequestHandler):
             "has_vt": app.secrets.has("VT_API_KEY"), "totp": app.secrets.has("TOTP_SECRET"),
             "platform": "windows" if IS_WIN else "linux", "lan_ip": lan_ip(),
             "cert_fingerprint": cert_fingerprint(), "https_now": self.https,
+            "relay_servers": relay_servers(),
         })
         self.send(200, s)
 
@@ -3267,6 +3415,8 @@ class Handler(BaseHTTPRequestHandler):
                 os.environ.pop("VT_API_KEY", None)
         if upd:
             app.settings.update(upd)
+        if "flood_protect" in upd:
+            threading.Thread(target=app.flood_tick, daemon=True).start()
         self.send(200, {"ok": True})
 
     def post_password(self, q):
@@ -3516,9 +3666,41 @@ def clean_settings(b):
         cur = APP.settings.get("notify")
         cur.update({k: bool(v) for k, v in b["notify"].items() if k in DEFAULT_SETTINGS["notify"]})
         upd["notify"] = cur
-    for k in ("discord_enabled", "email_enabled", "auto_restart", "update_check", "security_alerts", "security_reminders"):
+    for k in ("discord_enabled", "email_enabled", "auto_restart", "update_check", "security_alerts", "security_reminders",
+              "relay_enabled", "flood_protect"):
         if k in b:
             upd[k] = bool(b[k])
+    if "relay_host" in b:
+        h = str(b["relay_host"]).strip().strip("[]")
+        if h:
+            try:
+                ipaddress.ip_address(h)
+            except ValueError:
+                if not re.fullmatch(r"(?=.{1,253}$)[A-Za-z0-9]([A-Za-z0-9-]{0,62}[A-Za-z0-9])?"
+                                    r"(\.[A-Za-z0-9]([A-Za-z0-9-]{0,62}[A-Za-z0-9])?)*", h):
+                    raise ValueError("The relay address must be a host name (like name.playit.gg) or an IP address, "
+                                     "without http:// and without the port")
+        upd["relay_host"] = h
+    if "relay_ports" in b:
+        if not isinstance(b["relay_ports"], dict):
+            raise ValueError("bad relay ports")
+        with LOCK:
+            known = set(INSTANCES)
+        ports = {}
+        for sid, v in b["relay_ports"].items():
+            if sid not in known or v in (None, ""):
+                continue
+            try:
+                v = int(v)
+                assert 1 <= v <= 65535
+            except (TypeError, ValueError, AssertionError):
+                raise ValueError("Relay ports must be numbers from 1 to 65535")
+            ports[sid] = v
+        upd["relay_ports"] = ports
+    if upd.get("relay_enabled") and not upd.get("relay_host", APP.settings.get("relay_host")):
+        raise ValueError("Enter the relay address first")
+    if upd.get("flood_protect") and IS_WIN:
+        raise ValueError("Flood protection is only available on Linux")
     for k in ("smtp_host", "smtp_user", "smtp_from", "smtp_to"):
         if k in b:
             v = str(b[k]).strip()
@@ -3612,7 +3794,8 @@ class Server(ThreadingHTTPServer):
             if APP:
                 APP.alerts.seen("flood", 20, 60, "The dashboard is being flooded with connections",
                                 "Hundreds of connections at once (last from %s). Extra ones are being dropped so the "
-                                "dashboard keeps working. If it keeps happening, turn internet access off." % client_address[0])
+                                "dashboard keeps working. If it keeps happening, turn internet access off; if your whole "
+                                "internet drops, restart your router to get a new IP address." % client_address[0])
             return
         super().process_request(request, client_address)
 
