@@ -1,0 +1,36 @@
+# Creates ready-to-download ZIPs on the Releases page whenever you push a tag
+# like v1.0.0  (GitHub page -> Releases -> "Draft a new release" -> new tag v1.0.0)
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Linux scripts
+        run: |
+          bash -n linux/install.sh
+          python3 -m py_compile linux/modscan.py linux/modmanager.py
+
+      - name: Build ZIPs
+        run: |
+          mkdir -p dist
+          chmod +x linux/install.sh "linux/Install BeamMP Server.desktop"
+          cp README.md LICENSE windows/
+          cp README.md LICENSE linux/
+          (cd windows && zip -r ../dist/BeamMP-EasyServer-Windows.zip . -x '__pycache__/*')
+          (cd linux && zip -r ../dist/BeamMP-EasyServer-Linux.zip . -x '__pycache__/*')
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          generate_release_notes: true
