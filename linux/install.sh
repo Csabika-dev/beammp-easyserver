@@ -15,7 +15,7 @@
 # =============================================================================
 set -euo pipefail
 
-EASY_VERSION="1.1.0"
+EASY_VERSION="1.1.1"
 INSTALL_DIR="/opt/beammp-server"
 SERVICE_USER="beammp"
 DASH_USER="beammp-dash"
@@ -256,13 +256,29 @@ if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fi
 fetch_file() { # fetch_file REPO/PATH DEST - from the downloaded ZIP, or from GitHub
-  local rel="$1" c
+  local rel="$1" c t
   if [[ -n "$SCRIPT_DIR" ]]; then
     for c in "$SCRIPT_DIR/$rel" "$SCRIPT_DIR/../$rel" "$SCRIPT_DIR/$(basename "$rel")"; do
       if [[ -f "$c" ]]; then install -m 0644 "$c" "$2"; return 0; fi
     done
   fi
-  curl -fsSL --retry 3 -o "$2" "$REPO_RAW/$rel" || die "Could not download $rel from $REPO_RAW"
+  # download to a private temp file; "install" replaces a link instead of following it
+  t=$(mktemp)
+  curl -fsSL --retry 3 -o "$t" "$REPO_RAW/$rel" || { rm -f "$t"; die "Could not download $rel from $REPO_RAW"; }
+  install -m 0644 "$t" "$2"; rm -f "$t"
+}
+
+drop_links() { # paths root writes to inside the server folder must be real files/folders
+  local p
+  for p in "$INSTALL_DIR/ServerConfig.toml" "$INSTALL_DIR/BeamMP-Server" "$INSTALL_DIR/servers" \
+           "$INSTALL_DIR/.easyserver" "$INSTALL_DIR/Resources" "$INSTALL_DIR/Resources/Client" \
+           "$INSTALL_DIR/Resources/Client-disabled" "$INSTALL_DIR/Resources/Quarantine" \
+           "$INSTALL_DIR/Resources/.uploading" "$INSTALL_DIR/Resources/Server" \
+           "$INSTALL_DIR/Resources/Server/EasyServerStats" \
+           "$INSTALL_DIR/Resources/Server/EasyServerStats/main.lua" \
+           "$INSTALL_DIR/.easyserver/dashboard.json"; do
+    if [[ -L "$p" ]]; then rm -f "$p"; warn "Removed an unexpected link: $p"; fi
+  done
 }
 
 # ---- encrypted key storage -----------------------------------------------------
@@ -324,10 +340,11 @@ export MODSCAN_CACHE=$DIR/.easyserver/scancache.json
 case "${1:-}" in
   server)
     # "launch.sh server" = main server, "launch.sh server <id>" = extra server in servers/<id>
-    ID="${2:-main}"; KEYNAME=BEAMMP_AUTH_KEY; RUN=/run/beammp-easyserver
+    ID="${2:-main}"; KEYNAME=BEAMMP_AUTH_KEY
     if [[ "$ID" != "main" ]]; then
-      [[ "$ID" =~ ^[a-z0-9]{1,12}$ && -d "$DIR/servers/$ID" ]] || { echo "unknown server $ID" >&2; exit 1; }
-      DIR="$DIR/servers/$ID"; KEYNAME="BEAMMP_AUTH_KEY_${ID^^}"; RUN="/run/beammp-easyserver/$ID"
+      [[ "$ID" =~ ^[a-z0-9]{1,12}$ && -d "$DIR/servers/$ID" && ! -L "$DIR/servers/$ID" ]] || { echo "unknown server $ID" >&2; exit 1; }
+      DIR="$DIR/servers/$ID"; KEYNAME="BEAMMP_AUTH_KEY_${ID^^}"
+    elif [[ ! "$ID" =~ ^[a-z0-9]{1,12}$ ]]; then echo "bad server id" >&2; exit 1
     fi
     export HOME=$DIR
     # upload (mod download) speed limits - re-applied because the port may have changed
@@ -339,17 +356,27 @@ case "${1:-}" in
     # The BeamMP server rewrites its config file (including the AuthKey) when
     # it starts. So it gets a copy in /run, which is RAM only and vanishes on
     # reboot - the real ServerConfig.toml never contains the key.
-    mkdir -p "$RUN"; chown beammp:beammp "$RUN"; chmod 700 "$RUN"
-    tmp=$(mktemp "$RUN/.cfg.XXXXXX")
-    cp "$DIR/ServerConfig.toml" "$tmp"
-    v=$(SEC "$KEYNAME")
-    if [[ "$v" =~ ^[A-Za-z0-9-]+$ ]]; then
-      sed -i -E "s|^([[:space:]]*AuthKey[[:space:]]*=).*|\1 \"$v\"|" "$tmp"
-    fi
-    unset v
-    # no IPv6 on this machine? listen on IPv4 instead of "::"
-    [[ -e /proc/net/if_inet6 ]] || sed -i -E 's|^([[:space:]]*IP[[:space:]]*=).*|\1 "0.0.0.0"|' "$tmp"
-    chown beammp:beammp "$tmp"; chmod 600 "$tmp"; mv -f "$tmp" "$RUN/ServerConfig.toml"
+    # Security: the folder above is owned by root, so the game server user can
+    # never swap files in it for links; root never opens a file in a folder
+    # the game server controls - reading and writing is done as "beammp".
+    BASE=/run/beammp-easyserver; RUN="$BASE/$ID"
+    if [[ -L "$BASE" || ( -e "$BASE" && "$(stat -c %u "$BASE")" != 0 ) ]]; then rm -rf --one-file-system "$BASE"; fi
+    mkdir -p "$BASE"; chown root:root "$BASE"; chmod 755 "$BASE"
+    rm -rf --one-file-system "$RUN"; mkdir -m 700 "$RUN"; chown beammp:beammp "$RUN"
+    cfg=$("${AS_SERVER[@]}" timeout 10 head -c 262144 -- "$DIR/ServerConfig.toml") || { echo "cannot read $DIR/ServerConfig.toml" >&2; exit 1; }
+    v=$(SEC "$KEYNAME"); [[ "$v" =~ ^[A-Za-z0-9-]+$ ]] || v=""
+    out=""
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      if [[ -n "$v" && "$line" =~ ^[[:space:]]*AuthKey[[:space:]]*= ]]; then line="AuthKey = \"$v\""
+      # no IPv6 on this machine? listen on IPv4 instead of "::"
+      elif [[ ! -e /proc/net/if_inet6 && "$line" =~ ^[[:space:]]*IP[[:space:]]*= ]]; then line='IP = "0.0.0.0"'
+      fi
+      out+="$line"$'\n'
+    done <<<"$cfg"
+    unset v cfg
+    # printf is a shell builtin: the key never shows up in a process list
+    printf '%s' "$out" | "${AS_SERVER[@]}" sh -c 'umask 077; cat > "$1"' sh "$RUN/ServerConfig.toml"
+    unset out
     cd "$DIR"
     exec "${AS_SERVER[@]}" /opt/beammp-server/BeamMP-Server --config="$RUN/ServerConfig.toml" ;;
   dashboard|mods)
@@ -481,8 +508,8 @@ Tags = "Freeroam"
 ImScaredOfUpdates = false
 UpdateReminderTime = "30s"
 EOF
-  chown "$SERVICE_USER:$SERVICE_USER" "$cfg"
-  chmod 640 "$cfg"
+  chown -h "$SERVICE_USER:$SERVICE_USER" "$cfg"
+  [[ -L "$cfg" ]] || chmod 640 "$cfg"
   if [[ -z "$key" ]] && ! "$ES_DIR/secrets.sh" has BEAMMP_AUTH_KEY; then
     warn "No AuthKey yet. Add it later with:  sudo beammp key"
   fi
@@ -578,13 +605,16 @@ set -euo pipefail
 DIR="/opt/beammp-server"; SVC="beammp-server"
 RELEASE_BASE="https://github.com/BeamMP/BeamMP-Server/releases/latest/download"
 need_root() { [[ $EUID -eq 0 ]] || exec sudo "$0" "$@"; }
+# files in $DIR belong to the game server: root never writes them directly
+AS_SERVER=(setpriv --reuid=beammp --regid=beammp --init-groups --)
+AS_DASH=(setpriv --reuid=beammp-dash --regid=beammp-dash --init-groups --)
 case "${1:-help}" in
   start)   need_root "$@"; systemctl start "$SVC"; echo "Started.";;
   stop)    need_root "$@"; systemctl stop "$SVC"; echo "Stopped.";;
   restart) need_root "$@"; systemctl restart "$SVC"; echo "Restarted.";;
   status)  systemctl status "$SVC" --no-pager || true;;
   logs)    need_root "$@"; journalctl -u "$SVC" -f -n 100;;
-  config)  need_root "$@"; "${EDITOR:-nano}" "$DIR/ServerConfig.toml"
+  config)  need_root "$@"; "${AS_SERVER[@]}" env HOME=/tmp "${EDITOR:-nano}" "$DIR/ServerConfig.toml"
            systemctl restart "$SVC"; echo "Saved and restarted.";;
   mods)    echo "Installed mods:"
            found=0
@@ -605,21 +635,23 @@ case "${1:-help}" in
   addmod)  shift || true
            [[ $# -gt 0 ]] || { echo "Usage: beammp addmod file.zip [more.zip ...]"; exit 1; }
            [[ $EUID -eq 0 ]] || exec sudo "$0" addmod "$@"
-           mkdir -p "$DIR/Resources/.uploading"; chown beammp:beammp "$DIR/Resources/.uploading"
+           up="$DIR/Resources/.uploading"
+           [[ -L "$up" ]] && rm -f "$up"
+           "${AS_SERVER[@]}" mkdir -p "$up"; "${AS_SERVER[@]}" chmod 2775 "$up"
            for f in "$@"; do
              if [[ "$f" != *.zip && "$f" != *.ZIP ]]; then echo "Skipped (not a .zip): $f"; continue; fi
              [[ -f "$f" ]] || { echo "Not found: $f"; continue; }
-             tmp="$DIR/Resources/.uploading/$(basename "$f")"
-             install -m 0664 -o beammp -g beammp "$f" "$tmp"
+             tmp="$up/$(basename "$f")"
+             # written by the dashboard user (not root) so links in the folder can't redirect it
+             "${AS_DASH[@]}" sh -c 'umask 002; rm -f "$1"; cat > "$1"' sh "$tmp" < "$f"
              echo "Checking $(basename "$f") for viruses..."
              vt=$(/usr/local/lib/beammp-easyserver/secrets.sh get VT_API_KEY 2>/dev/null || true)
-             chown beammp-dash "$tmp"
              if ! VT_API_KEY="$vt" MODSCAN_CACHE="$DIR/.easyserver/scancache.json" HOME="$DIR" setpriv --reuid=beammp-dash --regid=beammp-dash --init-groups -- \
                   python3 /usr/local/lib/beammp-easyserver/dashboard/modscan.py "$tmp"; then
                rm -f "$tmp"; echo "NOT added: $(basename "$f") failed the safety check."; continue
              fi
              unset vt
-             mv -f "$tmp" "$DIR/Resources/Client/$(basename "$f")"
+             "${AS_DASH[@]}" mv -f "$tmp" "$DIR/Resources/Client/$(basename "$f")"
              echo "Added: $(basename "$f")"
              maps=$(python3 - "$f" <<'PYEOF' 2>/dev/null || true
 import re,sys,zipfile
@@ -633,8 +665,8 @@ PYEOF
            [[ -n "${1:-}" ]] || { echo "Current: $(sudo grep -E '^\s*Map' "$DIR/ServerConfig.toml")"; echo "Usage: beammp map west_coast_usa"; exit 0; }
            need_root map "$@"
            [[ "$1" =~ ^[A-Za-z0-9_.-]+$ ]] || { echo "Invalid map name"; exit 1; }
-           sed -i -E "s|^\s*Map\s*=.*|Map = \"/levels/$1/info.json\"|" "$DIR/ServerConfig.toml"
-           touch "$DIR/Resources/Client"
+           "${AS_SERVER[@]}" sed -i -E "s|^\s*Map\s*=.*|Map = \"/levels/$1/info.json\"|" "$DIR/ServerConfig.toml"
+           "${AS_SERVER[@]}" touch "$DIR/Resources/Client"
            echo "Map set to $1 - the server restarts by itself in ~15 seconds.";;
   update)  need_root "$@"
            # shellcheck disable=SC1091
@@ -642,8 +674,11 @@ PYEOF
            tmp=$(mktemp)
            echo "Downloading newest $ASSET ..."
            curl -fL --retry 3 --progress-bar -o "$tmp" "$RELEASE_BASE/$ASSET"
+           head -c 4 "$tmp" | grep -q ELF || { rm -f "$tmp"; echo "Download was not a Linux program."; exit 1; }
            systemctl stop "$SVC"
-           install -m 0755 -o beammp -g beammp "$tmp" "$DIR/BeamMP-Server"; rm -f "$tmp"
+           chmod 644 "$tmp"
+           "${AS_SERVER[@]}" sh -c 'umask 022; t=$(mktemp "$1/.update-XXXXXX") && cat > "$t" && chmod 755 "$t" && mv -f "$t" "$1/BeamMP-Server"' sh "$DIR" < "$tmp"
+           rm -f "$tmp"
            systemctl start "$SVC"; echo "Updated and restarted.";;
   key)     need_root "$@"
            echo "Get a key at https://keymaster.beammp.com (Keys -> +)."
@@ -676,7 +711,7 @@ PYEOF
            /usr/local/lib/beammp-easyserver/secrets.sh unset TOTP_SECRET
            f="$DIR/.easyserver/dashboard.json"
            if [[ -f "$f" ]]; then
-             python3 - "$f" <<'PYEOF'
+             "${AS_DASH[@]}" python3 - "$f" <<'PYEOF'
 import json, sys
 p = sys.argv[1]
 d = json.load(open(p))
@@ -795,7 +830,7 @@ ID="${1:-main}"
 [[ -n "$REC" ]] || sleep 15
 DIR=/opt/beammp-server; UNIT=beammp-server; STATE=/var/lib/beammp-easyserver/applied
 if [[ "$ID" != "main" ]]; then
-  [[ "$ID" =~ ^[a-z0-9]{1,12}$ && -d "$DIR/servers/$ID" ]] || exit 0
+  [[ "$ID" =~ ^[a-z0-9]{1,12}$ && -d "$DIR/servers/$ID" && ! -L "$DIR/servers/$ID" ]] || exit 0
   DIR="$DIR/servers/$ID"; UNIT="beammp-server@$ID"; STATE="$STATE-$ID"
 fi
 if [[ -z "$REC" ]]; then
@@ -808,7 +843,10 @@ if [[ -z "$REC" ]]; then
   unset VT_API_KEY VT
 fi
 # only the mod zips and the config count (the server writes its own mods.json)
-NOW=$( { ls -l --time-style=+%s "$DIR"/Resources/Client/*.zip 2>/dev/null; cat "$DIR/ServerConfig.toml" 2>/dev/null; } | md5sum | cut -d' ' -f1)
+# (read as the dashboard user, never as root: these folders belong to the server)
+NOW=$(setpriv --reuid=beammp-dash --regid=beammp-dash --init-groups -- timeout 20 sh -c \
+  'ls -l --time-style=+%s "$1"/Resources/Client/*.zip 2>/dev/null; head -c 262144 "$1/ServerConfig.toml" 2>/dev/null' sh "$DIR" \
+  | md5sum | cut -d' ' -f1)
 [[ -n "$REC" ]] && { echo "$NOW" > "$STATE"; exit 0; }
 [[ -f "$STATE" && "$(cat "$STATE")" == "$NOW" ]] && exit 0
 echo "$NOW" > "$STATE"
@@ -900,7 +938,7 @@ EOF
   chown "$DASH_USER:$SERVICE_USER" "$INSTALL_DIR/Resources/Quarantine"
   chmod 2775 "$INSTALL_DIR/Resources/Quarantine"
   chown -R "$DASH_USER:$DASH_USER" "$DATA_DIR"; chmod 750 "$DATA_DIR"
-  [[ -f "$INSTALL_DIR/ServerConfig.toml" ]] && chmod 660 "$INSTALL_DIR/ServerConfig.toml"
+  [[ -f "$INSTALL_DIR/ServerConfig.toml" && ! -L "$INSTALL_DIR/ServerConfig.toml" ]] && chmod 660 "$INSTALL_DIR/ServerConfig.toml"
   chown -R root:root "$es"
   chmod 755 "$es/dashboard"; chmod 644 "$es/dashboard"/*
   chmod 755 "$es/apply.sh"; chmod 700 "$es/secrets.sh" "$es/launch.sh" "$es/control.py"
@@ -1019,11 +1057,15 @@ id "$DASH_USER" >/dev/null 2>&1 || \
   useradd --system --user-group --no-create-home --home-dir "$INSTALL_DIR/.easyserver" \
           --shell /usr/sbin/nologin "$DASH_USER"
 usermod -aG "$SERVICE_USER" "$DASH_USER"
+# Stop everything that runs as the server users while root works in their
+# folder, and remove links they could have planted (so a hacked game server
+# can't trick the installer into writing or chown-ing system files).
+EXTRA_ACTIVE=$(systemctl list-units --plain --no-legend --state=active 'beammp-server@*.service' 2>/dev/null | awk '{print $1}' || true)
+systemctl stop "$SERVICE_NAME" beammp-dashboard 'beammp-server@*.service' 2>/dev/null || true
+drop_links
 mkdir -p "$INSTALL_DIR/Resources/Client" "$INSTALL_DIR/Resources/Server"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
 ok "$INSTALL_DIR"
-
-systemctl stop "$SERVICE_NAME" 2>/dev/null || true
 
 download_server
 fix_lua_link
@@ -1036,6 +1078,7 @@ install_mods
 
 step "Starting the server"
 systemctl restart "$SERVICE_NAME"
+for u in $EXTRA_ACTIVE; do systemctl start "$u" 2>/dev/null || true; done
 sleep 4
 if systemctl is-active --quiet "$SERVICE_NAME"; then
   ok "Server is running!"
