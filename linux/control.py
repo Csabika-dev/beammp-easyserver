@@ -413,8 +413,65 @@ def firewall_status():
     return {"ok": True, "data": "No firewall active on this computer"}
 
 
+FLOOD_TABLE = "beammp_easyserver"
+
+
+def flood_protect(state, ports):
+    """Per-address speed limits on the game ports (nftables): one address can
+    open about 20 new connections a minute and send about 1000 UDP packets a
+    second. Normal players stay far below that; one computer flooding the server
+    gets cut off. Your own network (and a relay running on this computer) is
+    never limited. This can't stop a big DDoS - that fills your internet line
+    before it reaches this computer - but it stops floods from single addresses."""
+    if not shutil.which("nft"):
+        return {"ok": False, "msg": "Flood protection needs nftables (sudo apt install nftables)"}
+    run(["nft", "delete", "table", "inet", FLOOD_TABLE])
+    if state != "on":
+        return {"ok": True, "msg": "Flood protection is off"}
+    try:
+        ports = sorted({int(p) for p in ports})
+        assert ports and len(ports) <= 64 and all(1024 <= p <= 65535 for p in ports)
+    except (TypeError, ValueError, AssertionError):
+        return {"ok": False, "msg": "bad ports"}
+    pl = ", ".join(str(p) for p in ports)
+    rules = """table inet %(t)s {
+  set tcp4 { type ipv4_addr; flags dynamic, timeout; timeout 2m; size 65535; }
+  set tcp6 { type ipv6_addr; flags dynamic, timeout; timeout 2m; size 65535; }
+  set udp4 { type ipv4_addr; flags dynamic, timeout; timeout 1m; size 65535; }
+  set udp6 { type ipv6_addr; flags dynamic, timeout; timeout 1m; size 65535; }
+  counter dropped { }
+  chain input {
+    type filter hook input priority -10; policy accept;
+    iif "lo" accept
+    ip saddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } accept
+    ip6 saddr { fc00::/7, fe80::/10 } accept
+    meta l4proto tcp th dport { %(p)s } ct state new update @tcp4 { ip saddr limit rate over 20/minute burst 30 packets } counter name "dropped" drop
+    meta l4proto tcp th dport { %(p)s } ct state new update @tcp6 { ip6 saddr limit rate over 20/minute burst 30 packets } counter name "dropped" drop
+    meta l4proto udp th dport { %(p)s } update @udp4 { ip saddr limit rate over 1000/second burst 2000 packets } counter name "dropped" drop
+    meta l4proto udp th dport { %(p)s } update @udp6 { ip6 saddr limit rate over 1000/second burst 2000 packets } counter name "dropped" drop
+  }
+}
+""" % {"t": FLOOD_TABLE, "p": pl}
+    r = run(["nft", "-f", "-"], input=rules)
+    if r.returncode != 0:
+        return {"ok": False, "msg": "Couldn't turn on flood protection: " + (r.stderr.strip()[-200:] or "nft failed")}
+    return {"ok": True, "msg": "Flood protection is on for port%s %s" % ("s" if len(ports) > 1 else "", pl)}
+
+
+def flood_status():
+    if not shutil.which("nft"):
+        return {"ok": True, "active": False, "dropped": 0}
+    r = run(["nft", "list", "counter", "inet", FLOOD_TABLE, "dropped"])
+    m = re.search(r"packets (\d+)", r.stdout)
+    return {"ok": True, "active": r.returncode == 0 and bool(m), "dropped": int(m.group(1)) if m else 0}
+
+
 def handle(req):
     a = req.get("action")
+    if a == "flood-protect":
+        return flood_protect(req.get("state"), req.get("ports") or [])
+    if a == "flood-status":
+        return flood_status()
     if a in ("start", "stop", "restart"):
         return systemctl(a, unit_for(req.get("server")))
     if a == "create-server":
