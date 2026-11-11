@@ -15,7 +15,7 @@
 # =============================================================================
 set -euo pipefail
 
-EASY_VERSION="1.3.0"
+EASY_VERSION="1.4.0"
 INSTALL_DIR="/opt/beammp-server"
 SERVICE_USER="beammp"
 DASH_USER="beammp-dash"
@@ -925,6 +925,18 @@ EOF
   fetch_file "dashboard/EasyServerStats/main.lua" "$INSTALL_DIR/Resources/Server/EasyServerStats/main.lua"
   chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR/Resources/Server/EasyServerStats"
   chmod 2775 "$INSTALL_DIR/Resources/Server/EasyServerStats"
+  # extra servers made in the dashboard get the same plugin. Written as the game
+  # server user from a private copy, so a planted link can't make root read or
+  # write anything else.
+  local luatmp sd; luatmp=$(mktemp)
+  fetch_file "dashboard/EasyServerStats/main.lua" "$luatmp"
+  for sd in "$INSTALL_DIR"/servers/*/; do
+    [[ -d "$sd" && ! -L "${sd%/}" ]] || continue
+    setpriv --reuid="$SERVICE_USER" --regid="$SERVICE_USER" --init-groups -- \
+      sh -c 'mkdir -p "$1" && cat > "$1/main.lua.tmp" && mv -f "$1/main.lua.tmp" "$1/main.lua"' _ \
+      "${sd}Resources/Server/EasyServerStats" < "$luatmp" || warn "Couldn't update the plugin in $sd"
+  done
+  rm -f "$luatmp"
 
   local conf="$SECRETS_KEY_DIR/modmanager.conf"
   [[ -f "$conf" ]] || printf 'port = %s\nuser = admin\n' "$MODS_PORT" >"$conf"
