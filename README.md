@@ -15,7 +15,7 @@ Open `http://<server-ip>:30815` from any PC or phone at home, or use the **BeamM
 | Page | What you can do |
 |---|---|
 | **Overview** | Server status, who's online, uptime, start / stop / restart |
-| **Config** | Edit every server setting in a simple form, or as text, **without touching files**. Every change is checked first (wrong types, bad ports, unknown maps, duplicate lines…) and you get plain-English errors with line numbers |
+| **Config** | Edit every server setting (max players, cars per player, map, port, private…) in a simple form, or as text, **without touching files**. Every change is checked first (wrong types, bad ports, unknown maps, duplicate lines…) and you get plain-English errors with line numbers. Also **Who can join**: an allow-list that makes the server invite-only |
 | **Mods** | Drag & drop mods, turn them on/off, pick map mods, see the virus check result for each |
 | **Players** | Player analytics: players per day, busiest hours, a week heatmap, top players, sessions, peak and usage |
 | **Network** | Port checker: is the server listening, reachable at home, reachable from the internet, listed in the BeamMP server list? Tells you what to fix |
@@ -24,7 +24,11 @@ Open `http://<server-ip>:30815` from any PC or phone at home, or use the **BeamM
 | **Notifications** | Crashes, unexpected stops, updates, blocked mods, failed logins, player joins. Shown in the dashboard and optionally sent to **Discord** and/or **email** |
 | **Settings** | Notifications, password, **two-step login**, **access from the internet (HTTPS)**, **backup / import / export** |
 
-Also: **dark / light mode** (follows your system, or switch with the moon icon), and it works on phones.
+Also: **dark / light mode** (follows your system, or switch with the moon icon), and it works on phones. Before anything changes your network (server port, internet access, HTTPS) the dashboard shows exactly what will change and asks first; the firewall on the server is updated for you, your router never is.
+
+### Invite-only servers (allow-list)
+
+BeamMP has no join password, so EasyServer adds a guest list instead: **Config → Who can join**. Turn it on, type the BeamMP usernames of your friends (one per line, not case-sensitive) and press **Save list**. Everyone else, and all guests, get an "invite-only" message when they try to join. It works immediately, without a restart. Refused players show up under **Recently refused** with a one-click **+ allow**, and you can get a notification when it happens.
 
 ### Access from the internet (optional, off by default)
 
