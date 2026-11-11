@@ -265,13 +265,15 @@ function Write-EsResult([string]$Name, $r) {
 }
 
 # Scan every mod in the mods folder; move blocked ones to Resources\Quarantine
-function Invoke-EsSweep([string]$Dir) {
+function Invoke-EsSweep([string]$Dir, [string]$Base = '') {
+    # $Dir = the server folder, $Base = the install folder with the keys and scan cache
+    if (-not $Base) { $Base = $Dir }
     $client = Join-Path $Dir 'Resources\Client'
     $quar = Join-Path $Dir 'Resources\Quarantine'
     $blocked = 0
     if (-not (Test-Path $client)) { return 0 }
     foreach ($f in (Get-ChildItem -LiteralPath $client -Filter *.zip -File)) {
-        $r = Invoke-EsModScan $f.FullName $Dir
+        $r = Invoke-EsModScan $f.FullName $Base
         if ($r.Verdict -eq 'blocked') {
             New-Item -ItemType Directory -Force -Path $quar | Out-Null
             $dest = Join-Path $quar $f.Name

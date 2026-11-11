@@ -6,22 +6,35 @@
 #   3. starts the server with a temporary config in your private folder and
 #      wipes the key from it again as soon as the server has read it
 # =============================================================================
-param([switch]$Auto)   # -Auto: started by the dashboard, close the window when the server stops
+# -Auto:   started by the dashboard, close the window when the server stops
+# -Server: which server to start: "main" (default) or the id of an extra server
+#          made in the dashboard (it lives in servers\<id>)
+param([switch]$Auto, [string]$Server = 'main')
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'easyserver-common.ps1')
-$Dir = Split-Path $PSScriptRoot -Parent
-$Exe = Join-Path $Dir 'BeamMP-Server.exe'
+$Base = Split-Path $PSScriptRoot -Parent
+if ($Server -notmatch '^[a-z0-9]{1,12}$') { Write-Host "Unknown server '$Server'" -ForegroundColor Red; Start-Sleep 4; exit 1 }
+if ($Server -eq 'main') {
+    $Dir = $Base; $KeyName = 'BEAMMP_AUTH_KEY'; $RunName = 'ServerConfig.run.toml'
+} else {
+    $Dir = Join-Path $Base "servers\$Server"; $KeyName = 'BEAMMP_AUTH_KEY_' + $Server.ToUpper(); $RunName = "ServerConfig.run.$Server.toml"
+}
+$Exe = Join-Path $Base 'BeamMP-Server.exe'
 $Cfg = Join-Path $Dir 'ServerConfig.toml'
-$Host.UI.RawUI.WindowTitle = 'BeamMP Server'
+$Host.UI.RawUI.WindowTitle = "BeamMP Server ($Server)"
 
-if (-not (Test-Path $Exe)) { Write-Host "BeamMP-Server.exe not found in $Dir" -ForegroundColor Red; Read-Host 'Press Enter'; exit 1 }
-if (Get-Process -Name 'BeamMP-Server' -ErrorAction SilentlyContinue) {
-    Write-Host 'The BeamMP server is already running.' -ForegroundColor Yellow; Start-Sleep 4; exit
+if (-not (Test-Path $Exe)) { Write-Host "BeamMP-Server.exe not found in $Base" -ForegroundColor Red; Read-Host 'Press Enter'; exit 1 }
+if (-not (Test-Path $Cfg)) { Write-Host "No server in $Dir" -ForegroundColor Red; Start-Sleep 4; exit 1 }
+# already running? (each server runs with its own temporary config file, see below)
+$running = Get-CimInstance Win32_Process -Filter "Name='BeamMP-Server.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -and $_.CommandLine.Contains($RunName) }
+if ($running) {
+    Write-Host 'This BeamMP server is already running.' -ForegroundColor Yellow; Start-Sleep 4; exit
 }
 
 Write-Host 'Checking mods for viruses...' -ForegroundColor Cyan
 try {
-    $n = Invoke-EsSweep $Dir
+    $n = Invoke-EsSweep $Dir $Base
     if ($n -gt 0) { Write-Host "  $n mod(s) were blocked and moved to quarantine." -ForegroundColor Red }
     else { Write-Host '  All mods OK.' -ForegroundColor Green }
 } catch { Write-Host "  Mod check failed: $($_.Exception.Message)" -ForegroundColor Yellow }
@@ -29,9 +42,9 @@ try {
 # Temporary config with the key, in your private AppData folder
 $runDir = Join-Path $env:LOCALAPPDATA 'BeamMP-EasyServer'
 New-Item -ItemType Directory -Force -Path $runDir | Out-Null
-$runCfg = Join-Path $runDir 'ServerConfig.run.toml'
+$runCfg = Join-Path $runDir $RunName
 $txt = [IO.File]::ReadAllText($Cfg)
-$key = Get-EsSecret $Dir 'BEAMMP_AUTH_KEY'
+$key = Get-EsSecret $Base $KeyName
 if ($null -eq $key) {
     Write-Host 'Could not unlock your saved AuthKey (it was saved by a different Windows account).' -ForegroundColor Yellow
     Write-Host 'Run Install-BeamMP-Server.bat again from this account and re-enter the key.' -ForegroundColor Yellow
