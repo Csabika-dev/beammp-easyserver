@@ -88,7 +88,11 @@ DEFAULT_SETTINGS = {
     "smtp_user": "", "smtp_from": "", "smtp_to": "",
     "auto_restart": True,
     "update_check": True,
+    "security_alerts": True,       # attacks: alert on every channel that is set up
+    "security_reminders": True,    # ...and repeat every 15 minutes until "Stop alerts" is clicked
 }
+SECURITY_FILE = os.path.join(DATA_DIR, "security.json")
+SECURITY_REPEAT = 15 * 60
 
 LOCK = threading.RLock()
 
@@ -933,7 +937,9 @@ def validate_config(text, dashboard_port, has_authkey):
 
 # ----------------------------------------------------------------------------- mods
 def safe_zip_name(name):
-    name = os.path.basename(urllib.parse.unquote(name or "")).strip()
+    if not isinstance(name, str):
+        return None
+    name = os.path.basename(urllib.parse.unquote(name)).strip()
     name = re.sub(r"[^A-Za-z0-9._\- ()\[\]+]", "_", name)
     if not name.lower().endswith(".zip") or name.startswith(".") or len(name) > 180:
         return None
@@ -984,6 +990,120 @@ def list_quarantine():
 
 
 # ----------------------------------------------------------------------------- notifications
+class SecurityAlerts:
+    """Possible attacks. Each kind of attack is one alert: it is sent at once
+    to every channel that is set up (dashboard, Discord, email) and repeated
+    every 15 minutes until someone clicks "Stop alerts" in the dashboard (or
+    opens the link in the message). Both can be turned off in Settings."""
+
+    def __init__(self, settings, notifier):
+        self.s, self.n = settings, notifier
+        items = read_json(SECURITY_FILE, [])
+        self.items = [a for a in items if isinstance(a, dict) and a.get("id")] if isinstance(items, list) else []
+        self.counters = {}
+
+    def _save(self):
+        try:
+            write_json(SECURITY_FILE, self.items[:100])
+        except OSError:
+            pass
+
+    def active(self):
+        with LOCK:
+            return [dict(a) for a in self.items if not a.get("acked")]
+
+    def seen(self, key, limit, window, title, message):
+        """Count an event; raise the alert once it happened `limit` times within `window` seconds."""
+        t = now()
+        with LOCK:
+            c = [x for x in self.counters.get(key, []) if x > t - window] + [t]
+            self.counters[key] = c[-200:]
+            if len(self.counters) > 500:
+                self.counters = {k: v for k, v in self.counters.items() if v and v[-1] > t - 3600}
+        if len(c) >= limit:
+            self.raise_(key, title, message)
+
+    def raise_(self, key, title, message, sig=None):
+        """sig: for problems that stay until fixed (like a planted link) - once
+        you stopped the alert it stays quiet until something new is found."""
+        t = now()
+        with LOCK:
+            if sig is not None and any(a["key"] == key and a.get("acked") and a.get("sig") == sig for a in self.items):
+                return None
+            cur = next((a for a in self.items if a["key"] == key and not a.get("acked")), None)
+            if cur:                      # still open: just count it, the reminder reports it
+                cur["count"] += 1
+                cur["last"] = t
+                cur["message"] = message
+                self._save()
+                return cur
+            a = {"id": uuid.uuid4().hex[:16], "key": key, "title": title, "message": message,
+                 "first": t, "last": t, "count": 1, "acked": False, "sent": 0,
+                 "next": t + SECURITY_REPEAT, "server": I().id, "sig": sig}
+            self.items.insert(0, a)
+            del self.items[100:]
+            self._save()
+        self._send(a, first=True)
+        return a
+
+    def _send(self, a, first):
+        on = bool(self.s.get("security_alerts"))
+        link = dashboard_url(a.get("server")) + "#ack=" + a["id"]
+        if first:
+            title = "⚠️ Security alert: " + a["title"]
+            msg = a["message"]
+        else:
+            title = "⚠️ Reminder: " + a["title"]
+            msg = "%s\n\nHappened %d time%s, last at %s." % (a["message"], a["count"], "" if a["count"] == 1 else "s",
+                                                         time.strftime("%H:%M", time.localtime(a["last"])))
+        if on and self.s.get("security_reminders"):
+            msg += "\n\nYou'll get this every 15 minutes until you click \"Stop alerts\" in the dashboard: " + link
+        else:
+            msg += "\n\nDashboard: " + link
+        prev = getattr(_TL, "inst", None)
+        use_server(a.get("server") or "main")
+        try:
+            self.n.add("security", title, msg, "error", send=on, everywhere=True)
+        finally:
+            _TL.inst = prev
+        with LOCK:
+            a["sent"] = a.get("sent", 0) + 1
+
+    def tick(self):
+        """Called by the monitor: sends the 15-minute reminders."""
+        if not (self.s.get("security_alerts") and self.s.get("security_reminders")):
+            return
+        t = now()
+        with LOCK:
+            due = [a for a in self.items if not a.get("acked") and a.get("next", 0) <= t]
+            for a in due:
+                a["next"] = t + SECURITY_REPEAT
+            if due:
+                self._save()
+        for a in due:
+            self._send(a, first=False)
+
+    def ack(self, aid=None):
+        with LOCK:
+            n = 0
+            for a in self.items:
+                if not a.get("acked") and (aid is None or a["id"] == aid):
+                    a["acked"] = True
+                    a["acked_at"] = now()
+                    n += 1
+            self._save()
+        return n
+
+
+def dashboard_url(server_id=None):
+    if not APP:
+        return ""
+    st = APP.settings
+    proto = "https" if st.get("https") else "http"
+    host = (public_ip() if st.get("remote_enabled") else None) or lan_ip()
+    return "%s://%s:%s/%s" % (proto, host, st.get("port"), ("?srv=%s" % server_id) if server_id and server_id != "main" else "")
+
+
 class Notifier:
     COLORS = {"error": 0xE5484D, "warning": 0xF5A524, "info": 0x3B82F6, "success": 0x30A46C}
 
@@ -991,7 +1111,7 @@ class Notifier:
         self.s, self.sec = settings, secrets_
         self.items = read_json(NOTIF_FILE, [])
 
-    def add(self, kind, title, message, level="info", send=True):
+    def add(self, kind, title, message, level="info", send=True, everywhere=False):
         inst = I()
         with LOCK:
             many = len(INSTANCES) > 1
@@ -1003,8 +1123,8 @@ class Notifier:
             self.items.insert(0, item)
             del self.items[300:]
             self._save()
-        if send and self.s.get("notify").get(kind, False):
-            threading.Thread(target=self._deliver, args=(item,), daemon=True).start()
+        if send and (everywhere or self.s.get("notify").get(kind, False)):
+            threading.Thread(target=self._deliver, args=(item, everywhere), daemon=True).start()
         return item
 
     def _save(self):
@@ -1013,15 +1133,17 @@ class Notifier:
         except OSError:
             pass
 
-    def _deliver(self, item):
+    def _deliver(self, item, everywhere=False):
+        """everywhere=True (security alerts): every channel that is set up, even
+        if its "send to ..." switch is off."""
         notes = []
-        if self.s.get("discord_enabled") and self.sec.has("DISCORD_WEBHOOK"):
+        if (self.s.get("discord_enabled") or everywhere) and self.sec.has("DISCORD_WEBHOOK"):
             try:
                 self.send_discord(item["title"], item["message"], item["level"], footer=item.get("server_name"))
                 notes.append("Discord")
             except Exception as e:
                 notes.append("Discord failed: %s" % short_err(e))
-        if self.s.get("email_enabled") and self.s.get("smtp_host"):
+        if (self.s.get("email_enabled") or everywhere) and self.s.get("smtp_host") and self.s.get("smtp_to"):
             try:
                 self.send_email(item["title"], item["message"])
                 notes.append("email")
@@ -1629,6 +1751,7 @@ class App:
         if self.secrets.has("VT_API_KEY"):
             os.environ["VT_API_KEY"] = self.secrets.get("VT_API_KEY")   # used by modscan
         self.notifier = Notifier(self.settings, self.secrets)
+        self.alerts = SecurityAlerts(self.settings, self.notifier)
         self.sessions = {}
         self.fails = {}
         self.locked = {}
@@ -1745,6 +1868,10 @@ class App:
                     sys.stderr.write("monitor %s: %s\n" % (inst.id, short_err(e)))
             use_server("main")
             try:
+                self.alerts.tick()
+            except Exception as e:
+                sys.stderr.write("security alerts: %s\n" % short_err(e))
+            try:
                 if self.settings.get("update_check") and now() >= next_update:
                     next_update = now() + 6 * 3600
                     self.check_updates(notify=True)
@@ -1760,7 +1887,37 @@ class App:
         return {"inst": inst, "last": st, "restarts": st.get("restarts", 0), "seen_q": set(n["name"] for n in list_quarantine()),
                 "ev_pos": ev_pos, "last_t": now(), "pending_map": None}
 
+    def _check_tampering(self, inst, S):
+        """Links where the server's own files should be are a sign that the game
+        server (or a Lua plugin) was hacked and is trying to reach other files."""
+        if S.get("tamper_t", 0) > now() - 60:
+            return
+        S["tamper_t"] = now()
+        paths = [inst.CONFIG, inst.ALLOW_FILE, inst.VOTE_FILE, os.path.join(inst.STATS_DIR, "events.log"),
+                 os.path.join(inst.STATS_DIR, "online.json"), inst.STATS_DIR, inst.CLIENT_DIR, inst.DISABLED_DIR]
+        for folder in (inst.CLIENT_DIR, inst.DISABLED_DIR):
+            try:
+                paths += [os.path.join(folder, n) for n in os.listdir(folder)[:2000]]
+            except OSError:
+                pass
+        found = []
+        for p in paths:
+            try:
+                if os.path.islink(p):
+                    found.append("%s -> %s" % (p, os.readlink(p)[:120]))
+                elif p == inst.CONFIG and not stat.S_ISREG(os.lstat(p).st_mode):
+                    found.append(p + " is not a normal file")
+            except OSError:
+                continue
+        if found:
+            self.alerts.raise_("tamper:" + inst.id, "Files of the game server were tampered with",
+                               "Links to other files were found where %s keeps its own files:\n%s\n"
+                               "The dashboard ignores them, but this usually means the game server or a Lua "
+                               "plugin was hacked. Remove unknown plugins from Resources/Server, delete the links "
+                               "and check the mods." % (inst.name, "\n".join(found[:10])), sig="\n".join(sorted(found)))
+
     def _monitor_one(self, inst, S):
+        self._check_tampering(inst, S)
         srv = inst.server
         st = srv.status()
         last = S["last"]
@@ -1796,8 +1953,9 @@ class App:
         q = list_quarantine()
         for item in q:
             if item["name"] not in S["seen_q"]:
-                self.notifier.add("mod_blocked", "Mod blocked: %s" % item["name"],
-                                  item["why"] or "It failed the virus check.", "warning")
+                self.alerts.raise_("mod:%s:%s" % (inst.id, item["name"]), "A mod failed the virus check: %s" % item["name"],
+                                   (item["why"] or "It failed the virus check.") +
+                                   "\nIt was moved to quarantine, so players can't download it.")
         S["seen_q"] = set(i["name"] for i in q)
         # events from the EasyServerStats plugin
         path = os.path.join(inst.STATS_DIR, "events.log")
@@ -1930,12 +2088,18 @@ class App:
             if not ip_is_lan(ip):
                 self.global_fails = [x for x in self.global_fails if x > t - 600]
                 if len(self.global_fails) >= 30:
+                    self.alerts.raise_("login-internet", "Password guessing from the internet",
+                                       "More than 30 wrong logins from the internet in 10 minutes - logins from the "
+                                       "internet are paused. Consider turning internet access off in Settings.")
                     return True
             else:
                 # many addresses on the network guessing together (or one device
                 # changing its address) - pause logins from the network for a while
                 self.lan_fails = [x for x in getattr(self, "lan_fails", []) if x > t - 600]
                 if len(self.lan_fails) >= 60:
+                    self.alerts.raise_("login-lan", "Password guessing on your network",
+                                       "More than 60 wrong logins from devices on your network in 10 minutes - "
+                                       "logins are paused for a while. A device on your Wi-Fi may be compromised.")
                     return True
         return False
 
@@ -1959,8 +2123,10 @@ class App:
             else:
                 lock = False
         if lock:
-            self.notifier.add("login_failed", "Dashboard login blocked",
-                              "5 wrong passwords from %s - that address is blocked for 15 minutes." % ip, "warning")
+            where = "from the internet" if not ip_is_lan(ip) else "from your own network"
+            self.alerts.raise_("login", "Someone is guessing your dashboard password",
+                               "5 wrong passwords in a row %s (address %s). That address is blocked for 15 minutes. "
+                               "If this wasn't you, use a long password and turn on two-step login." % (where, ip))
 
     def verify_totp(self, code):
         secret = self.secrets.get("TOTP_SECRET")
@@ -2116,6 +2282,10 @@ class Handler(BaseHTTPRequestHandler):
         # access is set up, because then you use your own domain).
         host = host_name(self.headers.get("Host"))
         if not host or not (host_is_local_name(host) or app.settings.get("remote_enabled")):
+            app.alerts.seen("rebind", 3, 600, "A website tried to reach your dashboard",
+                            "Requests for the dashboard arrived under a foreign web address (%s) from %s. This is how "
+                            "malicious websites try to reach devices on your home network (\"DNS rebinding\"). "
+                            "They were blocked." % (re.sub(r"[^\w.:\-\[\]]", "?", host)[:80] or "none", self.ip))
             self.send(421, "Open the dashboard by its address (for example http://192.168.1.20:30815).", "text/plain")
             return False
         if not app.secrets.has("MODS_PASSWORD") and not ip_is_loopback(self.ip):
@@ -2186,6 +2356,10 @@ class Handler(BaseHTTPRequestHandler):
             fn(q)
         except ValueError as e:
             self.fail(400, str(e))
+        except (TypeError, AttributeError, KeyError):
+            # a field had the wrong type (a list where text belongs ...): the
+            # request is broken, not the dashboard
+            self.fail(400, "Bad request")
         except RuntimeError as e:
             self.fail(500, str(e))
         except (BrokenPipeError, ConnectionResetError, ssl.SSLError):
@@ -2500,7 +2674,8 @@ class Handler(BaseHTTPRequestHandler):
         b = self.body_json()
         avail = set(BUILTIN_MAPS) | set(enabled_mod_maps())
         maps = []
-        for m in b.get("maps", []):
+        raw = b.get("maps")
+        for m in (raw if isinstance(raw, list) else [])[:100]:
             m = str(m).strip()
             if m in avail and m not in maps:
                 maps.append(m)
@@ -2640,7 +2815,8 @@ class Handler(BaseHTTPRequestHandler):
         result = modscan.scan(tmp)
         if result["verdict"] == "blocked":
             os.remove(tmp)
-            APP.notifier.add("mod_blocked", "Mod blocked: %s" % name, "\n".join(result["reasons"]), "warning")
+            APP.alerts.raise_("mod:%s:%s" % (I().id, name), "A mod failed the virus check: %s" % name,
+                              "\n".join(result["reasons"]) + "\nThe upload was refused.")
             return self.send(422, {"ok": False, "blocked": True, "reasons": result["reasons"]})
         try:
             os.remove(os.path.join(I().DISABLED_DIR, name))
@@ -2758,6 +2934,22 @@ class Handler(BaseHTTPRequestHandler):
                 n["read"] = True
             APP.notifier._save()
         self.send(200, {"ok": True})
+
+    # ---------- security alerts
+    def get_security(self, q):
+        self.send(200, {"active": APP.alerts.active(), "enabled": bool(APP.settings.get("security_alerts")),
+                        "reminders": bool(APP.settings.get("security_reminders"))})
+
+    def post_security_ack(self, q):
+        b = self.body_json(4096)
+        aid = b.get("id")
+        if aid is None or aid == "all":
+            n = APP.alerts.ack(None)
+        elif isinstance(aid, str) and re.fullmatch(r"[a-f0-9]{16}", aid):
+            n = APP.alerts.ack(aid)
+        else:
+            n = 0
+        self.send(200, {"ok": True, "stopped": n})
 
     def post_notifications_clear(self, q):
         with LOCK:
@@ -2918,13 +3110,24 @@ class Handler(BaseHTTPRequestHandler):
             with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
                 z.writestr("ServerConfig.toml", text)
                 z.writestr("easyserver-export.json", json.dumps(meta, indent=1))
-                if os.path.exists(I().ALLOW_FILE):
-                    z.write(I().ALLOW_FILE, "allowlist.txt")
+                # files from the server's folders are opened without following
+                # links, so a hacked game server can't slip the dashboard's own
+                # files (like its HTTPS key) into your backup
+                try:
+                    with open_shared(I().ALLOW_FILE) as f:
+                        z.writestr("allowlist.txt", f.read(256 * 1024))
+                except OSError:
+                    pass
                 if include_mods:
                     for m in mods:
                         src = os.path.join(I().CLIENT_DIR if m["enabled"] else I().DISABLED_DIR, m["name"])
-                        z.write(src, ("mods/" if m["enabled"] else "mods-disabled/") + m["name"],
-                                compress_type=zipfile.ZIP_STORED)
+                        try:
+                            with open_shared(src, "rb") as f, z.open(
+                                    zipfile.ZipInfo(("mods/" if m["enabled"] else "mods-disabled/") + m["name"],
+                                                    time.localtime()[:6]), "w", force_zip64=True) as dst:
+                                shutil.copyfileobj(f, dst)
+                        except OSError:
+                            continue
             size = os.path.getsize(tmp)
             fname = "beammp-server-%s.zip" % time.strftime("%Y%m%d-%H%M")
             self.send_response(200)
@@ -3005,6 +3208,10 @@ class Handler(BaseHTTPRequestHandler):
                                 (zi.file_size > 50 * 1024 ** 2 and zi.file_size > 200 * max(zi.compress_size, 1)) or
                                 shutil.disk_usage(UPLOAD_TMP).free < zi.file_size + 1024 ** 3):
                             report["skipped"].append(n[:120] + " (too large)")
+                            if zi.file_size > 200 * max(zi.compress_size, 1):
+                                app.alerts.raise_("import-bomb", "An imported backup contained a zip bomb",
+                                                  "%s unpacks to %d MB from %d KB. It was skipped. Only import backups "
+                                                  "you made yourself." % (n[:80], zi.file_size // 2 ** 20, zi.compress_size // 1024))
                             continue
                         tdir = tempfile.mkdtemp(dir=UPLOAD_TMP, prefix=".imp-")
                         try:
@@ -3047,7 +3254,7 @@ def clean_settings(b):
         cur = APP.settings.get("notify")
         cur.update({k: bool(v) for k, v in b["notify"].items() if k in DEFAULT_SETTINGS["notify"]})
         upd["notify"] = cur
-    for k in ("discord_enabled", "email_enabled", "auto_restart", "update_check"):
+    for k in ("discord_enabled", "email_enabled", "auto_restart", "update_check", "security_alerts", "security_reminders"):
         if k in b:
             upd[k] = bool(b[k])
     for k in ("smtp_host", "smtp_user", "smtp_from", "smtp_to"):
@@ -3140,6 +3347,10 @@ class Server(ThreadingHTTPServer):
                 self.conns[ip] = self.conns.get(ip, 0) + 1
         if busy:            # too many open connections: drop instead of piling up threads
             self.shutdown_request(request)
+            if APP:
+                APP.alerts.seen("flood", 20, 60, "The dashboard is being flooded with connections",
+                                "Hundreds of connections at once (last from %s). Extra ones are being dropped so the "
+                                "dashboard keeps working. If it keeps happening, turn internet access off." % client_address[0])
             return
         super().process_request(request, client_address)
 
