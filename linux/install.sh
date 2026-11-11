@@ -15,7 +15,7 @@
 # =============================================================================
 set -euo pipefail
 
-EASY_VERSION="1.2.3"
+EASY_VERSION="1.3.0"
 INSTALL_DIR="/opt/beammp-server"
 SERVICE_USER="beammp"
 DASH_USER="beammp-dash"
@@ -740,6 +740,7 @@ PYEOF
            done
            rm -rf /etc/beammp-easyserver/limits /etc/systemd/system.control/beammp-server*.service.d
            python3 /usr/local/lib/beammp-easyserver/control.py --shape >/dev/null 2>&1 || true   # removes the upload limits
+           nft delete table inet beammp_easyserver 2>/dev/null || true                           # flood protection rules
            rm -f "/etc/systemd/system/$SVC.service" /etc/systemd/system/beammp-mods.service \
                  /etc/systemd/system/beammp-dashboard.service /etc/systemd/system/beammp-control.service \
                  /etc/systemd/system/beammp-control.path \
