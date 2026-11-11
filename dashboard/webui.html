@@ -934,8 +934,11 @@ VIEWS.settings = async m => {
   const on = $("#tfaon");
   if (on) on.onclick = async () => {
     const r = await api("/api/2fa/begin", { method: "POST" });
-    $("#twofa").innerHTML = `<ol class="small"><li>Open your authenticator app and add an account with <b>"Enter a setup key"</b>.</li><li>Account name: <b>BeamMP</b>, key:</li></ol>
-      <div class="secret">${esc(r.secret)}</div><p class="small muted">On a phone you can also <a href="${esc(r.uri)}">tap here</a> to add it directly.</p>
+    const n = Number(r.qr_size) || 0, qp = /^[MhvzZ0-9 -]*$/.test(r.qr_path || "") ? r.qr_path : "";
+    const qr = n && qp ? `<div style="background:#fff;padding:12px;border-radius:8px;display:inline-block;margin:6px 0"><svg width="220" height="220" viewBox="-4 -4 ${n + 8} ${n + 8}" shape-rendering="crispEdges" role="img" aria-label="QR code for the two-step login key"><rect x="-4" y="-4" width="${n + 8}" height="${n + 8}" fill="#fff"/><path d="${qp}" fill="#000"/></svg></div>` : "";
+    $("#twofa").innerHTML = `<p class="small">Scan this with your authenticator app (Google Authenticator, Microsoft Authenticator, Aegis...):</p>${qr}
+      <p class="small muted">Can't scan? In the app choose <b>"Enter a setup key"</b>, account name <b>BeamMP</b>, and type this key:</p>
+      <div class="secret">${esc(r.secret)}</div><p class="small muted">On a phone you can also <a href="${esc(r.uri)}">tap here</a> to add it directly. Clicking "Set up" again makes a new key - only the one shown here works.</p>
       <label class="f"><span>Enter the 6-digit code the app shows</span><input type="text" id="tfacode" inputmode="numeric" maxlength="7" style="max-width:180px"></label><button class="btn primary" id="tfaok">Turn on</button>`;
     $("#tfaok").onclick = async () => { try { await api("/api/2fa/confirm", { json: { code: $("#tfacode").value } }); toast("Two-step login is on"); show("settings"); } catch (e) { toast(e.message); } };
   };
