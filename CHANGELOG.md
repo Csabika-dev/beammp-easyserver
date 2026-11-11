@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.1 - Windows fixes
+
+- Windows: the installer now checks that the dashboard really started. If it didn't, it says so and shows the reason.
+- Windows: the dashboard writes its messages and errors to `EasyServer\data\dashboard.log` (before, a crash at startup left no trace).
+- Windows: the installer finds your public IP address more reliably (it tries three services).
+
 ## 1.2.0 - Security release
 
 **Everyone should update.** Run the installer again (Linux: `sudo beammp update` updates only the BeamMP server, so run the install command again; Windows: run `Install-BeamMP-Server.bat` again). Your settings, mods and keys are kept.
