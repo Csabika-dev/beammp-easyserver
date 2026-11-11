@@ -52,6 +52,10 @@ h1{font-size:22px;margin:0 0 4px;letter-spacing:-.015em}
 h2{font-size:15px;margin:0 0 12px;letter-spacing:-.005em}
 .sub{color:var(--text-2);margin:0 0 22px}
 .grid{display:grid;gap:16px}
+.srvpick{display:flex;flex-direction:column;gap:4px;margin:0 0 12px;padding:0 4px}.srvpick select{width:100%}
+.mobilebar .srvpick{margin:0;padding:0 4px;flex-direction:row;align-items:center;flex:0 0 auto}.mobilebar .srvpick span{display:none}.mobilebar .srvpick select{width:auto;min-width:130px;max-width:170px;padding:6px 8px}
+.lim{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:10px}
+@media (max-width:520px){.lim{grid-template-columns:1fr}}
 .g2{grid-template-columns:repeat(2,minmax(0,1fr))}.g3{grid-template-columns:repeat(3,minmax(0,1fr))}.g4{grid-template-columns:repeat(4,minmax(0,1fr))}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:18px;box-shadow:var(--shadow);min-width:0}
 .card.tight{padding:0;overflow:hidden}
@@ -177,8 +181,10 @@ const store = { get(k, d) { try { return localStorage.getItem(k) ?? d; } catch (
 let CSRF = null, SESSION = null, TAB = "overview", TIMER = null;
 
 function toast(msg, ms = 3500) { const t = $("#toast"); t.textContent = msg; t.classList.remove("hidden"); clearTimeout(t._t); t._t = setTimeout(() => t.classList.add("hidden"), ms); }
+let SERVER = new URLSearchParams(location.search).get("srv") || store.get("es-server", "main"), SERVERS = [];
 async function api(path, opts = {}) {
   const o = Object.assign({ headers: {} }, opts);
+  o.headers = Object.assign({}, o.headers); if (!o.headers["X-ES-Server"]) o.headers["X-ES-Server"] = SERVER;
   if (o.json !== undefined) { o.method = o.method || "POST"; o.body = JSON.stringify(o.json); o.headers["Content-Type"] = "application/json"; }
   if (o.method && o.method !== "GET" && CSRF) o.headers["X-ES-CSRF"] = CSRF;
   const r = await fetch(path, o);
@@ -213,12 +219,13 @@ const I = {
   logs: '<path d="M14 2H6a2 2 0 0 0-2 2v16c0 1.1.9 2 2 2h12a2 2 0 0 0 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/>',
   notifications: '<path d="M12 22a2 2 0 0 0 2-2h-4a2 2 0 0 0 2 2zm6-6v-5c0-3.1-1.6-5.6-4.5-6.3V4a1.5 1.5 0 0 0-3 0v.7C7.6 5.4 6 7.9 6 11v5l-2 2v1h16v-1l-2-2z"/>',
   settings: '<path d="M12 1 3 5v6c0 5.6 3.8 10.7 9 12 5.2-1.3 9-6.4 9-12V5l-9-4zm0 10.9h7c-.5 4.1-3.3 7.8-7 8.9V12H5V6.3l7-3.1v8.7z"/>',
+  servers: '<path d="M4 3h16a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm0 8h16a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1zm2-6v2h2V5H6zm0 8v2h2v-2H6zM4 19h16v2H4z"/>',
   sun: '<path d="M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10zM2 13h2a1 1 0 0 0 0-2H2a1 1 0 0 0 0 2zm18 0h2a1 1 0 0 0 0-2h-2a1 1 0 0 0 0 2zM11 2v2a1 1 0 0 0 2 0V2a1 1 0 0 0-2 0zm0 18v2a1 1 0 0 0 2 0v-2a1 1 0 0 0-2 0zM5.99 4.58a1 1 0 0 0-1.41 1.41l1.06 1.06a1 1 0 0 0 1.41-1.41L5.99 4.58zm12.37 12.37a1 1 0 0 0-1.41 1.41l1.06 1.06a1 1 0 0 0 1.41-1.41l-1.06-1.06zm1.06-10.96a1 1 0 0 0-1.41-1.41l-1.06 1.06a1 1 0 0 0 1.41 1.41l1.06-1.06zM7.05 18.36a1 1 0 0 0-1.41-1.41l-1.06 1.06a1 1 0 0 0 1.41 1.41l1.06-1.06z"/>',
   moon: '<path d="M12 3a9 9 0 1 0 9 9c0-.5 0-.9-.1-1.4A5.5 5.5 0 0 1 12.4 3.1L12 3z"/>',
   logout: '<path d="M10 17l1.4-1.4-2.6-2.6H20v-2H8.8l2.6-2.6L10 7l-5 5 5 5zM4 5h8V3H4a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/>',
 };
 const icon = n => `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">${I[n]}</svg>`;
-const TABS = [["overview","Overview"],["config","Config"],["mods","Mods"],["players","Players"],["network","Network"],["updates","Updates"],["logs","Logs"],["notifications","Notifications"],["settings","Settings"]];
+const TABS = [["overview","Overview"],["servers","Servers"],["config","Config"],["mods","Mods"],["players","Players"],["network","Network"],["updates","Updates"],["logs","Logs"],["notifications","Notifications"],["settings","Settings"]];
 
 /* ------------------------------------------------------------------ boot / auth */
 async function boot() {
@@ -227,9 +234,33 @@ async function boot() {
   CSRF = SESSION.csrf;
   if (SESSION.needs_setup) return renderSetup();
   if (!SESSION.logged_in) return renderLogin();
+  try { SERVERS = (await api("/api/servers")).servers; } catch (e) { SERVERS = [{ id: "main", name: "Main server" }]; }
+  if (!SERVERS.some(x => x.id === SERVER)) SERVER = "main";
+  store.set("es-server", SERVER);
   renderShell();
   const hash = location.hash.slice(1);
+  if (hash.startsWith("approve=")) return approveFromLink(decodeURIComponent(hash.slice(8)));
   show(TABS.some(t => t[0] === hash) ? hash : "overview");
+}
+
+async function approveFromLink(name) {
+  const srv = SERVERS.find(x => x.id === SERVER) || {};
+  history.replaceState(null, "", location.pathname + "#config");
+  if (name && confirm("Let " + name + " join " + (srv.name || "this server") + "?\n\nThey are added to the allow-list (Config -> Who can join) and can join right away.")) {
+    try {
+      const al = await api("/api/allowlist");
+      if (!al.names.some(n => n.toLowerCase() === name.toLowerCase())) al.names.push(name);
+      await api("/api/allowlist", { json: { enabled: al.enabled, names: al.names } });
+      toast(name + " can join now");
+    } catch (e) { toast(e.message); }
+  }
+  show("config");
+}
+
+function switchServer(id) {
+  SERVER = id; store.set("es-server", id);
+  const u = new URL(location.href); u.searchParams.delete("srv"); history.replaceState(null, "", u.pathname + "#" + TAB);
+  renderShell(); show(TAB === "servers" ? "overview" : TAB);
 }
 
 function authShell(inner) {
@@ -268,12 +299,14 @@ function renderLogin(needCode) {
 
 function renderShell() {
   const navs = TABS.map(([k, label]) => `<button class="nav" data-tab="${k}">${icon(k)}<span>${label}</span>${k === "notifications" ? '<span class="count hidden" data-unread></span>' : ""}</button>`).join("");
+  const picker = SERVERS.length > 1 ? `<label class="srvpick"><span class="small muted">Server</span><select data-srv>${SERVERS.map(x => `<option value="${esc(x.id)}" ${x.id === SERVER ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></label>` : "";
   $("#root").innerHTML = `<div class="app">
     <aside class="side"><div class="brand"><div class="logo">B</div><div>BeamMP EasyServer<small>Dashboard ${esc(SESSION.version)}</small></div></div>
-      ${navs}<div class="grow"></div>
+      ${picker}${navs}<div class="grow"></div>
       <div class="foot"><button class="iconbtn" id="theme" title="Light / dark mode">${icon("moon")}</button><span class="spacer"></span><button class="iconbtn" id="logout" title="Log out">${icon("logout")}</button></div>
     </aside>
-    <div><nav class="mobilebar">${navs}<button class="nav" id="theme2">Theme</button></nav><main id="main"></main></div></div>`;
+    <div><nav class="mobilebar">${picker}${navs}<button class="nav" id="theme2">Theme</button></nav><main id="main"></main></div></div>`;
+  document.querySelectorAll("[data-srv]").forEach(el => el.onchange = () => switchServer(el.value));
   document.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => show(b.dataset.tab));
   const flip = () => { const cur = document.documentElement.dataset.theme; store.set("es-theme", cur === "dark" ? "light" : "dark"); applyTheme(); setThemeIcon(); if (TAB === "players") show("players"); };
   $("#theme").onclick = flip; $("#theme2").onclick = flip; setThemeIcon();
@@ -328,19 +361,115 @@ VIEWS.overview = async m => {
       <div class="card stat"><div class="label">Mods</div><div class="value">${esc(d.mods)}</div><div class="note">${d.quarantined ? esc(d.quarantined) + " blocked" : "All virus-checked"}</div></div>
       <div class="card stat"><div class="label">BeamMP server</div><div class="value">${esc(d.installed_version || "?")}</div><div class="note">${d.update_available ? "Update available" : "Up to date"}</div></div>
     </div>
-    <div class="grid g2" style="margin-top:16px">
+    <div class="grid g3" style="margin-top:16px">
       <div class="card"><h2>Server control</h2><p class="muted small">Start, stop or restart the BeamMP server. A restart disconnects everyone who is playing.</p>
         <div class="row">${s.state === "running" ? `<button class="btn" data-act="restart">Restart</button><button class="btn danger" data-act="stop">Stop</button>` : `<button class="btn primary" data-act="start">Start server</button>`}</div></div>
+      <div class="card"><h2>Map</h2><p class="muted small">Switch the map in one click. The server restarts, so players are disconnected for a moment and reconnect on the new map.</p>
+        <div class="row"><select id="qmap" style="flex:1;min-width:0">${[["Built-in maps", d.maps.builtin], ["Map mods", d.maps.mods]].filter(g => g[1].length).map(([l, xs]) => `<optgroup label="${l}">${xs.map(x => `<option ${x === d.map ? "selected" : ""}>${esc(x)}</option>`).join("")}</optgroup>`).join("")}${d.map && !d.maps.builtin.includes(d.map) && !d.maps.mods.includes(d.map) ? `<option selected>${esc(d.map)}</option>` : ""}</select><button class="btn primary" id="qmapgo">Apply</button></div></div>
       <div class="card"><h2>Who's online</h2>${online.length ? `<div class="row">${online.map(p => `<span class="pill"><span class="dot"></span>${esc(p)}</span>`).join("")}</div>` : `<p class="muted">Nobody is playing right now.</p>`}</div>
     </div>`;
   m.querySelectorAll("[data-act]").forEach(b => b.onclick = () => serverAction(b.dataset.act, b));
   m.querySelectorAll("[data-go]").forEach(b => b.onclick = () => show(b.dataset.go));
+  $("#qmapgo").onclick = async () => {
+    const mp = $("#qmap").value;
+    if (mp === d.map) { toast("That's already the current map"); return; }
+    const running = s.state === "running";
+    if (running && !confirm("Switch to " + mp + "?\n\nThe server restarts now" + (online.length ? " and " + online.length + " player(s) are disconnected for a moment" : "") + ".")) return;
+    $("#qmapgo").disabled = true;
+    try { const r = await api("/api/map", { json: { map: mp } }); toast(r.note, 6000); } catch (e) { toast(e.message); }
+    setTimeout(() => show("overview"), 1500);
+  };
   TIMER = setInterval(async () => { try { const x = await api("/api/overview"); if (x.status.state !== s.state || (x.online || []).length !== online.length || x.unread !== d.unread) show("overview"); } catch (e) {} }, 10000);
+};
+
+/* ---------------- servers */
+VIEWS.servers = async m => {
+  const d = await api("/api/servers");
+  SERVERS = d.servers;
+  const sys = d.system, win = d.platform === "windows";
+  const usedPorts = d.servers.map(x => x.port).filter(Boolean);
+  let nextPort = 30814; while (usedPorts.includes(nextPort) || nextPort === 30815) nextPort += 10;
+  const fmtCpu = c => c == null ? "-" : c < 0.01 ? "0" : c.toFixed(2);
+  const row = x => {
+    const L = x.limits || {}, u = x.usage || {};
+    const lim = [L.cpu_cores ? L.cpu_cores + (L.cpu_cores == 1 ? " core" : " cores") : "", L.ram_mb ? (L.ram_mb >= 1024 ? (L.ram_mb / 1024).toFixed(1) + " GB" : L.ram_mb + " MB") + " RAM" : "", L.upload_kbps ? (L.upload_kbps >= 1000 ? (L.upload_kbps / 1000).toFixed(1) + " Mbit/s" : L.upload_kbps + " kbit/s") + " mods" : ""].filter(Boolean).join(" · ") || "No limits";
+    return `<div class="card" style="margin-top:12px"><div class="row"><div><h2 style="margin:0">${esc(x.name)}${x.id === SERVER ? ' <span class="badge">selected</span>' : ""}</h2>
+        <p class="small muted" style="margin:4px 0 0">Port ${esc(x.port ?? "?")} · ${esc(x.map || "?")} · ${esc(x.online)}/${esc(x.max_players ?? "?")} players${x.has_authkey ? "" : " · no AuthKey"}</p></div>
+        <span class="spacer"></span>${statePill(x.status.state)}</div>
+      <div class="grid g3" style="margin-top:12px">
+        <div class="stat"><div class="label">CPU now</div><div class="value" style="font-size:20px">${fmtCpu(u.cpu_cores)}<span class="muted small"> cores</span></div></div>
+        <div class="stat"><div class="label">RAM now</div><div class="value" style="font-size:20px">${u.mem_mb == null ? "-" : esc(u.mem_mb)}<span class="muted small"> MB</span></div></div>
+        <div class="stat"><div class="label">Limits</div><div class="note" style="margin-top:6px">${esc(lim)}</div></div>
+      </div>
+      <div class="row" style="margin-top:12px;flex-wrap:wrap">
+        ${x.id === SERVER ? "" : `<button class="btn sm primary" data-open="${esc(x.id)}">Manage this server</button>`}
+        ${x.status.state === "running" ? `<button class="btn sm" data-sa="restart" data-id="${esc(x.id)}">Restart</button><button class="btn sm danger" data-sa="stop" data-id="${esc(x.id)}">Stop</button>` : `<button class="btn sm" data-sa="start" data-id="${esc(x.id)}">Start</button>`}
+        <button class="btn sm" data-lim="${esc(x.id)}">Limits…</button>
+        <button class="btn sm" data-ren="${esc(x.id)}">Rename</button>
+        ${x.id === "main" ? "" : `<button class="btn sm danger" data-del="${esc(x.id)}">Delete</button>`}
+      </div>
+      <div class="hidden" id="lim_${esc(x.id)}" style="margin-top:12px;border-top:1px solid var(--line);padding-top:12px">
+        <p class="small muted">0 = no limit. This computer has ${esc(sys.cpu_cores)} CPU cores${sys.ram_mb ? " and " + (sys.ram_mb / 1024).toFixed(1) + " GB RAM" : ""}. ${win ? "On Windows the CPU and RAM limits apply while the dashboard is running; the mod download limit needs a one-time Yes on the server PC." : "Applied right away, and again after every restart."}</p>
+        <div class="lim">
+          <label class="f"><span>CPU (cores)</span><input type="number" step="0.25" min="0" max="${esc(sys.cpu_cores)}" data-lc value="${esc(L.cpu_cores || 0)}"><small>e.g. 1.5 = one and a half cores</small></label>
+          <label class="f"><span>RAM (MB)</span><input type="number" step="256" min="0" data-lr value="${esc(L.ram_mb || 0)}"><small>The server restarts if it uses more</small></label>
+          <label class="f"><span>Mod downloads (kbit/s)</span><input type="number" step="1000" min="0" data-lu value="${esc(L.upload_kbps || 0)}"><small>Upload speed for players downloading mods. 10000 = 10 Mbit/s</small></label>
+        </div>
+        <div class="row"><button class="btn primary sm" data-limsave="${esc(x.id)}">Apply limits</button></div>
+      </div></div>`;
+  };
+  m.innerHTML = `<div class="row"><div><h1>Servers</h1><p class="sub">Run several BeamMP servers on this computer. Each has its own port, mods, config, allow-list and limits. The other pages show the server picked in the Server menu.</p></div></div>
+    ${d.servers.map(row).join("")}
+    <div class="card" style="margin-top:16px"><h2>Add a server</h2>
+      <p class="small muted">The new server starts with your main server's settings and its own empty mods folder. Each server that should be public needs its own AuthKey from <span class="mono">keymaster.beammp.com</span>.</p>
+      <div class="grid g2">
+        <label class="f"><span>Name</span><input id="ns_name" type="text" maxlength="60" placeholder="e.g. Racing server"></label>
+        <label class="f"><span>Port</span><input id="ns_port" type="number" min="1024" max="65535" value="${nextPort}"><small>Forward it (TCP + UDP) on your router for internet play</small></label>
+        <label class="f"><span>Max players</span><input id="ns_max" type="number" min="1" max="100" value="8"></label>
+        <label class="f"><span>Map</span><select id="ns_map">${["gridmap_v2","west_coast_usa","east_coast_usa","utah","italy","jungle_rock_island","industrial","small_island","automation_test_track","hirochi_raceway","johnson_valley","derby","driver_training"].map(x => `<option>${x}</option>`).join("")}</select></label>
+        <label class="f"><span>AuthKey (optional)</span><input id="ns_key" type="password" autocomplete="off" placeholder="Paste a new key for this server"><small>Without one the server is only reachable directly by IP</small></label>
+        <div><label class="toggle"><input type="checkbox" id="ns_private"><span><b>Private</b><small>Hide it from the public list</small></span></label>
+             <label class="toggle"><input type="checkbox" id="ns_start" checked><span><b>Start it now</b><small>And whenever the computer starts</small></span></label></div>
+      </div>
+      <div class="row"><button class="btn primary" id="ns_go">Create server</button></div></div>`;
+  m.querySelectorAll("[data-open]").forEach(b => b.onclick = () => switchServer(b.dataset.open));
+  m.querySelectorAll("[data-sa]").forEach(b => b.onclick = async () => {
+    const x = d.servers.find(y => y.id === b.dataset.id);
+    if (b.dataset.sa !== "start" && !confirm((b.dataset.sa === "stop" ? "Stop " : "Restart ") + x.name + "? Players on it are disconnected.")) return;
+    b.disabled = true;
+    try { await api("/api/server/action", { json: { action: b.dataset.sa }, headers: { "X-ES-Server": x.id } }); toast(b.dataset.sa === "stop" ? x.name + " stopped" : x.name + " starting…"); } catch (e) { toast(e.message); }
+    setTimeout(() => show("servers"), 1500);
+  });
+  m.querySelectorAll("[data-lim]").forEach(b => b.onclick = () => $("#lim_" + b.dataset.lim).classList.toggle("hidden"));
+  m.querySelectorAll("[data-limsave]").forEach(b => b.onclick = async () => {
+    const box = $("#lim_" + b.dataset.limsave), v = sel => box.querySelector(sel).value;
+    try { const r = await api("/api/servers/limits", { json: { id: b.dataset.limsave, cpu_cores: v("[data-lc]"), ram_mb: v("[data-lr]"), upload_kbps: v("[data-lu]") } }); toast(r.note, 8000); show("servers"); } catch (e) { toast(e.message); }
+  });
+  m.querySelectorAll("[data-ren]").forEach(b => b.onclick = async () => {
+    const x = d.servers.find(y => y.id === b.dataset.ren), n = prompt("New name for " + x.name + " (shown in this dashboard)", x.name);
+    if (!n) return;
+    try { await api("/api/servers/settings", { json: { id: x.id, name: n } }); SERVERS = (await api("/api/servers")).servers; renderShell(); show("servers"); } catch (e) { toast(e.message); }
+  });
+  m.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
+    const x = d.servers.find(y => y.id === b.dataset.del);
+    const c = prompt("Delete " + x.name + " for good?\n\nIts config, mods, allow-list and player statistics are removed. This can't be undone.\n\nType the server's name to confirm:");
+    if (c === null) return;
+    try { const r = await api("/api/servers/delete", { json: { id: x.id, confirm: c } }); toast(r.note); if (SERVER === x.id) SERVER = "main"; store.set("es-server", SERVER); SERVERS = (await api("/api/servers")).servers; renderShell(); show("servers"); } catch (e) { toast(e.message); }
+  });
+  $("#ns_go").onclick = async () => {
+    const body = { name: $("#ns_name").value, port: $("#ns_port").value, max_players: $("#ns_max").value, map: $("#ns_map").value,
+                   authkey: $("#ns_key").value, private: $("#ns_private").checked, start: $("#ns_start").checked };
+    if (!confirm("Create \"" + body.name + "\" on port " + body.port + "?\n\nThis changes your network settings:\n• This computer's firewall opens port " + body.port + " (TCP + UDP)\n• Your router is NOT changed - forward port " + body.port + " there yourself for internet play")) return;
+    $("#ns_go").disabled = true;
+    try { const r = await api("/api/servers/create", { json: body }); toast(r.note, 9000); SERVERS = (await api("/api/servers")).servers; renderShell(); show("servers"); }
+    catch (e) { toast(e.message); $("#ns_go").disabled = false; }
+  };
+  TIMER = setInterval(() => { if (TAB === "servers" && !m.querySelector(".lim:not(.hidden) input:focus") && m.querySelectorAll("[id^=lim_]:not(.hidden)").length === 0) show("servers"); }, 15000);
 };
 
 /* ---------------- config */
 VIEWS.config = async m => {
-  const [d, al] = await Promise.all([api("/api/config"), api("/api/allowlist")]);
+  const [d, al, mv, ja] = await Promise.all([api("/api/config"), api("/api/allowlist"), api("/api/mapvote"), api("/api/joinalerts")]);
   const mode = store.get("es-config-mode", "form");
   const issuesHtml = list => list.length ? list.map(i => `<div class="issue ${i.level}"><span class="ic">${i.level === "error" ? "!" : i.level === "warning" ? "⚠" : "i"}</span><span>${esc(i.message)}</span>${i.line ? `<span class="ln">line ${i.line}</span>` : ""}</div>`).join("") : `<div class="issue info"><span class="ic">✓</span><span>No problems found.</span></div>`;
   const opts = (cur) => {
@@ -383,6 +512,23 @@ VIEWS.config = async m => {
       ${(al.denied = al.denied.filter(x => !al.names.some(n => n.toLowerCase() === x.name.toLowerCase()))).length ? `<p class="small" style="margin:14px 0 6px"><b>Recently refused</b> <span class="muted">(last 7 days)</span></p><div class="row" style="flex-wrap:wrap;gap:6px">${al.denied.map(x => `<span class="badge">${esc(x.name)}${x.guest ? " · guest" : ""} · ${esc(ago(x.t))}${x.guest ? "" : ` <a href="#" data-allow="${esc(x.name)}">+ allow</a>`}</span>`).join("")}</div>` : ""}
       <div class="row" style="margin-top:14px"><button class="btn primary" id="al_save">Save list</button></div>
     </div>
+    <div class="card" style="margin-top:16px" id="votecard"><div class="row"><h2 style="margin:0">Map vote</h2><span class="spacer"></span>
+        <span class="pill ${mv.enabled ? "good" : ""}"><span class="dot"></span>${mv.enabled ? "On" : "Off"}</span></div>
+      <p class="small muted">Players type <span class="mono">/vote</span> in the game chat to see the maps, then <span class="mono">/vote 2</span> to pick one. When more than half of the players online agree, everyone is told and the server switches about 30 seconds later. At most one change every 5 minutes.</p>
+      <label class="toggle"><input type="checkbox" id="mv_on" ${mv.enabled ? "checked" : ""}><span><b>Let players vote for the map</b><small>Pick at least two maps below</small></span></label>
+      <div class="row" style="flex-wrap:wrap;gap:6px;margin-top:8px">${mv.available.map(x => `<label class="badge" style="cursor:pointer"><input type="checkbox" data-vm="${esc(x)}" ${mv.maps.includes(x) || (!mv.maps.length) ? "checked" : ""}> ${esc(x)}</label>`).join("")}</div>
+      <div class="row" style="margin-top:14px"><button class="btn primary" id="mv_save">Save map vote</button></div>
+    </div>
+    <div class="card" style="margin-top:16px" id="jacard"><div class="row"><h2 style="margin:0">Join alerts (Discord)</h2><span class="spacer"></span>
+        <span class="pill ${ja.enabled ? "good" : ""}"><span class="dot"></span>${ja.enabled ? "On" : "Off"}</span></div>
+      <p class="small muted">Invite your friends automatically: when one of the players below joins this server, a message goes to your Discord channel ("Dani just joined - 3/8 online, come and play!"). Leave the list empty to announce everyone. When someone who isn't on the allow-list tries to join, you also get a Discord message with a one-click <b>Approve</b> link (turn on "Refused players" under Settings → Notifications).</p>
+      ${ja.discord ? "" : `<div class="issue warning"><span class="ic">⚠</span><span>Add your Discord webhook under Settings → Notifications first.</span></div>`}
+      <label class="toggle"><input type="checkbox" id="ja_on" ${ja.enabled ? "checked" : ""}><span><b>Send join alerts</b><small>Uses your Discord webhook from Settings</small></span></label>
+      <label class="f"><span>Players to announce (one per line, empty = everyone)</span><textarea id="ja_players" rows="4" spellcheck="false" placeholder="Dani&#10;Zoli" style="min-height:90px">${esc(ja.players.join("\n"))}</textarea></label>
+      <label class="f"><span>Who to ping (optional)</span><input id="ja_mention" type="text" value="${esc(ja.mention)}" placeholder="@here, <@123456789012345678> or <@&role id>"><small>In Discord: Settings → Advanced → Developer Mode, then right-click a person or role → Copy ID</small></label>
+      <label class="toggle"><input type="checkbox" id="ja_addr" ${ja.address ? "checked" : ""}><span><b>Include the server address</b><small>Your public IP and port, so friends can direct-connect. Only do this in a private channel.</small></span></label>
+      <div class="row" style="margin-top:14px"><button class="btn primary" id="ja_save">Save join alerts</button><button class="btn" id="ja_test">Save + send test</button></div>
+    </div>
     <div id="rawmode" class="${mode === "raw" ? "" : "hidden"}" style="margin-top:12px">
       <div class="card"><textarea id="raw" spellcheck="false">${esc(d.raw)}</textarea>
       <div class="row" style="margin-top:12px"><button class="btn primary" id="saveraw">Save</button><button class="btn" id="checkraw">Check</button><span class="muted small">Your AuthKey isn't shown here - it's stored encrypted.</span></div></div>
@@ -420,6 +566,17 @@ VIEWS.config = async m => {
     if (!have.includes(a.dataset.allow.toLowerCase())) ta.value = (ta.value.trim() ? ta.value.trim() + "\n" : "") + a.dataset.allow;
     toast(a.dataset.allow + " added - press Save list");
   });
+  const jaSave = async test => {
+    const body = { enabled: $("#ja_on").checked, players: $("#ja_players").value.split("\n").map(x => x.trim()).filter(Boolean),
+                   mention: $("#ja_mention").value, address: $("#ja_addr").checked, test };
+    try { const r = await api("/api/joinalerts", { json: body }); toast(r.note); if (!test) show("config"); } catch (e) { toast(e.message); }
+  };
+  $("#ja_save").onclick = () => jaSave(false);
+  $("#ja_test").onclick = () => jaSave(true);
+  $("#mv_save").onclick = async () => {
+    const maps = [...m.querySelectorAll("[data-vm]")].filter(x => x.checked).map(x => x.dataset.vm);
+    try { const r = await api("/api/mapvote", { json: { enabled: $("#mv_on").checked, maps } }); toast(r.note); show("config"); } catch (e) { toast(e.message); }
+  };
   $("#al_save").onclick = async () => {
     const on = $("#al_on").checked, names = $("#al_names").value.split("\n").map(x => x.trim()).filter(Boolean);
     if (on && !names.length) { toast("Add at least one player name first"); return; }
@@ -480,7 +637,7 @@ VIEWS.mods = async m => {
       if (!/\.zip$/i.test(f.name)) { box.querySelector("[data-s]").textContent = "Only .zip files"; return res(); }
       const x = new XMLHttpRequest();
       x.open("PUT", "/api/mods/upload?name=" + encodeURIComponent(f.name));
-      x.setRequestHeader("X-ES-CSRF", CSRF);
+      x.setRequestHeader("X-ES-CSRF", CSRF); x.setRequestHeader("X-ES-Server", SERVER);
       x.upload.onprogress = e => { if (e.lengthComputable) box.querySelector("i").style.width = (e.loaded / e.total * 100) + "%"; };
       x.upload.onload = () => { box.querySelector("[data-s]").textContent = "Checking for viruses…"; };
       x.onload = () => {
@@ -713,7 +870,7 @@ VIEWS.settings = async m => {
 
   <div class="card" style="margin-top:16px"><h2>Backup / move to another computer</h2>
     <p class="small muted">Export your server settings (and optionally all mods) into one file, then import it on another server. Keys and passwords are never exported.</p>
-    <div class="row"><a class="btn" href="/api/export" download>Export settings</a><a class="btn" href="/api/export?mods=1" download>Export settings + mods</a>
+    <div class="row"><a class="btn" href="/api/export?srv=${encodeURIComponent(SERVER)}" download>Export settings</a><a class="btn" href="/api/export?mods=1&srv=${encodeURIComponent(SERVER)}" download>Export settings + mods</a>
       <span class="spacer"></span><button class="btn" id="imp">Import…</button><input type="file" id="impfile" accept=".zip" hidden></div>
     <div id="impres"></div></div>
   <p class="small muted" style="margin-top:24px">BeamMP EasyServer ${esc(SESSION.version)} · ${esc(s.platform)} · not affiliated with the BeamMP team</p>`;
@@ -767,7 +924,7 @@ VIEWS.settings = async m => {
     const f = e.target.files[0]; if (!f) return;
     if (!confirm("Import " + f.name + "? Your current server config will be replaced (mods in the file are added and virus-checked).")) return;
     $("#impres").innerHTML = `<p class="muted">Importing…</p>`;
-    const r = await fetch("/api/import", { method: "PUT", headers: { "X-ES-CSRF": CSRF }, body: f });
+    const r = await fetch("/api/import", { method: "PUT", headers: { "X-ES-CSRF": CSRF, "X-ES-Server": SERVER }, body: f });
     let j = {}; try { j = await r.json(); } catch (x) {}
     if (!r.ok) { $("#impres").innerHTML = `<div class="banner bad">${esc(j.error || "Import failed")}</div>` + ((j.issues || []).map(i => `<div class="issue ${i.level}"><span class="ic">!</span><span>${esc(i.message)}</span></div>`).join("")); return; }
     const rep = j.report;
