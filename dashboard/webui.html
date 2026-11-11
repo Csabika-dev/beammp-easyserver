@@ -111,6 +111,8 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 .issue.error .ic{color:var(--crit-ink)}.issue.warning .ic{color:var(--warn-ink)}.issue.info .ic{color:var(--accent)}
 .issue .ln{margin-left:auto;color:var(--muted);font-size:12px;white-space:nowrap}
 .banner{display:flex;gap:12px;align-items:center;padding:12px 16px;border-radius:10px;border:1px solid var(--line);background:var(--surface);margin-bottom:16px}
+.secbar{position:sticky;top:0;z-index:20;display:flex;gap:12px;align-items:flex-start;padding:12px 16px;margin:0 0 16px;border-radius:10px;background:var(--critical);color:#fff;box-shadow:0 4px 16px rgba(0,0,0,.25)}
+.secbar b{display:block}.secbar .small{opacity:.92;white-space:pre-wrap}.secbar .btn{background:#fff;color:#8b1a1a;border-color:#fff;flex:none}
 .banner.warn{border-color:var(--warning)}.banner.bad{border-color:var(--critical)}.banner.info{border-color:var(--accent)}
 .badge{display:inline-block;font-size:11.5px;font-weight:600;border-radius:99px;padding:1px 8px;background:var(--surface-2);color:var(--text-2);margin-left:6px;vertical-align:1px}
 .badge.good{color:var(--good-ink)}.badge.warn{color:var(--warn-ink)}.badge.bad{color:var(--crit-ink)}
@@ -239,6 +241,7 @@ async function boot() {
   store.set("es-server", SERVER);
   renderShell();
   const hash = location.hash.slice(1);
+  if (/^ack=[a-f0-9]{16}$/.test(hash)) { history.replaceState(null, "", location.pathname + "#overview"); await stopAlerts(hash.slice(4)); return show("overview"); }
   if (hash.startsWith("approve=")) { let n = ""; try { n = decodeURIComponent(hash.slice(8)).slice(0, 40); } catch (e) {} return approveFromLink(n); }
   show(TABS.some(t => t[0] === hash) ? hash : "overview");
 }
@@ -305,12 +308,39 @@ function renderShell() {
       ${picker}${navs}<div class="grow"></div>
       <div class="foot"><button class="iconbtn" id="theme" title="Light / dark mode">${icon("moon")}</button><span class="spacer"></span><button class="iconbtn" id="logout" title="Log out">${icon("logout")}</button></div>
     </aside>
-    <div><nav class="mobilebar">${picker}${navs}<button class="nav" id="theme2">Theme</button></nav><main id="main"></main></div></div>`;
+    <div><nav class="mobilebar">${picker}${navs}<button class="nav" id="theme2">Theme</button></nav><div id="secbar"></div><main id="main"></main></div></div>`;
   document.querySelectorAll("[data-srv]").forEach(el => el.onchange = () => switchServer(el.value));
   document.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => show(b.dataset.tab));
   const flip = () => { const cur = document.documentElement.dataset.theme; store.set("es-theme", cur === "dark" ? "light" : "dark"); applyTheme(); setThemeIcon(); if (TAB === "players") show("players"); };
   $("#theme").onclick = flip; $("#theme2").onclick = flip; setThemeIcon();
-  $("#logout").onclick = async () => { try { await api("/api/logout", { method: "POST" }); } catch (e) {} boot(); };
+  $("#logout").onclick = async () => { try { await api("/api/logout", { method: "POST" }); } catch (e) {} clearInterval(SECTIMER); boot(); };
+  clearInterval(SECTIMER); checkSecurity(); SECTIMER = setInterval(() => checkSecurity().catch(() => {}), 30000);
+}
+
+/* ------------------------------------------------------------------ security alerts */
+let SECTIMER = null; const SEC_SEEN = new Set();
+async function checkSecurity() {
+  const bar = $("#secbar"); if (!bar) return;
+  const d = await api("/api/security");
+  const a = d.active || [];
+  document.title = (a.length ? "⚠️ " : "") + "BeamMP Dashboard";
+  if (!a.length) { bar.innerHTML = ""; return; }
+  bar.innerHTML = `<div class="secbar" role="alert"><div style="flex:1"><b>⚠️ Security alert${a.length > 1 ? "s (" + a.length + ")" : ""}</b>
+    ${a.slice(0, 3).map(x => `<div class="small"><b>${esc(x.title)}</b>${esc(x.count > 1 ? " · " + x.count + " times" : "")} · last ${esc(fmtTime(x.last))}</div>`).join("")}
+    <div class="small">${d.reminders && d.enabled ? "Sent to all your notification channels and repeated every 15 minutes until you stop it." : "Details under Notifications."}</div></div>
+    <button class="btn sm" id="secstop">Got it - stop alerts</button></div>`;
+  $("#secstop").onclick = () => stopAlerts("all");
+  // pop-up on this device (needs permission, given under Settings); clicking it stops the alert
+  if (window.Notification && Notification.permission === "granted") {
+    a.filter(x => !SEC_SEEN.has(x.id + ":" + x.sent)).forEach(x => {
+      SEC_SEEN.add(x.id + ":" + x.sent);
+      try { const n = new Notification("⚠️ " + x.title, { body: "Click to stop these alerts.", tag: x.id, requireInteraction: true }); n.onclick = () => { window.focus(); stopAlerts(x.id); n.close(); }; } catch (e) {}
+    });
+  }
+}
+async function stopAlerts(id) {
+  try { const r = await api("/api/security/ack", { json: { id } }); toast(r.stopped ? "Alerts stopped - you won't get reminders for this any more" : "Already stopped"); } catch (e) { toast(e.message); }
+  checkSecurity().catch(() => {});
 }
 function setThemeIcon() { const b = $("#theme"); if (b) b.innerHTML = icon(document.documentElement.dataset.theme === "dark" ? "sun" : "moon"); }
 
@@ -817,12 +847,16 @@ VIEWS.settings = async m => {
   const N = s.notify;
   m.innerHTML = `<h1>Settings</h1><p class="sub">Notifications, security, remote access and backups.</p>
   <div class="grid g2">
+    <div class="card"><h2>Security alerts</h2>
+      ${tg("security_alerts", "Alert me about attacks", "Password guessing, websites probing the dashboard, mods with viruses, tampered server files, zip bombs, connection floods. Sent to every channel that is set up (here, Discord, email) - even if its switch below is off", s.security_alerts)}
+      ${tg("security_reminders", "Repeat every 15 minutes", "Until you click \"Got it - stop alerts\" (or the link/pop-up in the message)", s.security_reminders)}
+      <div class="row" style="margin-top:8px"><button class="btn sm" id="popups">Show pop-ups on this device</button><span class="small muted" id="popupnote"></span></div>
+    </div>
     <div class="card"><h2>Notify me about</h2>
       ${tg("n_crash", "Crashes", "The server crashed or keeps crashing", N.crash)}
       ${tg("n_stopped", "Unexpected stops", "The server stopped without you stopping it", N.stopped)}
       ${tg("n_update", "Updates", "New BeamMP or EasyServer versions", N.update)}
       ${tg("n_mod_blocked", "Blocked mods", "A mod failed the virus check", N.mod_blocked)}
-      ${tg("n_login_failed", "Security", "Someone keeps typing a wrong dashboard password", N.login_failed)}
       ${tg("n_player_join", "Player joins", "Every time someone joins (can be a lot)", N.player_join)}
       ${tg("n_player_denied", "Refused players", "Someone not on the allow-list tried to join", N.player_denied)}
       ${s.platform === "windows" ? tg("auto_restart", "Restart after a crash", "Start the server again automatically", s.auto_restart) : ""}
@@ -878,8 +912,8 @@ VIEWS.settings = async m => {
   m.querySelectorAll("[data-test]").forEach(b => b.onclick = async () => { b.disabled = true; try { await saveNotif(true); await api("/api/notifications/test", { json: { channel: b.dataset.test } }); toast("Test sent"); } catch (e) { toast(e.message); } b.disabled = false; });
   async function saveNotif(quiet) {
     const body = { notify: {} };
-    ["crash", "stopped", "update", "mod_blocked", "login_failed", "player_join", "player_denied"].forEach(k => body.notify[k] = $("#n_" + k).checked);
-    ["discord_enabled", "email_enabled", "update_check"].forEach(k => body[k] = $("#" + k).checked);
+    ["crash", "stopped", "update", "mod_blocked", "player_join", "player_denied"].forEach(k => body.notify[k] = $("#n_" + k).checked);
+    ["discord_enabled", "email_enabled", "update_check", "security_alerts", "security_reminders"].forEach(k => body[k] = $("#" + k).checked);
     if ($("#auto_restart")) body.auto_restart = $("#auto_restart").checked;
     ["smtp_host", "smtp_port", "smtp_user", "smtp_to", "smtp_security"].forEach(k => body[k] = $("#" + k).value);
     body.smtp_from = $("#smtp_user").value.includes("@") ? $("#smtp_user").value : $("#smtp_to").value;
@@ -890,6 +924,10 @@ VIEWS.settings = async m => {
     if (!quiet) toast("Saved");
   }
   $("#savenotif").onclick = () => saveNotif(false).catch(e => toast(e.message));
+  ["security_alerts", "security_reminders"].forEach(k => $("#" + k).onchange = () => saveNotif(false).catch(e => toast(e.message)));
+  const popNote = () => { $("#popupnote").textContent = !window.Notification ? (window.isSecureContext ? "This browser has no pop-ups" : "Pop-ups need HTTPS (turn it on below) or http://localhost") : Notification.permission === "granted" ? "On for this browser" : Notification.permission === "denied" ? "Blocked - allow notifications for this site in the browser settings" : ""; };
+  popNote();
+  $("#popups").onclick = async () => { if (window.Notification) { await Notification.requestPermission(); popNote(); if (Notification.permission === "granted") new Notification("BeamMP dashboard", { body: "Security alerts will pop up here while the dashboard is open." }); } else popNote(); };
   $("#savevt").onclick = async () => { const v = $("#vt").value.trim(); try { await api("/api/settings", { json: { vt_key: v === "off" ? "" : v } }); toast(v === "off" ? "VirusTotal turned off" : "Saved"); show("settings"); } catch (e) { toast(e.message); } };
   $("#savepw").onclick = async () => { try { await api("/api/password", { json: { current: $("#pw_cur").value, new: $("#pw_new").value } }); toast("Password changed"); $("#pw_cur").value = $("#pw_new").value = ""; } catch (e) { toast(e.message); } };
   const on = $("#tfaon");
