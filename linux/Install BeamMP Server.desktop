@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Install BeamMP Server
+Comment=One-click BeamMP server setup (BeamMP EasyServer)
+Icon=applications-games
+Terminal=true
+Exec=sh -c 'cd "$(dirname "%k")" && bash ./install.sh'
