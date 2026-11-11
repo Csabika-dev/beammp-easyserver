@@ -39,6 +39,22 @@ When you turn it on:
 
 **Flood protection** (Linux only) - limits how fast one address can connect to your game server (about 20 new connections a minute) and how many packets it can send (about 1000 a second). Normal players never get near that; one computer flooding your server gets cut off, and the dashboard raises a security alert. Your home network and a relay app running on the same computer are never limited. It **can't stop a big DDoS** - that fills your internet line before it ever reaches your computer - so it's an extra layer, not a replacement for hiding your IP.
 
+## Who runs the relay?
+
+**Not EasyServer.** The project doesn't run any relay, and your game traffic never goes through the project or its author. The "Hide my IP" setting only stores the address of a relay *you* choose and tests that it works.
+
+The relay is run by whoever you pick below:
+
+- **playit.gg** - a third-party service. Their network carries your game traffic.
+- **A VPN provider** with port forwarding - their VPN server is the relay.
+- **A VPS you rent** - you run the relay yourself (WireGuard), so it's yours.
+
+Keep in mind:
+
+- **You pay the provider**, not EasyServer.
+- **The provider can see your game traffic** - who connects to your server and when (not your passwords or keys, and not your dashboard unless you send it through the relay too). Pick a provider you trust.
+- **If the relay goes down, players can't join** until it's back or you turn "Hide my IP" off and use your home address again.
+
 ## Getting a relay
 
 ### Option 1 - playit.gg (easiest)
