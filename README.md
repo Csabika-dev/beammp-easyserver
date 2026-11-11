@@ -263,6 +263,7 @@ Suggestions are welcome; open an issue.
 - The dashboard only answers when it is opened by its IP address or a local name (`mypc`, `mypc.local`, `*.lan`, `*.fritz.box` ...), which blocks "DNS rebinding" tricks from other websites. The first password can only be set from the server computer itself via `http://localhost:30815`.
 - Imports are checked like normal uploads: zip bombs are skipped, settings are validated, and an import can never send your saved email password to a different mail server. Changing the mail server in Settings also needs the password typed again.
 - Windows: the install folder is locked down so only you, administrators and SYSTEM can change it (folders in `C:\` can otherwise be changed by every user of the PC).
+- **Security alerts (on by default):** password guessing, websites probing the dashboard ("DNS rebinding"), mods that fail the virus check, tampered server files (planted links), zip bombs in imports and connection floods raise an alert. It goes to every channel you set up (dashboard banner, Discord, email - even if their normal switch is off, plus pop-ups on devices where you allowed them) and repeats every 15 minutes until you click **Got it - stop alerts** (or the link / pop-up in the message). Both can be turned off under Settings -> Security alerts.
 - On your home network the dashboard uses plain HTTP unless you turn on HTTPS in Settings - turn it on if other people share your Wi-Fi.
 
 ## ❤️ Support the project
