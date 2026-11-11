@@ -106,13 +106,40 @@ def firewall(state, port):
             run(["ufw", "allow", "%d/tcp" % port])
         else:
             run(["ufw", "delete", "allow", "%d/tcp" % port])
-        msgs.append("ufw updated")
+        msgs.append("Firewall (ufw): port %d %s" % (port, "opened" if state == "on" else "closed"))
     elif shutil.which("firewall-cmd") and run(["firewall-cmd", "--state"]).returncode == 0:
         flag = "--add-port" if state == "on" else "--remove-port"
         run(["firewall-cmd", "--permanent", "%s=%d/tcp" % (flag, port)])
         run(["firewall-cmd", "--reload"])
-        msgs.append("firewalld updated")
-    return {"ok": True, "msg": ", ".join(msgs) or "no active firewall"}
+        msgs.append("Firewall (firewalld): port %d %s" % (port, "opened" if state == "on" else "closed"))
+    return {"ok": True, "msg": ", ".join(msgs) or "No firewall is active on this computer - nothing to change"}
+
+
+def firewall_game(old, new):
+    """The game server port changed: open the new one (TCP + UDP), close the old one."""
+    try:
+        new = int(new)
+        assert 1024 <= new <= 65535
+        old = int(old) if old not in (None, "") else None
+        assert old is None or 1024 <= old <= 65535
+    except (TypeError, ValueError, AssertionError):
+        return {"ok": False, "msg": "bad port"}
+    if old == new:
+        return {"ok": True, "msg": "port unchanged"}
+    if shutil.which("ufw") and "Status: active" in run(["ufw", "status"]).stdout:
+        for proto in ("tcp", "udp"):
+            run(["ufw", "allow", "%d/%s" % (new, proto)])
+            if old:
+                run(["ufw", "delete", "allow", "%d/%s" % (old, proto)])
+        return {"ok": True, "msg": "Firewall (ufw): opened port %d%s" % (new, ", closed %d" % old if old else "")}
+    if shutil.which("firewall-cmd") and run(["firewall-cmd", "--state"]).returncode == 0:
+        for proto in ("tcp", "udp"):
+            run(["firewall-cmd", "--permanent", "--add-port=%d/%s" % (new, proto)])
+            if old:
+                run(["firewall-cmd", "--permanent", "--remove-port=%d/%s" % (old, proto)])
+        run(["firewall-cmd", "--reload"])
+        return {"ok": True, "msg": "Firewall (firewalld): opened port %d%s" % (new, ", closed %d" % old if old else "")}
+    return {"ok": True, "msg": "No firewall is active on this computer - nothing to change"}
 
 
 def firewall_status():
@@ -143,6 +170,8 @@ def handle(req):
         return {"ok": True, "msg": "restarting"}
     if a == "firewall-remote":
         return firewall(req.get("state"), req.get("port"))
+    if a == "firewall-game":
+        return firewall_game(req.get("old"), req.get("new"))
     if a == "firewall-status":
         return firewall_status()
     return {"ok": False, "msg": "unknown action"}
