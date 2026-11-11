@@ -10,12 +10,13 @@
 # =============================================================================
 param(
     [switch]$Update,
-    [switch]$Uninstall
+    [switch]$Uninstall,
+    [switch]$ResetLogin
 )
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'   # makes downloads much faster
-$EasyVersion  = '1.0.0'
+$EasyVersion  = '1.1.0'
 $DefaultDir   = 'C:\BeamMP-Server'
 $StateFile    = Join-Path $env:ProgramData 'BeamMP-EasyServer\install-dir.txt'
 $ServerUrl    = 'https://github.com/BeamMP/BeamMP-Server/releases/latest/download/BeamMP-Server.exe'
@@ -23,6 +24,9 @@ $VcRedistUrl  = 'https://aka.ms/vs/17/release/vc_redist.x64.exe'
 $KeymasterUrl = 'https://keymaster.beammp.com'
 $TaskName     = 'BeamMP Server (EasyServer)'
 $FwPrefix     = 'BeamMP Server (EasyServer)'
+$DashTask     = 'BeamMP Dashboard (EasyServer)'
+$DashPort     = 30815
+$PythonUrl    = 'https://www.python.org/ftp/python/3.13.17/python-3.13.17-embed-amd64.zip'
 
 # ---- run as administrator ----------------------------------------------------
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
@@ -30,6 +34,7 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
     $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")
     if ($Update)    { $argList += '-Update' }
     if ($Uninstall) { $argList += '-Uninstall' }
+    if ($ResetLogin) { $argList += '-ResetLogin' }
     try {
         Start-Process powershell.exe -ArgumentList $argList -Verb RunAs
     } catch {
@@ -75,6 +80,65 @@ function Copy-EsScripts($dir) {
     return $esDir
 }
 
+# ---- web dashboard (portable Python, runs as you at logon) ----------------------
+function Find-DashboardSource {
+    foreach ($c in (Join-Path $PSScriptRoot 'dashboard'), (Join-Path (Split-Path $PSScriptRoot -Parent) 'dashboard')) {
+        if (Test-Path (Join-Path $c 'dashboard.py')) { return $c }
+    }
+    throw 'The dashboard files are missing - download the full ZIP again.'
+}
+
+function Stop-Dashboard {
+    Stop-ScheduledTask -TaskName $DashTask -ErrorAction SilentlyContinue
+    Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -like '*EasyServer\dashboard\dashboard.py*' } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+}
+
+function Install-Dashboard($dir) {
+    Step 'Installing the web dashboard'
+    $esDir = Join-Path $dir 'EasyServer'
+    $pyDir = Join-Path $esDir 'python'
+    $pyw = Join-Path $pyDir 'pythonw.exe'
+    if (-not (Test-Path $pyw)) {
+        Write-Host '  Downloading portable Python (about 10 MB)...'
+        $zip = Join-Path $env:TEMP 'easyserver-python.zip'
+        Invoke-WebRequest -Uri $PythonUrl -OutFile $zip -UseBasicParsing
+        New-Item -ItemType Directory -Force -Path $pyDir | Out-Null
+        Expand-Archive -Path $zip -DestinationPath $pyDir -Force
+        Remove-Item $zip -ErrorAction SilentlyContinue
+        if (-not (Test-Path $pyw)) { throw 'Portable Python could not be unpacked' }
+    }
+    Ok 'Portable Python ready'
+    Stop-Dashboard
+    $src = Find-DashboardSource
+    $dst = Join-Path $esDir 'dashboard'
+    New-Item -ItemType Directory -Force -Path $dst, (Join-Path $esDir 'data') | Out-Null
+    foreach ($f in 'dashboard.py', 'webui.html', 'modscan.py', 'tlsgen.py') { Copy-Item -Force (Join-Path $src $f) (Join-Path $dst $f) }
+    # player statistics plugin, runs inside the BeamMP server
+    $plug = Join-Path $dir 'Resources\Server\EasyServerStats'
+    New-Item -ItemType Directory -Force -Path $plug | Out-Null
+    Copy-Item -Force (Join-Path $src 'EasyServerStats\main.lua') (Join-Path $plug 'main.lua')
+    Ok 'Dashboard files installed'
+
+    # firewall: the dashboard itself only lets in your home network unless you allow more
+    Get-NetFirewallRule -DisplayName "$FwPrefix Dashboard" -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+    New-NetFirewallRule -DisplayName "$FwPrefix Dashboard" -Direction Inbound -Protocol TCP -LocalPort $DashPort -Action Allow -Profile Any | Out-Null
+
+    # start at logon, hidden, as you (not as admin)
+    Unregister-ScheduledTask -TaskName $DashTask -Confirm:$false -ErrorAction SilentlyContinue
+    $action  = New-ScheduledTaskAction -Execute $pyw -Argument "`"$(Join-Path $dst 'dashboard.py')`"" -WorkingDirectory $dst
+    $trigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+    $set     = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+    Register-ScheduledTask -TaskName $DashTask -Action $action -Trigger $trigger -Settings $set -RunLevel Limited | Out-Null
+    Start-ScheduledTask -TaskName $DashTask
+    Ok 'Dashboard starts automatically when you log in'
+
+    $url = Join-Path ([Environment]::GetFolderPath('Desktop')) 'BeamMP Dashboard.url'
+    [IO.File]::WriteAllText($url, "[InternetShortcut]`r`nURL=http://localhost:$DashPort/`r`nIconFile=$env:SystemRoot\System32\shell32.dll`r`nIconIndex=13`r`n")
+    Ok '"BeamMP Dashboard" shortcut is on your desktop'
+}
+
 function Remove-Firewall {
     Get-NetFirewallRule -DisplayName "$FwPrefix*" -ErrorAction SilentlyContinue | Remove-NetFirewallRule
 }
@@ -85,6 +149,7 @@ function Get-Shortcuts {
         Start  = Join-Path $desk 'Start BeamMP Server.lnk'
         Folder = Join-Path $desk 'BeamMP Server Folder.lnk'
         Mods   = Join-Path $desk 'Drop BeamMP Mods Here.lnk'
+        Dash   = Join-Path $desk 'BeamMP Dashboard.url'
     }
 }
 
@@ -95,14 +160,39 @@ if ($Uninstall) {
     $dir = Get-InstallDir
     Step 'Removing BeamMP EasyServer'
     Get-Process -Name 'BeamMP-Server' -ErrorAction SilentlyContinue | Stop-Process -Force
+    Stop-Dashboard
+    Unregister-ScheduledTask -TaskName $DashTask -Confirm:$false -ErrorAction SilentlyContinue
     Remove-Firewall; Ok 'Firewall rules removed'
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue; Ok 'Autostart removed'
     $sc = Get-Shortcuts
-    Remove-Item $sc.Start, $sc.Folder, $sc.Mods -ErrorAction SilentlyContinue; Ok 'Shortcuts removed'
+    Remove-Item $sc.Start, $sc.Folder, $sc.Mods, $sc.Dash -ErrorAction SilentlyContinue; Ok 'Shortcuts removed'
     $a = Read-Host "Also delete the server folder with your settings and mods ($dir)? (y/N)"
     if ($a -match '^[Yy]') { Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue; Ok 'Folder deleted' }
     Remove-Item -Recurse -Force (Split-Path $StateFile) -ErrorAction SilentlyContinue
     Write-Host ''; Write-Host 'BeamMP EasyServer removed.' -ForegroundColor Green
+    Finish
+}
+
+# =============================================================================
+#  RESET DASHBOARD LOGIN (forgot password / lost the two-step phone)
+# =============================================================================
+if ($ResetLogin) {
+    $dir = Get-InstallDir
+    Step 'Resetting the dashboard login'
+    Set-EsSecret $dir 'TOTP_SECRET' ''
+    Set-EsSecret $dir 'MODS_PASSWORD' ''
+    $j = Join-Path $dir 'EasyServer\data\dashboard.json'
+    if (Test-Path $j) {
+        $d = Get-Content $j -Raw | ConvertFrom-Json
+        $d.remote_enabled = $false
+        [IO.File]::WriteAllText($j, ($d | ConvertTo-Json -Depth 5), (New-Object Text.UTF8Encoding $false))
+    }
+    Stop-Dashboard
+    Start-ScheduledTask -TaskName $DashTask -ErrorAction SilentlyContinue
+    Ok 'Password and two-step login removed, internet access turned off'
+    Write-Host '  Open http://localhost:30815 on THIS computer to create a new password.'
+    Start-Sleep -Seconds 2
+    Start-Process 'http://localhost:30815/'
     Finish
 }
 
@@ -116,7 +206,10 @@ if ($Update) {
     }
     Download-Server $dir
     [void](Copy-EsScripts $dir)
-    Ok 'Updated. Start it again with the "Start BeamMP Server" shortcut.'
+    if (Test-Path (Join-Path $dir 'EasyServer\python\pythonw.exe')) {
+        try { Install-Dashboard $dir } catch { Warn "Dashboard update failed: $($_.Exception.Message)" }
+    }
+    Ok 'Updated. Start it again with the "Start BeamMP Server" shortcut (or from the dashboard).'
     Finish
 }
 
@@ -238,7 +331,11 @@ $chkAuto.Location = New-Object System.Drawing.Point(20, $y); $form.Controls.Add(
 
 $chkStart = New-Object System.Windows.Forms.CheckBox
 $chkStart.Text = 'Start the server when setup is done'; $chkStart.AutoSize = $true; $chkStart.Checked = $true
-$chkStart.Location = New-Object System.Drawing.Point(20, $y); $form.Controls.Add($chkStart); $y += 40
+$chkStart.Location = New-Object System.Drawing.Point(20, $y); $form.Controls.Add($chkStart); $y += 30
+
+$chkDash = New-Object System.Windows.Forms.CheckBox
+$chkDash.Text = 'Install the web dashboard (manage the server from any PC or phone)'; $chkDash.AutoSize = $true; $chkDash.Checked = $true
+$chkDash.Location = New-Object System.Drawing.Point(20, $y); $form.Controls.Add($chkDash); $y += 40
 
 $btn = New-Object System.Windows.Forms.Button
 $btn.Text = 'Install'; $btn.Width = 140; $btn.Height = 38
@@ -269,6 +366,7 @@ $cfg = @{
     Private  = (-not $chkPublic.Checked)
     Auto     = $chkAuto.Checked
     StartNow = $chkStart.Checked
+    Dash     = $chkDash.Checked
 }
 if (-not $cfg.Name) { $cfg.Name = "$env:COMPUTERNAME BeamMP Server" }
 if (-not $cfg.Map)  { $cfg.Map = 'gridmap_v2' }
@@ -396,6 +494,13 @@ UpdateReminderTime = "30s"
         Ok 'Server will start when you log in'
     }
 
+    # ---- dashboard ----
+    $dashOk = $false
+    if ($cfg.Dash) {
+        try { Install-Dashboard $cfg.Dir; $dashOk = $true }
+        catch { Warn "The dashboard couldn't be installed: $($_.Exception.Message). The server itself works fine." }
+    }
+
     # ---- addresses ----
     $lan = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
             Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' -and $_.PrefixOrigin -ne 'WellKnown' } |
@@ -413,6 +518,13 @@ UpdateReminderTime = "30s"
     Write-Host "  Friends over the internet connect to:   $($pub):$($cfg.Port)"
     Write-Host "    -> for internet play, forward port $($cfg.Port) (TCP + UDP) on your router to $lan"
     Write-Host ''
+    if ($dashOk) {
+        Write-Host '  Dashboard:           ' -NoNewline; Write-Host "http://localhost:$DashPort  (double-click 'BeamMP Dashboard' on your desktop)" -ForegroundColor Cyan
+        Write-Host "                       other devices at home: http://$($lan):$DashPort"
+        Write-Host '                       The first time you open it, create a password.'
+        Start-Sleep -Seconds 2
+        Start-Process "http://localhost:$DashPort/"
+    }
     Write-Host '  Add mods:            drag .zip files onto "Drop BeamMP Mods Here" on your desktop'
     Write-Host '  Mods folder:         ' -NoNewline; Write-Host (Join-Path $cfg.Dir 'Resources\Client')
     Write-Host '  Update later:        Update-BeamMP-Server.bat'

@@ -2,9 +2,44 @@
 
 **Host your own BeamNG.drive multiplayer (BeamMP) server in one click, on Windows or Linux.**
 
-No config files, no command line knowledge needed. The installer downloads the newest official BeamMP server, asks a few simple questions (name, map, player count), sets everything up and starts it.
+No config files, no command line knowledge needed. The installer downloads the newest official BeamMP server, asks a few simple questions (name, map, player count), sets everything up and starts it. Then you manage everything from a **web dashboard** on any PC or phone.
 
 > Not affiliated with or endorsed by the BeamMP team. This only automates the setup of the official [BeamMP server](https://github.com/BeamMP/BeamMP-Server).
+
+---
+
+## 🖥️ The dashboard
+
+Open `http://<server-ip>:30815` from any PC or phone at home, or use the **BeamMP Dashboard** shortcut on Windows.
+
+| Page | What you can do |
+|---|---|
+| **Overview** | Server status, who's online, uptime, start / stop / restart |
+| **Config** | Edit every server setting in a simple form, or as text, **without touching files**. Every change is checked first (wrong types, bad ports, unknown maps, duplicate lines…) and you get plain-English errors with line numbers |
+| **Mods** | Drag & drop mods, turn them on/off, pick map mods, see the virus check result for each |
+| **Players** | Player analytics: players per day, busiest hours, a week heatmap, top players, sessions, peak and usage |
+| **Network** | Port checker: is the server listening, reachable at home, reachable from the internet, listed in the BeamMP server list? Tells you what to fix |
+| **Updates** | Checks for new BeamMP server and EasyServer versions, installs server updates in one click |
+| **Logs** | Live server log, with hints that explain common errors in plain English |
+| **Notifications** | Crashes, unexpected stops, updates, blocked mods, failed logins, player joins. Shown in the dashboard and optionally sent to **Discord** and/or **email** |
+| **Settings** | Notifications, password, **two-step login**, **access from the internet (HTTPS)**, **backup / import / export** |
+
+Also: **dark / light mode** (follows your system, or switch with the moon icon), and it works on phones.
+
+### Access from the internet (optional, off by default)
+
+To manage the server when you're not at home, go to **Settings → Access from the internet**. It's only allowed when all of these are true:
+- **HTTPS** is on. The dashboard makes its own certificate, so your browser warns you the first time; compare the fingerprint shown in Settings, then continue.
+- **Two-step login** is on, with codes from Google Authenticator, Microsoft Authenticator, Aegis or similar.
+- Your password has at least 12 characters.
+
+Then forward port **30815 (TCP)** on your router. Wrong passwords lock out the visitor for 15 minutes, and you get a notification.
+
+Forgot the password or lost your phone? On Linux run `sudo beammp reset-login`. On Windows double-click `Reset-Dashboard-Login.bat`, then open the dashboard on the server PC to set a new password.
+
+### Backup and moving servers
+
+**Settings → Backup** exports your config and settings (optionally all mods) into one file. Import it on another EasyServer and the mods are virus-checked again on the way in. Keys and passwords are never exported.
 
 ---
 
@@ -26,6 +61,7 @@ No config files, no command line knowledge needed. The installer downloads the n
 That's it. You get a **Start BeamMP Server** shortcut on your desktop.
 
 It also handles:
+- The **web dashboard** (a small portable Python is downloaded for it; it starts when you log in). The first time you open it, you create a password
 - A **Drop BeamMP Mods Here** desktop icon: drag mod zips onto it (each one is virus-checked first)
 - Your AuthKey and VirusTotal key are stored **encrypted**
 - Microsoft Visual C++ Runtime (installed automatically if missing)
@@ -36,6 +72,7 @@ It also handles:
 |---|---|
 | `Install-BeamMP-Server.bat` | Install, or change settings later (run it again) |
 | `Add-Mods.bat` | Drag mod .zip files onto it (same as the desktop icon) |
+| `Reset-Dashboard-Login.bat` | Forgot the dashboard password or lost your two-step phone |
 | `Update-BeamMP-Server.bat` | Download the newest BeamMP server |
 | `Uninstall-BeamMP-Server.bat` | Remove everything |
 
@@ -70,6 +107,7 @@ curl -fsSL https://raw.githubusercontent.com/scheidlerbalint1103-dev/beammp-easy
 - **Laptop mode:** keeps the server running with the lid closed and stops the machine from going to sleep
 - Sets up **easy mod uploading**: a drag & drop web page, a `BeamMP-Mods` folder, and automatic restart when mods change
 - **Virus-checks every mod** and **stores your keys encrypted** (see below)
+- Installs the **web dashboard** (runs as its own limited user, separate from the game server)
 - Installs a simple `beammp` command to manage it
 
 ### Managing the server
@@ -79,7 +117,9 @@ beammp status      is it running?
 beammp logs        live server console (Ctrl+C to leave)
 beammp restart     restart (also: start / stop)
 beammp config      edit name, map, key... then auto-restart
-beammp mods        list mods + mod page address and password
+beammp dashboard   dashboard address and password
+beammp reset-login new dashboard password, turns off two-step login (lost phone)
+beammp mods        list mods
 beammp addmod F    add mod .zip file(s)
 beammp map NAME    change the map (e.g. beammp map italy)
 beammp scan        virus-check all mods again
@@ -149,15 +189,9 @@ So you can share or back up your server folder and `ServerConfig.toml` without l
 
 Mods are `.zip` files, for example from the BeamNG.drive mod repository. Players who join download them automatically.
 
-### Linux server: upload from any PC or phone at home
+### From the dashboard (Linux and Windows)
 
-The installer turns on a small **mod upload page**. On any computer or phone on your home Wi-Fi, open:
-
-```
-http://<server-ip>:30815
-```
-
-Log in (`admin` plus the password shown at the end of the install; run `beammp mods` to see it again) and **drag & drop mod zips onto the page**. Each upload is virus-checked first, and a blocked file never reaches the server. From there you can also:
+Open the dashboard's **Mods** page and **drag & drop mod zips onto it**. Each upload is virus-checked first, and a blocked file never reaches the server. From there you can also:
 - turn mods on/off without deleting them
 - delete mods
 - pick a **map mod** as the server map with one click (map mods are detected automatically)
@@ -170,7 +204,7 @@ Other ways on Linux:
 
 > The mod page is for your home network only. Do **not** port-forward port 30815.
 
-### Windows server: drag & drop onto the desktop icon
+### Windows: drag & drop onto the desktop icon
 
 Drag mod `.zip` files onto **Drop BeamMP Mods Here** on your desktop. It copies them in, offers to switch to the map if the mod contains one, and restarts the server for you. Double-clicking the icon opens the mods folder.
 
@@ -187,6 +221,22 @@ Map = "/levels/west_coast_usa/info.json"
 Built-in maps: `gridmap_v2`, `west_coast_usa`, `east_coast_usa`, `utah`, `italy`, `jungle_rock_island`, `industrial`, `small_island`, `automation_test_track`, `hirochi_raceway`, `johnson_valley`, `derby`, `driver_training`
 
 ---
+
+## 🗺️ Roadmap
+
+Ideas for future versions (not built yet):
+
+- **AI troubleshooting assistant**: reads the server log and explains errors in plain English with suggested fixes (today the Logs page has simple built-in hints)
+- **Plugin ecosystem**: let developers add their own pages and tools to the dashboard
+- More analytics: per-map statistics and mod download stats
+
+Suggestions are welcome; open an issue.
+
+## How it's built (security)
+
+- Linux: the game server runs as `beammp` and the dashboard as `beammp-dash`. Each can only touch its own files. The few admin jobs (start/stop, updates, saving encrypted keys, firewall) go through a tiny root helper that only accepts a fixed list of actions.
+- Keys are encrypted at rest (AES-256 on Linux, DPAPI on Windows) and only decrypted in memory.
+- The dashboard uses only Python's standard library: no third-party packages to keep updated.
 
 ## ❤️ Support the project
 

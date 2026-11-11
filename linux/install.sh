@@ -15,9 +15,10 @@
 # =============================================================================
 set -euo pipefail
 
-EASY_VERSION="1.0.0"
+EASY_VERSION="1.1.0"
 INSTALL_DIR="/opt/beammp-server"
 SERVICE_USER="beammp"
+DASH_USER="beammp-dash"
 SERVICE_NAME="beammp-server"
 HELPER="/usr/local/bin/beammp"
 LOGIND_DROPIN="/etc/systemd/logind.conf.d/99-beammp-easyserver.conf"
@@ -250,13 +251,18 @@ download_server() {
 }
 
 # ---- extra files from the repo -----------------------------------------------
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" 2>/dev/null && pwd || echo .)"
-fetch_file() { # fetch_file NAME DEST  - from the downloaded ZIP, or from GitHub
-  if [[ -f "$SCRIPT_DIR/$1" ]]; then
-    install -m 0644 "$SCRIPT_DIR/$1" "$2"
-  else
-    curl -fsSL --retry 3 -o "$2" "$REPO_RAW/linux/$1" || die "Could not download $1 from $REPO_RAW"
+SCRIPT_DIR=""
+if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
+fetch_file() { # fetch_file REPO/PATH DEST - from the downloaded ZIP, or from GitHub
+  local rel="$1" c
+  if [[ -n "$SCRIPT_DIR" ]]; then
+    for c in "$SCRIPT_DIR/$rel" "$SCRIPT_DIR/../$rel" "$SCRIPT_DIR/$(basename "$rel")"; do
+      if [[ -f "$c" ]]; then install -m 0644 "$c" "$2"; return 0; fi
+    done
   fi
+  curl -fsSL --retry 3 -o "$2" "$REPO_RAW/$rel" || die "Could not download $rel from $REPO_RAW"
 }
 
 # ---- encrypted key storage -----------------------------------------------------
@@ -268,7 +274,7 @@ setup_secrets() {
   mkdir -p "$ES_DIR" "$SECRETS_KEY_DIR" "$STATE_DIR" "$DATA_DIR"
   chown root:root "$ES_DIR" "$SECRETS_KEY_DIR" "$STATE_DIR"
   chmod 755 "$ES_DIR" "$SECRETS_KEY_DIR"; chmod 700 "$STATE_DIR"
-  chown "$SERVICE_USER:$SERVICE_USER" "$DATA_DIR"; chmod 750 "$DATA_DIR"
+  chown "$DASH_USER:$DASH_USER" "$DATA_DIR"; chmod 750 "$DATA_DIR"
   if [[ ! -s "$SECRETS_KEY_DIR/master.key" ]]; then
     ( umask 077; openssl rand -hex 32 >"$SECRETS_KEY_DIR/master.key" )
   fi
@@ -305,19 +311,21 @@ SECRETS_EOF
   # Starts the server / mod page as the beammp user with the keys in memory only
   cat >"$ES_DIR/launch.sh" <<'LAUNCH_EOF'
 #!/usr/bin/env bash
-# Started by systemd as root: decrypts keys into memory, then drops to the
-# unprivileged "beammp" user. Keys never touch the disk unencrypted.
+# Started by systemd as root: decrypts keys into memory, then drops to an
+# unprivileged user ("beammp" for the game server, "beammp-dash" for the
+# dashboard). Keys never touch the disk unencrypted.
 set -euo pipefail
 DIR=/opt/beammp-server; ES=/usr/local/lib/beammp-easyserver
 SEC() { "$ES/secrets.sh" get "$1" 2>/dev/null || true; }
-DROP=(setpriv --reuid=beammp --regid=beammp --init-groups --)
+AS_SERVER=(setpriv --reuid=beammp --regid=beammp --init-groups --)
+AS_DASH=(setpriv --reuid=beammp-dash --regid=beammp-dash --init-groups --)
 export HOME=$DIR PATH=/usr/local/bin:/usr/bin:/bin LANG=C.UTF-8 BEAMMP_DIR=$DIR
 export MODSCAN_CACHE=$DIR/.easyserver/scancache.json
-v=$(SEC VT_API_KEY); [[ -n "$v" ]] && export VT_API_KEY="$v"
 case "${1:-}" in
   server)
     # safety check of all mods before players can download them
-    "${DROP[@]}" python3 "$ES/modscan.py" --sweep "$DIR/Resources/Client" "$DIR/Resources/Quarantine" || true
+    v=$(SEC VT_API_KEY); [[ -n "$v" ]] && export VT_API_KEY="$v"
+    "${AS_DASH[@]}" python3 "$ES/dashboard/modscan.py" --sweep "$DIR/Resources/Client" "$DIR/Resources/Quarantine" || true
     unset VT_API_KEY
     # The BeamMP server rewrites its config file (including the AuthKey) when
     # it starts. So it gets a copy in /run, which is RAM only and vanishes on
@@ -335,14 +343,21 @@ case "${1:-}" in
     [[ -e /proc/net/if_inet6 ]] || sed -i -E 's|^([[:space:]]*IP[[:space:]]*=).*|\1 "0.0.0.0"|' "$tmp"
     chown beammp:beammp "$tmp"; chmod 600 "$tmp"; mv -f "$tmp" "$RUN/ServerConfig.toml"
     cd "$DIR"
-    exec "${DROP[@]}" ./BeamMP-Server --config="$RUN/ServerConfig.toml" ;;
-  mods)
-    v=$(SEC MODS_PASSWORD); [[ -n "$v" ]] && export MODS_PASSWORD="$v"
+    exec "${AS_SERVER[@]}" ./BeamMP-Server --config="$RUN/ServerConfig.toml" ;;
+  dashboard|mods)
+    for n in MODS_PASSWORD VT_API_KEY DISCORD_WEBHOOK SMTP_PASSWORD TOTP_SECRET; do
+      v=$(SEC "$n"); [[ -n "$v" ]] && export "$n=$v"
+    done
     unset v
+    if "$ES/secrets.sh" has BEAMMP_AUTH_KEY; then export HAS_AUTH_KEY=1; fi
+    # request/answer folders for the root helper (RAM only)
+    mkdir -p /run/beammp-easyserver-ctl /run/beammp-easyserver-ctl-out
+    chown beammp-dash:beammp-dash /run/beammp-easyserver-ctl; chmod 700 /run/beammp-easyserver-ctl
+    chown root:root /run/beammp-easyserver-ctl-out; chmod 755 /run/beammp-easyserver-ctl-out
     cd "$DIR"
     umask 0002
-    exec "${DROP[@]}" python3 "$ES/modmanager.py" ;;
-  *) echo "usage: launch.sh server|mods" >&2; exit 1 ;;
+    exec "${AS_DASH[@]}" python3 "$ES/dashboard/dashboard.py" ;;
+  *) echo "usage: launch.sh server|dashboard" >&2; exit 1 ;;
 esac
 LAUNCH_EOF
   chown root:root "$ES_DIR/launch.sh"; chmod 700 "$ES_DIR/launch.sh"
@@ -570,10 +585,10 @@ case "${1:-help}" in
            [[ $found == 1 ]] || echo "  (none yet)"
            echo
            echo "Add mods:"
-           if systemctl is-active --quiet beammp-mods; then
+           if systemctl is-active --quiet beammp-dashboard; then
              conf=/etc/beammp-easyserver/modmanager.conf
              p=$(sed -n 's/^port *= *//p' "$conf"); pw=$(sudo /usr/local/lib/beammp-easyserver/secrets.sh get MODS_PASSWORD)
-             echo "  Web page:  http://$(hostname -I | awk '{print $1}'):${p:-30815}   login: admin / $pw"
+             echo "  Dashboard: http://$(hostname -I | awk '{print $1}'):${p:-30815}   password: $pw"
            fi
            echo "  Folder:    ~/BeamMP-Mods   ($DIR/Resources/Client)"
            echo "  Command:   beammp addmod file1.zip file2.zip ..."
@@ -590,8 +605,9 @@ case "${1:-help}" in
              install -m 0664 -o beammp -g beammp "$f" "$tmp"
              echo "Checking $(basename "$f") for viruses..."
              vt=$(/usr/local/lib/beammp-easyserver/secrets.sh get VT_API_KEY 2>/dev/null || true)
-             if ! VT_API_KEY="$vt" MODSCAN_CACHE="$DIR/.easyserver/scancache.json" HOME="$DIR" setpriv --reuid=beammp --regid=beammp --init-groups -- \
-                  python3 /usr/local/lib/beammp-easyserver/modscan.py "$tmp"; then
+             chown beammp-dash "$tmp"
+             if ! VT_API_KEY="$vt" MODSCAN_CACHE="$DIR/.easyserver/scancache.json" HOME="$DIR" setpriv --reuid=beammp-dash --regid=beammp-dash --init-groups -- \
+                  python3 /usr/local/lib/beammp-easyserver/dashboard/modscan.py "$tmp"; then
                rm -f "$tmp"; echo "NOT added: $(basename "$f") failed the safety check."; continue
              fi
              unset vt
@@ -637,21 +653,47 @@ PYEOF
            if [[ "$k" == "off" ]]; then /usr/local/lib/beammp-easyserver/secrets.sh unset VT_API_KEY; echo "VirusTotal check turned off."
            elif [[ "$k" =~ ^[a-f0-9]{64}$ ]]; then printf '%s\n' "$k" | /usr/local/lib/beammp-easyserver/secrets.sh set VT_API_KEY; echo "Saved encrypted (****${k: -4})."
            else echo "That doesn't look like a VirusTotal key (64 letters/numbers)."; exit 1; fi
-           systemctl try-restart beammp-mods 2>/dev/null || true;;
+           systemctl try-restart beammp-dashboard 2>/dev/null || true;;
+  dashboard) conf=/etc/beammp-easyserver/modmanager.conf
+           p=$(sed -n 's/^port *= *//p' "$conf" 2>/dev/null); proto=http
+           if sudo grep -q '"https": true' "$DIR/.easyserver/dashboard.json" 2>/dev/null; then proto=https; fi
+           echo "Dashboard: $proto://$(hostname -I | awk '{print $1}'):${p:-30815}"
+           echo "Password:  $(sudo /usr/local/lib/beammp-easyserver/secrets.sh get MODS_PASSWORD)"
+           systemctl is-active --quiet beammp-dashboard || echo "(the dashboard is not running - start it: sudo systemctl start beammp-dashboard)";;
+  reset-login) need_root "$@"
+           echo "This sets a new dashboard password, turns off two-step login and internet access."
+           read -r -s -p "New dashboard password (min. 8 characters): " k </dev/tty; echo
+           [[ ${#k} -ge 8 ]] || { echo "Too short."; exit 1; }
+           printf '%s\n' "$k" | /usr/local/lib/beammp-easyserver/secrets.sh set MODS_PASSWORD
+           /usr/local/lib/beammp-easyserver/secrets.sh unset TOTP_SECRET
+           f="$DIR/.easyserver/dashboard.json"
+           if [[ -f "$f" ]]; then
+             python3 - "$f" <<'PYEOF'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d["remote_enabled"] = False
+json.dump(d, open(p, "w"), indent=1)
+PYEOF
+           fi
+           systemctl restart beammp-dashboard
+           echo "Done. Log in with the new password.";;
   scan)    need_root "$@"
            vt=$(/usr/local/lib/beammp-easyserver/secrets.sh get VT_API_KEY 2>/dev/null || true)
            shift || true
            targets=("$@"); [[ ${#targets[@]} -gt 0 ]] || targets=("$DIR"/Resources/Client/*.zip)
            [[ -e "${targets[0]}" ]] || { echo "No mods to check."; exit 0; }
-           VT_API_KEY="$vt" MODSCAN_CACHE="$DIR/.easyserver/scancache.json" HOME="$DIR" setpriv --reuid=beammp --regid=beammp --init-groups -- \
-             python3 /usr/local/lib/beammp-easyserver/modscan.py "${targets[@]}" || true
+           VT_API_KEY="$vt" MODSCAN_CACHE="$DIR/.easyserver/scancache.json" HOME="$DIR" setpriv --reuid=beammp-dash --regid=beammp-dash --init-groups -- \
+             python3 /usr/local/lib/beammp-easyserver/dashboard/modscan.py "${targets[@]}" || true
            echo; echo "Blocked mods are kept in $DIR/Resources/Quarantine";;
   ip)      echo "LAN address:    $(hostname -I | awk '{print $1}')"
            echo "Public address: $(curl -fsS --max-time 5 https://api.ipify.org || echo unknown)";;
   uninstall) need_root "$@"
            systemctl disable --now "$SVC" 2>/dev/null || true
-           systemctl disable --now beammp-mods beammp-mods-apply.path 2>/dev/null || true
+           systemctl disable --now beammp-mods beammp-dashboard beammp-mods-apply.path beammp-control.path 2>/dev/null || true
            rm -f "/etc/systemd/system/$SVC.service" /etc/systemd/system/beammp-mods.service \
+                 /etc/systemd/system/beammp-dashboard.service /etc/systemd/system/beammp-control.service \
+                 /etc/systemd/system/beammp-control.path \
                  /etc/systemd/system/beammp-mods-apply.service /etc/systemd/system/beammp-mods-apply.path
            systemctl daemon-reload
            for h in /home/*/BeamMP-Mods /home/*/*/BeamMP-Mods; do [[ -L "$h" ]] && rm -f "$h"; done
@@ -661,7 +703,7 @@ PYEOF
              systemctl kill -s HUP systemd-logind 2>/dev/null || true
            fi
            read -r -p "Also delete the server folder with your config and mods ($DIR)? (y/N): " a </dev/tty || a=n
-           if [[ "$a" =~ ^[Yy] ]]; then rm -rf "$DIR"; userdel beammp 2>/dev/null || true; fi
+           if [[ "$a" =~ ^[Yy] ]]; then rm -rf "$DIR"; userdel beammp-dash 2>/dev/null || true; userdel beammp 2>/dev/null || true; fi
            rm -rf /usr/local/lib/beammp-easyserver
            if [[ ! -d "$DIR" ]]; then rm -rf /etc/beammp-easyserver /var/lib/beammp-easyserver
            else echo "Your encrypted keys are kept in /var/lib/beammp-easyserver (delete it to remove them)."; fi
@@ -679,6 +721,8 @@ BeamMP EasyServer - commands:
   beammp scan       virus-check all mods again
   beammp key        change your BeamMP AuthKey (stored encrypted)
   beammp virustotal set/remove the VirusTotal key (stored encrypted)
+  beammp dashboard  dashboard address and password
+  beammp reset-login  new dashboard password, turns off two-step login (lost phone)
   beammp ip         addresses your friends connect to
   beammp update     download the newest BeamMP server
   beammp uninstall  remove everything
@@ -690,7 +734,7 @@ HELPER_EOF
   ok "Installed the 'beammp' command"
 }
 
-# ---- easy mods: drop folder, auto-apply, web upload page ---------------------
+# ---- dashboard, easy mods, auto-apply ----------------------------------------
 desktop_user() { # the normal user who ran sudo
   local u="${SUDO_USER:-}"
   [[ -z "$u" && -n "${PKEXEC_UID:-}" ]] && u=$(id -nu "$PKEXEC_UID" 2>/dev/null || true)
@@ -699,9 +743,10 @@ desktop_user() { # the normal user who ran sudo
 }
 
 install_mods() {
-  step "Setting up easy mod uploading"
+  step "Setting up the dashboard and easy mod uploading"
   local es="$ES_DIR"
-  mkdir -p "$INSTALL_DIR/Resources/Client-disabled"
+  mkdir -p "$INSTALL_DIR/Resources/Client-disabled" "$INSTALL_DIR/Resources/Quarantine" \
+           "$INSTALL_DIR/Resources/Server/EasyServerStats" "$es/dashboard"
 
   # Mods folder: group-writable so your own user can drop files in it
   chgrp "$SERVICE_USER" "$INSTALL_DIR/Resources/Client" "$INSTALL_DIR/Resources/Client-disabled"
@@ -726,7 +771,7 @@ install_mods() {
   # Auto-apply: restart the server ~15 s after the mods (or map) change
   cat >"$es/apply.sh" <<'APPLY_EOF'
 #!/usr/bin/env bash
-# Restarts the BeamMP server when mods or the map really changed.
+# Restarts the BeamMP server when mods or settings really changed.
 # "apply.sh --record" only saves the current state (used by the installer).
 [[ "${1:-}" == "--record" ]] || sleep 15
 DIR=/opt/beammp-server
@@ -735,13 +780,13 @@ if [[ "${1:-}" != "--record" ]]; then
   VT=$(/usr/local/lib/beammp-easyserver/secrets.sh get VT_API_KEY 2>/dev/null || true)
   [[ -n "$VT" ]] && export VT_API_KEY="$VT"
   export MODSCAN_CACHE=$DIR/.easyserver/scancache.json HOME=$DIR
-  setpriv --reuid=beammp --regid=beammp --init-groups -- \
-    python3 /usr/local/lib/beammp-easyserver/modscan.py --sweep "$DIR/Resources/Client" "$DIR/Resources/Quarantine" || true
+  setpriv --reuid=beammp-dash --regid=beammp-dash --init-groups -- \
+    python3 /usr/local/lib/beammp-easyserver/dashboard/modscan.py --sweep "$DIR/Resources/Client" "$DIR/Resources/Quarantine" || true
   unset VT_API_KEY VT
 fi
 STATE=/var/lib/beammp-easyserver/applied
-# only the mod zips count (the server writes its own mods.json in there)
-NOW=$( { ls -l --time-style=+%s "$DIR"/Resources/Client/*.zip 2>/dev/null; grep -E '^\s*Map\s*=' "$DIR/ServerConfig.toml" 2>/dev/null; } | md5sum | cut -d' ' -f1)
+# only the mod zips and the config count (the server writes its own mods.json)
+NOW=$( { ls -l --time-style=+%s "$DIR"/Resources/Client/*.zip 2>/dev/null; cat "$DIR/ServerConfig.toml" 2>/dev/null; } | md5sum | cut -d' ' -f1)
 [[ "${1:-}" == "--record" ]] && { echo "$NOW" > "$STATE"; exit 0; }
 [[ -f "$STATE" && "$(cat "$STATE")" == "$NOW" ]] && exit 0
 echo "$NOW" > "$STATE"
@@ -766,14 +811,23 @@ PathChanged=$INSTALL_DIR/ServerConfig.toml
 WantedBy=multi-user.target
 EOF
 
-  # Web upload page
+  # Web dashboard
   local page="$OPT_MODPAGE"
   if [[ -z "$page" ]]; then
-    echo "  The mod page lets you drag & drop mods from any PC or phone on your home network."
-    if ask_yn "Turn on the mod upload web page?" Y; then page="yes"; else page="no"; fi
+    echo "  The dashboard lets you manage the server and drag & drop mods from any PC or phone."
+    if ask_yn "Turn on the web dashboard?" Y; then page="yes"; else page="no"; fi
   fi
 
-  fetch_file modmanager.py "$es/modmanager.py"
+  local f
+  for f in dashboard.py webui.html modscan.py tlsgen.py; do
+    fetch_file "dashboard/$f" "$es/dashboard/$f"
+  done
+  fetch_file "linux/control.py" "$es/control.py"
+  rm -f "$es/modmanager.py" "$es/modscan.py"
+  # player statistics plugin (runs inside the BeamMP server)
+  fetch_file "dashboard/EasyServerStats/main.lua" "$INSTALL_DIR/Resources/Server/EasyServerStats/main.lua"
+  chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR/Resources/Server/EasyServerStats"
+  chmod 2775 "$INSTALL_DIR/Resources/Server/EasyServerStats"
 
   local conf="$SECRETS_KEY_DIR/modmanager.conf"
   [[ -f "$conf" ]] || printf 'port = %s\nuser = admin\n' "$MODS_PORT" >"$conf"
@@ -785,10 +839,13 @@ EOF
   fi
   MODS_PORT=$(sed -n 's/^port *= *//p' "$conf"); MODS_PORT=${MODS_PORT:-30815}
   MODS_PASS=$("$ES_DIR/secrets.sh" get MODS_PASSWORD)
-  mkdir -p "$INSTALL_DIR/Resources/Quarantine"
-  chown "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR/Resources/Quarantine"
+  chown "$DASH_USER:$SERVICE_USER" "$INSTALL_DIR/Resources/Quarantine"
+  chmod 2775 "$INSTALL_DIR/Resources/Quarantine"
+  chown -R "$DASH_USER:$DASH_USER" "$DATA_DIR"; chmod 750 "$DATA_DIR"
+  [[ -f "$INSTALL_DIR/ServerConfig.toml" ]] && chmod 660 "$INSTALL_DIR/ServerConfig.toml"
   chown -R root:root "$es"
-  chmod 644 "$es"/*.py; chmod 755 "$es/apply.sh"; chmod 700 "$es/secrets.sh" "$es/launch.sh"
+  chmod 755 "$es/dashboard"; chmod 644 "$es/dashboard"/*
+  chmod 755 "$es/apply.sh"; chmod 700 "$es/secrets.sh" "$es/launch.sh" "$es/control.py"
   chmod 644 "$conf"
 
   # Virus check: VirusTotal (optional, free account)
@@ -810,27 +867,48 @@ EOF
     fi
   fi
 
-  cat >/etc/systemd/system/beammp-mods.service <<EOF
+  # older versions had a separate mod page service
+  if [[ -f /etc/systemd/system/beammp-mods.service ]]; then
+    systemctl disable --now beammp-mods >/dev/null 2>&1 || true
+    rm -f /etc/systemd/system/beammp-mods.service
+  fi
+  cat >/etc/systemd/system/beammp-dashboard.service <<EOF
 [Unit]
-Description=BeamMP mod upload page (BeamMP EasyServer)
+Description=BeamMP dashboard (BeamMP EasyServer)
 After=network-online.target
 Wants=network-online.target
 [Service]
-ExecStart=$ES_DIR/launch.sh mods
+ExecStart=$ES_DIR/launch.sh dashboard
 Restart=on-failure
 RestartSec=5
-NoNewPrivileges=true
+[Install]
+WantedBy=multi-user.target
+EOF
+  # root helper: does only a fixed list of jobs the dashboard asks for
+  cat >/etc/systemd/system/beammp-control.service <<EOF
+[Unit]
+Description=BeamMP dashboard helper (BeamMP EasyServer)
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env python3 $ES_DIR/control.py
+EOF
+  cat >/etc/systemd/system/beammp-control.path <<EOF
+[Unit]
+Description=Watch for BeamMP dashboard requests (BeamMP EasyServer)
+[Path]
+PathExistsGlob=/run/beammp-easyserver-ctl/*.req
 [Install]
 WantedBy=multi-user.target
 EOF
   systemctl daemon-reload
+  systemctl enable --now beammp-control.path >/dev/null 2>&1
   "$es/apply.sh" --record || true
   systemctl enable --now beammp-mods-apply.path >/dev/null 2>&1
   ok "Server restarts automatically ~15 seconds after mods change"
 
   if [[ "$page" == "yes" ]]; then
-    systemctl enable beammp-mods >/dev/null 2>&1
-    systemctl restart beammp-mods
+    systemctl enable beammp-dashboard >/dev/null 2>&1
+    systemctl restart beammp-dashboard
     # open the port for the home network only (never forward this one!)
     local ufw_state=""
     command -v ufw >/dev/null && ufw_state=$(ufw status 2>/dev/null || true)
@@ -842,9 +920,9 @@ EOF
       firewall-cmd --permanent --add-port="$MODS_PORT"/tcp >/dev/null; firewall-cmd --reload >/dev/null
     fi
     MODPAGE_ON=1
-    ok "Mod upload page is on (port $MODS_PORT, home network only)"
+    ok "Dashboard is on (port $MODS_PORT, home network only unless you allow more)"
   else
-    systemctl disable --now beammp-mods >/dev/null 2>&1 || true
+    systemctl disable --now beammp-dashboard >/dev/null 2>&1 || true
     MODPAGE_ON=0
   fi
 }
@@ -878,6 +956,11 @@ install_deps
 step "Creating the server user and folder"
 id "$SERVICE_USER" >/dev/null 2>&1 || \
   useradd --system --home-dir "$INSTALL_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
+# separate user for the dashboard, so the game server can't control it
+id "$DASH_USER" >/dev/null 2>&1 || \
+  useradd --system --user-group --no-create-home --home-dir "$INSTALL_DIR/.easyserver" \
+          --shell /usr/sbin/nologin "$DASH_USER"
+usermod -aG "$SERVICE_USER" "$DASH_USER"
 mkdir -p "$INSTALL_DIR/Resources/Client" "$INSTALL_DIR/Resources/Server"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
 ok "$INSTALL_DIR"
@@ -887,8 +970,6 @@ systemctl stop "$SERVICE_NAME" 2>/dev/null || true
 download_server
 fix_lua_link
 setup_secrets
-fetch_file modscan.py "$ES_DIR/modscan.py"
-chmod 644 "$ES_DIR/modscan.py"
 configure
 prep_machine
 install_service
@@ -917,15 +998,19 @@ ${C_GREEN}${C_BOLD}  All done!${C_RESET}
     -> for internet play, forward port ${PORT} (TCP + UDP) on your router
        to ${LAN_IP:-this computer}. Search "<your router model> port forwarding".
 
-${C_BOLD}  Adding mods:${C_RESET}
+${C_BOLD}  Dashboard (manage everything from any PC or phone):${C_RESET}
 EOF
 if [[ "$MODPAGE_ON" == 1 ]]; then
 cat <<EOF
-    From any PC/phone at home, open:  ${C_BOLD}http://${LAN_IP:-this-computer}:${MODS_PORT}${C_RESET}
-    Login: ${C_BOLD}admin${C_RESET} / password: ${C_BOLD}${MODS_PASS}${C_RESET}   (see it again: beammp mods)
+    Open:      ${C_BOLD}http://${LAN_IP:-this-computer}:${MODS_PORT}${C_RESET}
+    Password:  ${C_BOLD}${MODS_PASS}${C_RESET}   (see it again: beammp dashboard)
+    Config editor, mods, player stats, network check, updates, notifications...
 EOF
 fi
 cat <<EOF
+
+${C_BOLD}  Adding mods:${C_RESET}
+    Drag & drop them onto the dashboard's Mods page
     On this computer: drop .zip files into the ${C_BOLD}BeamMP-Mods${C_RESET} folder in your home folder
     Or: beammp addmod ~/Downloads/some_mod.zip
     The server restarts by itself ~15 seconds after mods change.

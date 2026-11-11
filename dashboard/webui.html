@@ -1,0 +1,736 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>BeamMP Dashboard</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232a78d6'/%3E%3Ctext x='16' y='22' font-family='Arial' font-size='18' font-weight='700' fill='white' text-anchor='middle'%3EB%3C/text%3E%3C/svg%3E">
+<style nonce="__NONCE__">
+:root{
+  --bg:#f4f4f2;--surface:#fcfcfb;--surface-2:#f0efec;--line:#e2e1dc;--line-strong:#cfcec8;
+  --text:#0b0b0b;--text-2:#52514e;--muted:#7a7974;
+  --accent:#2a78d6;--accent-ink:#ffffff;--accent-soft:#e3eefb;
+  --good:#0ca30c;--warning:#fab219;--serious:#ec835a;--critical:#d03b3b;
+  --good-ink:#006300;--warn-ink:#8a5a00;--crit-ink:#b42323;
+  --shadow:0 1px 2px rgba(0,0,0,.05),0 2px 8px rgba(0,0,0,.04);
+  --r:12px;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --heat-0:#cde2fb;--heat-1:#9ec5f4;--heat-2:#6da7ec;--heat-3:#3987e5;--heat-4:#256abf;--heat-5:#184f95;--heat-6:#0d366b;
+}
+html[data-theme=dark]{
+  --bg:#121211;--surface:#1a1a19;--surface-2:#232321;--line:#2e2e2b;--line-strong:#3c3c38;
+  --text:#f0efec;--text-2:#c3c2b7;--muted:#8e8d86;
+  --accent:#3987e5;--accent-ink:#ffffff;--accent-soft:#1b2c42;
+  --good-ink:#4cc94c;--warn-ink:#f6c344;--crit-ink:#f07070;
+  --shadow:none;
+  --heat-0:#0d366b;--heat-1:#104281;--heat-2:#184f95;--heat-3:#256abf;--heat-4:#3987e5;--heat-5:#6da7ec;--heat-6:#9ec5f4;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{font:14.5px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased}
+a{color:var(--accent)}
+button,input,select,textarea{font:inherit;color:inherit}
+.hidden{display:none!important}
+/* layout */
+.app{display:grid;grid-template-columns:232px 1fr;min-height:100vh}
+.app>div{min-width:0}
+.card.tight{overflow-x:auto}
+.heat{min-width:0}
+.side{background:var(--surface);border-right:1px solid var(--line);padding:18px 12px;position:sticky;top:0;height:100vh;display:flex;flex-direction:column;gap:2px}
+.brand{display:flex;align-items:center;gap:10px;padding:4px 10px 18px;font-weight:650;letter-spacing:-.01em}
+.brand .logo{width:28px;height:28px;border-radius:8px;background:var(--accent);display:grid;place-items:center;color:#fff;font-size:15px}
+.brand small{display:block;font-weight:400;color:var(--muted);font-size:12px}
+.nav{all:unset;display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;color:var(--text-2);cursor:pointer;position:relative}
+.nav:hover{background:var(--surface-2);color:var(--text)}
+.nav.active{background:var(--accent-soft);color:var(--text);font-weight:600}
+.nav svg{width:18px;height:18px;flex:none}
+.nav .count{margin-left:auto;background:var(--critical);color:#fff;border-radius:99px;font-size:11px;padding:0 7px;font-weight:600}
+.side .grow{flex:1}
+.side .foot{display:flex;gap:6px;padding:8px 4px 0;border-top:1px solid var(--line);margin-top:8px}
+main{padding:28px clamp(16px,3vw,40px) 60px;max-width:1180px;width:100%}
+h1{font-size:22px;margin:0 0 4px;letter-spacing:-.015em}
+h2{font-size:15px;margin:0 0 12px;letter-spacing:-.005em}
+.sub{color:var(--text-2);margin:0 0 22px}
+.grid{display:grid;gap:16px}
+.g2{grid-template-columns:repeat(2,minmax(0,1fr))}.g3{grid-template-columns:repeat(3,minmax(0,1fr))}.g4{grid-template-columns:repeat(4,minmax(0,1fr))}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:18px;box-shadow:var(--shadow);min-width:0}
+.card.tight{padding:0;overflow:hidden}
+.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.spacer{flex:1}
+.muted{color:var(--muted)}.small{font-size:12.5px}.mono{font-family:var(--mono);font-size:12.5px}
+/* stat tiles */
+.stat .label{color:var(--text-2);font-size:12.5px;margin-bottom:6px}
+.stat .value{font-size:26px;font-weight:650;letter-spacing:-.02em;line-height:1.1;font-variant-numeric:tabular-nums}
+.stat .note{color:var(--muted);font-size:12.5px;margin-top:4px}
+/* status pill */
+.pill{display:inline-flex;align-items:center;gap:6px;border-radius:99px;padding:3px 10px;font-size:12.5px;font-weight:600;border:1px solid var(--line);background:var(--surface-2);color:var(--text-2);white-space:nowrap}
+.pill .dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
+.pill.good .dot{background:var(--good)}.pill.good{color:var(--good-ink)}
+.pill.warn .dot{background:var(--warning)}.pill.warn{color:var(--warn-ink)}
+.pill.bad .dot{background:var(--critical)}.pill.bad{color:var(--crit-ink)}
+/* buttons */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:1px solid var(--line-strong);background:var(--surface);border-radius:8px;padding:7px 13px;cursor:pointer;font-weight:550;white-space:nowrap}
+.btn:hover{border-color:var(--text-2)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn.primary:hover{filter:brightness(1.08)}
+.btn.danger{color:var(--crit-ink)}.btn.danger:hover{border-color:var(--critical)}
+.btn.ghost{border-color:transparent;background:transparent}.btn.ghost:hover{background:var(--surface-2)}
+.btn.sm{padding:4px 10px;font-size:13px}
+.btn:disabled{opacity:.55;cursor:default}
+.iconbtn{all:unset;cursor:pointer;width:34px;height:34px;border-radius:8px;display:grid;place-items:center;color:var(--text-2)}
+.iconbtn:hover{background:var(--surface-2);color:var(--text)}
+.iconbtn svg{width:18px;height:18px}
+/* forms */
+label.f{display:block;margin-bottom:14px}
+label.f>span{display:block;font-weight:550;margin-bottom:5px}
+label.f>small{display:block;color:var(--muted);font-size:12.5px;margin-top:4px}
+input[type=text],input[type=password],input[type=number],input[type=email],select,textarea{width:100%;background:var(--surface);border:1px solid var(--line-strong);border-radius:8px;padding:8px 10px;outline:none}
+input:focus,select:focus,textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+textarea{font-family:var(--mono);font-size:13px;line-height:1.55;min-height:420px;resize:vertical;tab-size:4}
+.toggle{display:flex;align-items:flex-start;gap:12px;padding:10px 0;border-bottom:1px solid var(--line);cursor:pointer}
+.toggle:last-child{border-bottom:0}
+.toggle input{appearance:none;width:38px;height:22px;border-radius:99px;background:var(--line-strong);position:relative;flex:none;cursor:pointer;margin:1px 0 0;transition:background .15s}
+.toggle input::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;transition:transform .15s;box-shadow:0 1px 2px rgba(0,0,0,.2)}
+.toggle input:checked{background:var(--accent)}.toggle input:checked::after{transform:translateX(16px)}
+.toggle b{display:block;font-weight:550}.toggle small{color:var(--muted)}
+.seg{display:inline-flex;border:1px solid var(--line-strong);border-radius:8px;overflow:hidden}
+.seg button{all:unset;padding:6px 12px;cursor:pointer;color:var(--text-2);font-size:13px}
+.seg button.on{background:var(--accent-soft);color:var(--text);font-weight:600}
+/* lists & tables */
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:9px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:12px;font-weight:600;color:var(--text-2);background:var(--surface-2)}
+tr:last-child td{border-bottom:0}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+.issue{display:flex;gap:10px;padding:9px 12px;border-radius:8px;background:var(--surface-2);margin-bottom:6px;font-size:13.5px}
+.issue .ic{flex:none;font-weight:700;width:18px;text-align:center}
+.issue.error .ic{color:var(--crit-ink)}.issue.warning .ic{color:var(--warn-ink)}.issue.info .ic{color:var(--accent)}
+.issue .ln{margin-left:auto;color:var(--muted);font-size:12px;white-space:nowrap}
+.banner{display:flex;gap:12px;align-items:center;padding:12px 16px;border-radius:10px;border:1px solid var(--line);background:var(--surface);margin-bottom:16px}
+.banner.warn{border-color:var(--warning)}.banner.bad{border-color:var(--critical)}.banner.info{border-color:var(--accent)}
+.badge{display:inline-block;font-size:11.5px;font-weight:600;border-radius:99px;padding:1px 8px;background:var(--surface-2);color:var(--text-2);margin-left:6px;vertical-align:1px}
+.badge.good{color:var(--good-ink)}.badge.warn{color:var(--warn-ink)}.badge.bad{color:var(--crit-ink)}
+/* drop zone */
+.drop{border:2px dashed var(--line-strong);border-radius:var(--r);padding:34px 16px;text-align:center;cursor:pointer;background:var(--surface);transition:.15s}
+.drop.over{border-color:var(--accent);background:var(--accent-soft)}
+.bar{height:6px;background:var(--surface-2);border-radius:3px;overflow:hidden;margin-top:6px}.bar i{display:block;height:100%;width:0;background:var(--accent)}
+/* logs */
+.log{font-family:var(--mono);font-size:12.5px;line-height:1.55;background:var(--surface-2);border-radius:10px;padding:12px 14px;height:520px;overflow:auto;white-space:pre-wrap;word-break:break-word}
+.log .e{color:var(--crit-ink)}.log .w{color:var(--warn-ink)}
+/* checks */
+.check{display:flex;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line)}
+.check:last-child{border-bottom:0}
+.check .mark{width:22px;height:22px;border-radius:50%;flex:none;display:grid;place-items:center;font-size:12px;font-weight:700;color:#fff;margin-top:1px}
+.mark.ok{background:var(--good)}.mark.bad{background:var(--critical)}.mark.warn{background:var(--warning);color:#3a2a00}.mark.info{background:var(--accent)}
+/* charts */
+.chart{position:relative}
+.chart svg{display:block;width:100%;overflow:visible}
+.chart .axis text{fill:var(--muted);font-size:11px}
+.chart .grid line{stroke:var(--line)}
+.chart .bars rect{fill:var(--accent)}
+.chart .bars rect.hit{fill:transparent}
+.chart .bars rect.dim{opacity:.35}
+.tip{position:absolute;pointer-events:none;background:var(--text);color:var(--surface);border-radius:8px;padding:6px 10px;font-size:12.5px;white-space:nowrap;transform:translate(-50%,-110%);z-index:5;box-shadow:0 4px 14px rgba(0,0,0,.18)}
+.heat{display:grid;grid-template-columns:34px repeat(24,minmax(0,1fr));gap:2px;align-items:center}
+.heat .c{aspect-ratio:1/1;border-radius:3px;background:var(--surface-2);position:relative}
+.heat .lab{font-size:11px;color:var(--muted);text-align:center}
+.heat .rl{text-align:left}
+.legend{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);margin-top:10px}
+.legend i{width:18px;height:10px;border-radius:2px;display:inline-block}
+/* notifications */
+.notif{display:flex;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line)}
+.notif:last-child{border-bottom:0}
+.notif.unread{background:var(--accent-soft)}
+.notif .lv{width:4px;border-radius:2px;flex:none;background:var(--accent)}
+.notif .lv.error{background:var(--critical)}.notif .lv.warning{background:var(--warning)}.notif .lv.success{background:var(--good)}
+/* auth screens */
+.center{min-height:100vh;display:grid;place-items:center;padding:20px}
+.authcard{width:100%;max-width:380px}
+.authcard .logo{width:44px;height:44px;border-radius:12px;background:var(--accent);display:grid;place-items:center;color:#fff;font-size:22px;margin-bottom:14px}
+#toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--text);color:var(--surface);padding:10px 16px;border-radius:10px;font-weight:500;z-index:50;max-width:92vw;box-shadow:0 6px 24px rgba(0,0,0,.2)}
+.secret{font-family:var(--mono);font-size:16px;letter-spacing:.06em;background:var(--surface-2);padding:10px 12px;border-radius:8px;text-align:center;user-select:all}
+.mobilebar{display:none}
+@media (max-width:860px){
+  .app{grid-template-columns:1fr}
+  .side{display:none}
+  .mobilebar{display:flex;position:sticky;top:0;z-index:10;background:var(--surface);border-bottom:1px solid var(--line);overflow-x:auto;gap:2px;padding:6px}
+  .mobilebar .nav{padding:7px 10px;white-space:nowrap}
+  .mobilebar .nav svg{display:none}
+  .g2,.g3,.g4{grid-template-columns:1fr 1fr}
+  main{padding:18px 14px 50px}
+}
+@media (max-width:520px){.g2,.g3{grid-template-columns:1fr}.g4{grid-template-columns:1fr 1fr}.stat .value{font-size:22px}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<div id="toast" class="hidden"></div>
+
+<script nonce="__NONCE__">
+"use strict";
+/* ------------------------------------------------------------------ helpers */
+const $ = (s, el = document) => el.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const h = (strings, ...vals) => strings.reduce((a, s, i) => a + s + (i < vals.length ? (vals[i] && vals[i].__raw !== undefined ? vals[i].__raw : esc(vals[i])) : ""), "");
+const raw = s => ({__raw: s});
+const store = { get(k, d) { try { return localStorage.getItem(k) ?? d; } catch (e) { return d; } }, set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} } };
+let CSRF = null, SESSION = null, TAB = "overview", TIMER = null;
+
+function toast(msg, ms = 3500) { const t = $("#toast"); t.textContent = msg; t.classList.remove("hidden"); clearTimeout(t._t); t._t = setTimeout(() => t.classList.add("hidden"), ms); }
+async function api(path, opts = {}) {
+  const o = Object.assign({ headers: {} }, opts);
+  if (o.json !== undefined) { o.method = o.method || "POST"; o.body = JSON.stringify(o.json); o.headers["Content-Type"] = "application/json"; }
+  if (o.method && o.method !== "GET" && CSRF) o.headers["X-ES-CSRF"] = CSRF;
+  const r = await fetch(path, o);
+  let data = {};
+  try { data = await r.json(); } catch (e) {}
+  if (r.status === 401 && !path.endsWith("/login")) { boot(); throw new Error("Please log in"); }
+  if (!r.ok) { const e = new Error(data.error || ("Error " + r.status)); e.data = data; e.status = r.status; throw e; }
+  return data;
+}
+const fmtSize = b => b > 1073741824 ? (b / 1073741824).toFixed(1) + " GB" : b > 1048576 ? (b / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(b / 1024)) + " KB";
+const fmtDur = s => { s = Math.max(0, s | 0); const d = Math.floor(s / 86400), hh = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60); return d ? `${d}d ${hh}h` : hh ? `${hh}h ${m}m` : `${m}m`; };
+const fmtTime = t => t ? new Date(t * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "-";
+const ago = t => { const s = Date.now() / 1000 - t; return s < 60 ? "just now" : s < 3600 ? Math.round(s / 60) + " min ago" : s < 86400 ? Math.round(s / 3600) + " h ago" : Math.round(s / 86400) + " d ago"; };
+
+/* ------------------------------------------------------------------ theme */
+function applyTheme() {
+  const pref = store.get("es-theme", "auto");
+  const dark = pref === "dark" || (pref === "auto" && matchMedia("(prefers-color-scheme: dark)").matches);
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+}
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme);
+applyTheme();
+
+/* ------------------------------------------------------------------ icons */
+const I = {
+  overview: '<path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/>',
+  config: '<path d="M19.4 13a7.6 7.6 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.4 7.4 0 0 0-1.7-1L15 3h-4l-.3 2.9a7.4 7.4 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.6 7.6 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.4 7.4 0 0 0 1.7 1L11 21h4l.3-2.9a7.4 7.4 0 0 0 1.7-1l2.5 1 2-3.5L19.4 13zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z"/>',
+  mods: '<path d="M20 6h-8l-2-2H4a2 2 0 0 0-2 2v12c0 1.1.9 2 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2zm-7 11l-4-4h3V9h2v4h3l-4 4z"/>',
+  players: '<path d="M16 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm-8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm0 2c-2.3 0-7 1.2-7 3.5V19h14v-2.5C15 14.2 10.3 13 8 13zm8 0c-.3 0-.6 0-1 .1 1.2.8 2 2 2 3.4V19h6v-2.5c0-2.3-4.7-3.5-7-3.5z"/>',
+  network: '<path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm6.9 6h-2.9a15.7 15.7 0 0 0-1.4-3.6A8 8 0 0 1 18.9 8zM12 4c.8 1.2 1.5 2.5 1.9 4h-3.8c.4-1.4 1.1-2.8 1.9-4zM4.3 14a8.2 8.2 0 0 1 0-4h3.4a16.5 16.5 0 0 0 0 4H4.3zm.8 2h2.9c.3 1.3.8 2.5 1.4 3.6A8 8 0 0 1 5.1 16zM8 8H5.1a8 8 0 0 1 4.3-3.6C8.8 5.5 8.4 6.7 8 8zm4 12c-.8-1.2-1.5-2.5-1.9-4h3.8c-.4 1.4-1.1 2.8-1.9 4zm2.3-6H9.7a14.7 14.7 0 0 1 0-4h4.6a14.7 14.7 0 0 1 0 4zm.3 5.6c.6-1.1 1.1-2.3 1.4-3.6h2.9a8 8 0 0 1-4.3 3.6zm1.7-5.6a16.5 16.5 0 0 0 0-4h3.4a8.2 8.2 0 0 1 0 4h-3.4z"/>',
+  updates: '<path d="M12 4V1L8 5l4 4V6a6 6 0 0 1 6 6 6 6 0 0 1-.7 2.8l1.5 1.5A8 8 0 0 0 12 4zm0 14a6 6 0 0 1-6-6c0-1 .3-2 .7-2.8L5.2 7.7A8 8 0 0 0 12 20v3l4-4-4-4v3z"/>',
+  logs: '<path d="M14 2H6a2 2 0 0 0-2 2v16c0 1.1.9 2 2 2h12a2 2 0 0 0 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/>',
+  notifications: '<path d="M12 22a2 2 0 0 0 2-2h-4a2 2 0 0 0 2 2zm6-6v-5c0-3.1-1.6-5.6-4.5-6.3V4a1.5 1.5 0 0 0-3 0v.7C7.6 5.4 6 7.9 6 11v5l-2 2v1h16v-1l-2-2z"/>',
+  settings: '<path d="M12 1 3 5v6c0 5.6 3.8 10.7 9 12 5.2-1.3 9-6.4 9-12V5l-9-4zm0 10.9h7c-.5 4.1-3.3 7.8-7 8.9V12H5V6.3l7-3.1v8.7z"/>',
+  sun: '<path d="M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10zM2 13h2a1 1 0 0 0 0-2H2a1 1 0 0 0 0 2zm18 0h2a1 1 0 0 0 0-2h-2a1 1 0 0 0 0 2zM11 2v2a1 1 0 0 0 2 0V2a1 1 0 0 0-2 0zm0 18v2a1 1 0 0 0 2 0v-2a1 1 0 0 0-2 0zM5.99 4.58a1 1 0 0 0-1.41 1.41l1.06 1.06a1 1 0 0 0 1.41-1.41L5.99 4.58zm12.37 12.37a1 1 0 0 0-1.41 1.41l1.06 1.06a1 1 0 0 0 1.41-1.41l-1.06-1.06zm1.06-10.96a1 1 0 0 0-1.41-1.41l-1.06 1.06a1 1 0 0 0 1.41 1.41l1.06-1.06zM7.05 18.36a1 1 0 0 0-1.41-1.41l-1.06 1.06a1 1 0 0 0 1.41 1.41l1.06-1.06z"/>',
+  moon: '<path d="M12 3a9 9 0 1 0 9 9c0-.5 0-.9-.1-1.4A5.5 5.5 0 0 1 12.4 3.1L12 3z"/>',
+  logout: '<path d="M10 17l1.4-1.4-2.6-2.6H20v-2H8.8l2.6-2.6L10 7l-5 5 5 5zM4 5h8V3H4a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/>',
+};
+const icon = n => `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">${I[n]}</svg>`;
+const TABS = [["overview","Overview"],["config","Config"],["mods","Mods"],["players","Players"],["network","Network"],["updates","Updates"],["logs","Logs"],["notifications","Notifications"],["settings","Settings"]];
+
+/* ------------------------------------------------------------------ boot / auth */
+async function boot() {
+  clearInterval(TIMER);
+  try { SESSION = await api("/api/session"); } catch (e) { $("#root").innerHTML = `<div class="center"><div class="card authcard"><h2>Can't reach the dashboard</h2><p class="muted">${esc(e.message)}</p></div></div>`; return; }
+  CSRF = SESSION.csrf;
+  if (SESSION.needs_setup) return renderSetup();
+  if (!SESSION.logged_in) return renderLogin();
+  renderShell();
+  const hash = location.hash.slice(1);
+  show(TABS.some(t => t[0] === hash) ? hash : "overview");
+}
+
+function authShell(inner) {
+  $("#root").innerHTML = `<div class="center"><div class="card authcard"><div class="logo">${esc("B")}</div>${inner}</div></div>`;
+}
+
+function renderSetup() {
+  if (!SESSION.setup_allowed) {
+    return authShell(`<h1>Almost ready</h1><p class="sub">Open this dashboard once on the server computer itself (<span class="mono">http://localhost:${esc(location.port || 30815)}</span>) to create the password.</p>`);
+  }
+  authShell(`<h1>Create a password</h1><p class="sub">You'll use it to open the dashboard from any device.</p>
+    <label class="f"><span>Password</span><input type="password" id="p1" autocomplete="new-password"><small>At least 8 characters. 12+ if you want internet access later.</small></label>
+    <label class="f"><span>Repeat password</span><input type="password" id="p2" autocomplete="new-password"></label>
+    <button class="btn primary" id="go">Create password</button>`);
+  $("#go").onclick = async () => {
+    if ($("#p1").value !== $("#p2").value) return toast("The passwords don't match");
+    try { await api("/api/setup", { json: { password: $("#p1").value } }); boot(); } catch (e) { toast(e.message); }
+  };
+}
+
+function renderLogin(needCode) {
+  needCode = needCode || SESSION.totp;
+  authShell(`<h1>BeamMP Dashboard</h1><p class="sub">Log in to manage your server.</p>
+    <form id="lf" autocomplete="on">
+    <label class="f"><span>Password</span><input type="password" id="pw" autocomplete="current-password" autofocus></label>
+    <label class="f ${needCode ? "" : "hidden"}" id="codebox"><span>Two-step code</span><input type="text" id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="123456"><small>From your authenticator app</small></label>
+    <button class="btn primary" id="go" type="submit">Log in</button>
+    <p class="small muted" id="err"></p></form>`);
+  $("#lf").onsubmit = async ev => {
+    ev.preventDefault();
+    $("#go").disabled = true;
+    try { await api("/api/login", { json: { password: $("#pw").value, code: $("#code").value } }); boot(); }
+    catch (e) { $("#err").textContent = e.message; if (e.data && e.data.need_code) $("#codebox").classList.remove("hidden"); $("#go").disabled = false; }
+  };
+}
+
+function renderShell() {
+  const navs = TABS.map(([k, label]) => `<button class="nav" data-tab="${k}">${icon(k)}<span>${label}</span>${k === "notifications" ? '<span class="count hidden" data-unread></span>' : ""}</button>`).join("");
+  $("#root").innerHTML = `<div class="app">
+    <aside class="side"><div class="brand"><div class="logo">B</div><div>BeamMP EasyServer<small>Dashboard ${esc(SESSION.version)}</small></div></div>
+      ${navs}<div class="grow"></div>
+      <div class="foot"><button class="iconbtn" id="theme" title="Light / dark mode">${icon("moon")}</button><span class="spacer"></span><button class="iconbtn" id="logout" title="Log out">${icon("logout")}</button></div>
+    </aside>
+    <div><nav class="mobilebar">${navs}<button class="nav" id="theme2">Theme</button></nav><main id="main"></main></div></div>`;
+  document.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => show(b.dataset.tab));
+  const flip = () => { const cur = document.documentElement.dataset.theme; store.set("es-theme", cur === "dark" ? "light" : "dark"); applyTheme(); setThemeIcon(); if (TAB === "players") show("players"); };
+  $("#theme").onclick = flip; $("#theme2").onclick = flip; setThemeIcon();
+  $("#logout").onclick = async () => { try { await api("/api/logout", { method: "POST" }); } catch (e) {} boot(); };
+}
+function setThemeIcon() { const b = $("#theme"); if (b) b.innerHTML = icon(document.documentElement.dataset.theme === "dark" ? "sun" : "moon"); }
+
+function show(tab) {
+  TAB = tab; clearInterval(TIMER);
+  history.replaceState(null, "", "#" + tab);
+  document.querySelectorAll("[data-tab]").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
+  const m = $("#main"); m.innerHTML = `<p class="muted">Loading…</p>`;
+  (VIEWS[tab] || VIEWS.overview)(m).catch(e => { if (e.message !== "Please log in") m.innerHTML = `<div class="banner bad">${esc(e.message)}</div>`; });
+  window.scrollTo(0, 0);
+}
+function setUnread(n) { document.querySelectorAll("[data-unread]").forEach(el => { el.textContent = n; el.classList.toggle("hidden", !n); }); }
+
+/* ------------------------------------------------------------------ status helpers */
+function statePill(state) {
+  const map = { running: ["good", "Running"], stopped: ["", "Stopped"], failed: ["bad", "Crashed"], starting: ["warn", "Starting"], restarting: ["warn", "Restarting"], stopping: ["warn", "Stopping"] };
+  const [cls, label] = map[state] || ["", state || "Unknown"];
+  return `<span class="pill ${cls}"><span class="dot"></span>${esc(label)}</span>`;
+}
+async function serverAction(action, btn) {
+  if (action !== "start" && !confirm(action === "stop" ? "Stop the server? Players will be disconnected." : "Restart the server? Players will be disconnected.")) return;
+  if (btn) btn.disabled = true;
+  try { await api("/api/server/action", { json: { action } }); toast(action === "stop" ? "Server stopped" : action === "start" ? "Server starting…" : "Server restarting…"); }
+  catch (e) { toast(e.message); }
+  setTimeout(() => show(TAB), 1500);
+}
+
+/* ------------------------------------------------------------------ views */
+const VIEWS = {};
+
+VIEWS.overview = async m => {
+  const d = await api("/api/overview");
+  setUnread(d.unread);
+  const s = d.status, online = d.online || [];
+  const banners = [];
+  if (d.restart_needed) banners.push(`<div class="banner info"><b>Restart needed</b><span class="muted">Your changes apply after a restart.</span><span class="spacer"></span><button class="btn primary sm" data-act="restart">Restart now</button></div>`);
+  if (s.state === "failed") banners.push(`<div class="banner bad"><b>The server crashed.</b><span class="muted">Check the Logs page for the reason.</span><span class="spacer"></span><button class="btn sm" data-go="logs">Open logs</button></div>`);
+  if (d.config_errors) banners.push(`<div class="banner bad"><b>${d.config_errors} config error(s)</b><span class="spacer"></span><button class="btn sm" data-go="config">Fix</button></div>`);
+  if (!d.has_authkey) banners.push(`<div class="banner warn"><b>No AuthKey set.</b><span class="muted">Players outside your network can't find the server.</span><span class="spacer"></span><button class="btn sm" data-go="config">Add AuthKey</button></div>`);
+  if (d.update_available) banners.push(`<div class="banner info"><b>A BeamMP server update is available.</b><span class="spacer"></span><button class="btn sm" data-go="updates">See update</button></div>`);
+  if (d.quarantined) banners.push(`<div class="banner warn"><b>${d.quarantined} mod(s) blocked by the virus check.</b><span class="spacer"></span><button class="btn sm" data-go="mods">Review</button></div>`);
+  m.innerHTML = `
+    <div class="row"><div><h1>${esc(d.name || "BeamMP server")}</h1><p class="sub">${esc(d.lan_ip)}:${esc(d.port)} · ${esc(d.map || "?")} · ${d.private ? "Private" : "Public"}</p></div><span class="spacer"></span>${statePill(s.state)}</div>
+    ${banners.join("")}
+    <div class="grid g4">
+      <div class="card stat"><div class="label">Players online</div><div class="value">${online.length}<span class="muted small"> / ${esc(d.max_players ?? "?")}</span></div><div class="note">${online.length ? esc(online.slice(0, 3).join(", ")) + (online.length > 3 ? "…" : "") : "Nobody right now"}</div></div>
+      <div class="card stat"><div class="label">Uptime</div><div class="value">${s.state === "running" ? fmtDur(s.uptime) : "-"}</div><div class="note">${s.restarts ? esc(s.restarts) + " automatic restart(s)" : "No crashes"}</div></div>
+      <div class="card stat"><div class="label">Mods</div><div class="value">${esc(d.mods)}</div><div class="note">${d.quarantined ? esc(d.quarantined) + " blocked" : "All virus-checked"}</div></div>
+      <div class="card stat"><div class="label">BeamMP server</div><div class="value">${esc(d.installed_version || "?")}</div><div class="note">${d.update_available ? "Update available" : "Up to date"}</div></div>
+    </div>
+    <div class="grid g2" style="margin-top:16px">
+      <div class="card"><h2>Server control</h2><p class="muted small">Start, stop or restart the BeamMP server. A restart disconnects everyone who is playing.</p>
+        <div class="row">${s.state === "running" ? `<button class="btn" data-act="restart">Restart</button><button class="btn danger" data-act="stop">Stop</button>` : `<button class="btn primary" data-act="start">Start server</button>`}</div></div>
+      <div class="card"><h2>Who's online</h2>${online.length ? `<div class="row">${online.map(p => `<span class="pill"><span class="dot"></span>${esc(p)}</span>`).join("")}</div>` : `<p class="muted">Nobody is playing right now.</p>`}</div>
+    </div>`;
+  m.querySelectorAll("[data-act]").forEach(b => b.onclick = () => serverAction(b.dataset.act, b));
+  m.querySelectorAll("[data-go]").forEach(b => b.onclick = () => show(b.dataset.go));
+  TIMER = setInterval(async () => { try { const x = await api("/api/overview"); if (x.status.state !== s.state || (x.online || []).length !== online.length || x.unread !== d.unread) show("overview"); } catch (e) {} }, 10000);
+};
+
+/* ---------------- config */
+VIEWS.config = async m => {
+  const d = await api("/api/config");
+  const mode = store.get("es-config-mode", "form");
+  const issuesHtml = list => list.length ? list.map(i => `<div class="issue ${i.level}"><span class="ic">${i.level === "error" ? "!" : i.level === "warning" ? "⚠" : "i"}</span><span>${esc(i.message)}</span>${i.line ? `<span class="ln">line ${i.line}</span>` : ""}</div>`).join("") : `<div class="issue info"><span class="ic">✓</span><span>No problems found.</span></div>`;
+  const opts = (cur) => {
+    const all = [...new Set([...(d.maps.mods || []), ...d.maps.builtin])];
+    if (cur && !all.includes(cur)) all.unshift(cur);
+    return `<optgroup label="Built-in maps">${d.maps.builtin.map(x => `<option ${x === cur ? "selected" : ""}>${esc(x)}</option>`).join("")}</optgroup>` +
+      (d.maps.mods.length ? `<optgroup label="Map mods">${d.maps.mods.map(x => `<option ${x === cur ? "selected" : ""}>${esc(x)}</option>`).join("")}</optgroup>` : "") +
+      (cur && !d.maps.builtin.includes(cur) && !d.maps.mods.includes(cur) ? `<optgroup label="Current"><option selected>${esc(cur)}</option></optgroup>` : "");
+  };
+  const field = f => {
+    const id = "f_" + f.section + "_" + f.key;
+    if (f.type === "bool") return `<label class="toggle"><input type="checkbox" id="${id}" ${f.value ? "checked" : ""}><span><b>${esc(f.label)}</b><small>${esc(f.help)}</small></span></label>`;
+    if (f.type === "map") return `<label class="f"><span>${esc(f.label)}</span><select id="${id}">${opts(f.value)}</select><small>${esc(f.help)}</small></label>`;
+    const t = f.type === "int" ? `type="number" min="${f.min ?? ""}" max="${f.max ?? ""}"` : `type="text" maxlength="${f.max ?? 500}"`;
+    return `<label class="f"><span>${esc(f.label)}</span><input ${t} id="${id}" value="${esc(f.value ?? "")}"><small>${esc(f.help)}</small></label>`;
+  };
+  const basic = d.fields.filter(f => !f.advanced && f.type !== "bool"), toggles = d.fields.filter(f => !f.advanced && f.type === "bool"), adv = d.fields.filter(f => f.advanced);
+  m.innerHTML = `
+    <div class="row"><div><h1>Server config</h1><p class="sub">Change settings without touching files. Everything is checked before saving.</p></div><span class="spacer"></span>
+      <div class="seg"><button data-mode="form" class="${mode === "form" ? "on" : ""}">Simple</button><button data-mode="raw" class="${mode === "raw" ? "on" : ""}">Text (TOML)</button></div></div>
+    <div id="issues">${issuesHtml(d.issues)}</div>
+    <div id="formmode" class="${mode === "form" ? "" : "hidden"}">
+      <div class="grid g2" style="margin-top:12px">
+        <div class="card"><h2>Basics</h2>${basic.map(field).join("")}</div>
+        <div class="grid" style="align-content:start">
+          <div class="card"><h2>Options</h2>${toggles.map(field).join("")}</div>
+          <div class="card"><h2>AuthKey</h2><p class="small muted">${d.has_authkey ? "✓ An AuthKey is saved (encrypted). Paste a new one to replace it." : "No AuthKey yet. Get one free at keymaster.beammp.com (Keys → +)."}</p>
+            <div class="row"><input type="password" id="ak" placeholder="Paste AuthKey" autocomplete="off"><button class="btn" id="saveak">Save key</button></div></div>
+          <details class="card"><summary><b>Advanced</b></summary><div style="margin-top:14px">${adv.map(field).join("")}</div></details>
+        </div>
+      </div>
+      <div class="row" style="margin-top:16px"><button class="btn primary" id="saveform">Save changes</button><span class="muted small" id="note"></span></div>
+    </div>
+    <div id="rawmode" class="${mode === "raw" ? "" : "hidden"}" style="margin-top:12px">
+      <div class="card"><textarea id="raw" spellcheck="false">${esc(d.raw)}</textarea>
+      <div class="row" style="margin-top:12px"><button class="btn primary" id="saveraw">Save</button><button class="btn" id="checkraw">Check</button><span class="muted small">Your AuthKey isn't shown here - it's stored encrypted.</span></div></div>
+    </div>`;
+  m.querySelectorAll("[data-mode]").forEach(b => b.onclick = () => { store.set("es-config-mode", b.dataset.mode); show("config"); });
+  const showIssues = list => { $("#issues").innerHTML = issuesHtml(list || []); };
+  $("#saveform").onclick = async () => {
+    const fields = d.fields.map(f => { const el = $("#f_" + f.section + "_" + f.key); return { section: f.section, key: f.key, value: f.type === "bool" ? el.checked : el.value }; });
+    try { const r = await api("/api/config/save", { json: { fields } }); showIssues(r.issues); toast(r.note); }
+    catch (e) { showIssues(e.data && e.data.issues); toast(e.message); }
+  };
+  let tmr;
+  $("#raw").oninput = () => { clearTimeout(tmr); tmr = setTimeout(async () => { try { showIssues((await api("/api/config/validate", { json: { raw: $("#raw").value } })).issues); } catch (e) {} }, 500); };
+  $("#checkraw").onclick = async () => showIssues((await api("/api/config/validate", { json: { raw: $("#raw").value } })).issues);
+  $("#saveraw").onclick = async () => {
+    try { const r = await api("/api/config/save", { json: { raw: $("#raw").value } }); showIssues(r.issues); toast(r.note); }
+    catch (e) { showIssues(e.data && e.data.issues); toast(e.message); }
+  };
+  $("#saveak").onclick = async () => {
+    try { const r = await api("/api/authkey", { json: { key: $("#ak").value } }); $("#ak").value = ""; toast(r.note); show("config"); } catch (e) { toast(e.message); }
+  };
+};
+
+/* ---------------- mods */
+VIEWS.mods = async m => {
+  const d = await api("/api/mods");
+  const B = { clean: ["good", "✓ safe"], warning: ["warn", "⚠ check"], unchecked: ["", "not checked yet"] };
+  m.innerHTML = `
+    <h1>Mods</h1><p class="sub">Drop mod .zip files here. Every mod is virus-checked before players can download it.</p>
+    <div class="drop" id="drop"><b>Drag &amp; drop mods here</b><br><span class="muted">or click to choose files</span><input id="file" type="file" accept=".zip" multiple hidden></div>
+    <div id="uploads"></div>
+    <p class="small muted" style="margin:10px 0 16px">🛡 Active checks: ${esc(d.checks.join(" + "))}. ${d.auto_apply ? "The server restarts by itself ~15 s after a change." : "Restart the server after changes."}</p>
+    <div class="card tight"><table><thead><tr><th>Mod</th><th class="num">Size</th><th></th></tr></thead><tbody>
+      ${d.mods.length ? d.mods.map(x => `<tr><td><b class="${x.enabled ? "" : "muted"}">${esc(x.name)}</b><span class="badge ${B[x.safety][0]}">${B[x.safety][1]}</span>${x.enabled ? "" : '<span class="badge">off</span>'}${x.maps.map(mp => `<span class="badge">map: ${esc(mp)}</span>`).join("")}
+        ${x.reasons.length ? `<div class="small" style="color:var(--warn-ink);margin-top:4px">${x.reasons.map(esc).join("<br>")}</div>` : ""}</td>
+        <td class="num muted">${fmtSize(x.size)}</td>
+        <td class="num"><div class="row" style="justify-content:flex-end">${x.maps.length && x.enabled ? `<button class="btn sm" data-map="${esc(x.maps[0])}">Use map</button>` : ""}<button class="btn sm" data-a="toggle" data-n="${esc(x.name)}">${x.enabled ? "Turn off" : "Turn on"}</button><button class="btn sm danger" data-a="delete" data-n="${esc(x.name)}">Delete</button></div></td></tr>`).join("")
+        : `<tr><td colspan="3" class="muted">No mods yet.</td></tr>`}
+    </tbody></table></div>
+    <div class="row" style="margin-top:12px"><button class="btn sm" id="rescan">Re-check all mods</button></div>
+    ${d.quarantine.length ? `<h2 style="margin-top:26px">⛔ Blocked mods (quarantine)</h2><div class="card tight"><table><tbody>${d.quarantine.map(q => `<tr><td><b>${esc(q.name)}</b><div class="small" style="color:var(--crit-ink);white-space:pre-wrap">${esc(q.why)}</div></td><td class="num"><button class="btn sm danger" data-a="qdelete" data-n="${esc(q.name)}">Delete</button></td></tr>`).join("")}</tbody></table></div>` : ""}`;
+  const D = $("#drop");
+  D.onclick = () => $("#file").click();
+  $("#file").onchange = e => upload([...e.target.files]);
+  ["dragenter", "dragover"].forEach(t => D.addEventListener(t, e => { e.preventDefault(); D.classList.add("over"); }));
+  ["dragleave", "drop"].forEach(t => D.addEventListener(t, e => { e.preventDefault(); D.classList.remove("over"); }));
+  D.addEventListener("drop", e => upload([...e.dataTransfer.files]));
+  m.querySelectorAll("[data-a]").forEach(b => b.onclick = async () => {
+    if (b.dataset.a.includes("delete") && !confirm("Delete " + b.dataset.n + "?")) return;
+    try { const r = await api("/api/mods/action", { json: { action: b.dataset.a, name: b.dataset.n } }); toast(r.note || "Done"); show("mods"); } catch (e) { toast(e.message); }
+  });
+  m.querySelectorAll("[data-map]").forEach(b => b.onclick = async () => {
+    try {
+      const cfg = await api("/api/config");
+      const r = await api("/api/config/save", { json: { fields: [{ section: "General", key: "Map", value: b.dataset.map }] } });
+      toast("Map set to " + b.dataset.map + ". " + r.note);
+    } catch (e) { toast(e.message); }
+  });
+  $("#rescan").onclick = async () => { $("#rescan").disabled = true; toast("Checking all mods…"); try { const r = await api("/api/mods/rescan", { method: "POST" }); const bad = r.results.filter(x => x.verdict === "blocked").length; toast(bad ? bad + " mod(s) blocked" : "All mods passed"); } catch (e) { toast(e.message); } show("mods"); };
+  async function upload(files) {
+    for (const f of files) await one(f);
+    show("mods");
+  }
+  function one(f) {
+    return new Promise(res => {
+      const box = document.createElement("div"); box.className = "card"; box.style.marginTop = "10px";
+      box.innerHTML = `<b>${esc(f.name)}</b><div class="bar"><i></i></div><div class="small muted" data-s>Uploading…</div>`;
+      $("#uploads").appendChild(box);
+      if (!/\.zip$/i.test(f.name)) { box.querySelector("[data-s]").textContent = "Only .zip files"; return res(); }
+      const x = new XMLHttpRequest();
+      x.open("PUT", "/api/mods/upload?name=" + encodeURIComponent(f.name));
+      x.setRequestHeader("X-ES-CSRF", CSRF);
+      x.upload.onprogress = e => { if (e.lengthComputable) box.querySelector("i").style.width = (e.loaded / e.total * 100) + "%"; };
+      x.upload.onload = () => { box.querySelector("[data-s]").textContent = "Checking for viruses…"; };
+      x.onload = () => {
+        let j = {}; try { j = JSON.parse(x.responseText); } catch (e) {}
+        const s = box.querySelector("[data-s]");
+        if (x.status === 422) { s.innerHTML = `<b style="color:var(--crit-ink)">Blocked - not uploaded.</b><br>${(j.reasons || []).map(esc).join("<br>")}`; }
+        else if (x.status !== 200) { s.textContent = j.error || "Upload failed"; }
+        else { s.innerHTML = `<span style="color:var(--good-ink)">✓ Uploaded and checked (${esc((j.checks || []).join(" + "))})</span>${j.maps && j.maps.length ? " · contains map " + esc(j.maps.join(", ")) : ""}${j.safety === "warning" ? `<div style="color:var(--warn-ink)">⚠ ${j.reasons.map(esc).join("<br>⚠ ")}</div>` : ""}`; }
+        res();
+      };
+      x.onerror = () => { box.querySelector("[data-s]").textContent = "Upload failed"; res(); };
+      x.send(f);
+    });
+  }
+};
+
+/* ---------------- players (analytics) */
+function barChart(el, values, labels, tipFn, opts = {}) {
+  const W = Math.max(280, Math.round(el.clientWidth || 640)), H = opts.h || 190, padL = 30, padB = 22, padT = 10;
+  const max = Math.max(1, ...values), n = values.length;
+  const step = (W - padL) / n, bw = Math.max(2, Math.min(28, step - 2));
+  const nice = max <= 4 ? Math.ceil(max) : Math.ceil(max / 4) * 4;
+  const y = v => padT + (H - padT - padB) * (1 - v / nice);
+  let g = "";
+  for (let i = 0; i <= 4; i++) { const v = nice * i / 4; g += `<line x1="${padL}" x2="${W}" y1="${y(v)}" y2="${y(v)}"/>`; }
+  let ax = "";
+  for (let i = 0; i <= 4; i++) { const v = nice * i / 4; ax += `<text x="${padL - 6}" y="${y(v) + 4}" text-anchor="end">${Number.isInteger(v) ? v : v.toFixed(1)}</text>`; }
+  const every = Math.ceil(n / Math.max(3, Math.min(opts.labelsMax || 8, Math.floor((W - padL) / 52))));
+  labels.forEach((l, i) => { if (i % every === 0) ax += `<text x="${padL + step * i + step / 2}" y="${H - 6}" text-anchor="middle">${esc(l)}</text>`; });
+  let bars = "", hits = "";
+  values.forEach((v, i) => {
+    const x = padL + step * i + (step - bw) / 2, top = y(v), base = y(0), hh = Math.max(0, base - top);
+    if (v > 0) { const r = Math.min(4, bw / 2, hh); bars += `<path data-i="${i}" d="M${x},${base}V${top + r}q0,-${r} ${r},-${r}h${bw - 2 * r}q${r},0 ${r},${r}V${base}Z"/>`; }
+    hits += `<rect class="hit" data-i="${i}" x="${padL + step * i}" y="${padT}" width="${step}" height="${H - padT - padB}"/>`;
+  });
+  el.innerHTML = `<div class="chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(opts.title || "chart")}"><g class="grid">${g}</g><g class="axis">${ax}</g><g class="bars">${bars.replace(/<path/g, '<path fill="var(--accent)"')}${hits}</g></svg><div class="tip hidden"></div></div>`;
+  const tip = el.querySelector(".tip"), svg = el.querySelector("svg");
+  el.querySelectorAll("rect.hit").forEach(r => {
+    r.addEventListener("mouseenter", () => {
+      const i = +r.dataset.i; el.querySelectorAll("path[data-i]").forEach(p => p.style.opacity = +p.dataset.i === i ? 1 : .35);
+      tip.innerHTML = tipFn(i); tip.classList.remove("hidden");
+      const bb = svg.getBoundingClientRect(), sc = bb.width / W;
+      tip.style.left = ((padL + step * i + step / 2) * sc) + "px"; tip.style.top = (y(values[i]) * sc) + "px";
+    });
+    r.addEventListener("mouseleave", () => { tip.classList.add("hidden"); el.querySelectorAll("path[data-i]").forEach(p => p.style.opacity = 1); });
+  });
+}
+
+let RESIZE_T;
+window.addEventListener("resize", () => { clearTimeout(RESIZE_T); RESIZE_T = setTimeout(() => { if (TAB === "players") show("players"); }, 400); });
+VIEWS.players = async m => {
+  const d = await api("/api/players");
+  const s = d.summary;
+  const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const hm = d.heatmap, hmMax = Math.max(0.0001, ...hm.flat().filter(v => v !== null));
+  const shade = v => v === null ? "var(--surface-2)" : `var(--heat-${Math.min(6, Math.round(v / hmMax * 6))})`;
+  m.innerHTML = `
+    <div class="row"><div><h1>Players</h1><p class="sub">Activity over the last 30 days. Recorded by the EasyServerStats plugin on your server.</p></div><span class="spacer"></span><button class="btn sm" id="clear">Clear statistics</button></div>
+    ${d.has_data ? "" : `<div class="banner info">No player data yet. Statistics start once the server runs with the stats plugin and someone plays.</div>`}
+    <div class="grid g4">
+      <div class="card stat"><div class="label">Online now</div><div class="value">${d.online.players.length}</div><div class="note">${d.online.fresh ? esc(d.online.players.slice(0, 3).join(", ") || "Nobody") : "Server not reporting"}</div></div>
+      <div class="card stat"><div class="label">Players (30 days)</div><div class="value">${esc(s.unique_30d)}</div><div class="note">${esc(s.unique_7d)} in the last 7 days</div></div>
+      <div class="card stat"><div class="label">Peak at once</div><div class="value">${esc(s.peak)}</div><div class="note">${s.peak_at ? esc(fmtTime(s.peak_at)) : "-"}</div></div>
+      <div class="card stat"><div class="label">Server usage</div><div class="value">${esc(s.utilization)}%</div><div class="note">avg ${esc(s.avg_players)} players · ${esc(s.hours_30d)} h played</div></div>
+    </div>
+    <div class="card" style="margin-top:16px"><h2>Players per day</h2><div id="daily"></div></div>
+    <div class="grid g2" style="margin-top:16px">
+      <div class="card"><h2>Busiest hours</h2><p class="small muted">Average players online by time of day${s.busiest_hour !== null ? ` · busiest around ${String(s.busiest_hour).padStart(2, "0")}:00` : ""}</p><div id="hourly"></div></div>
+      <div class="card"><h2>Week overview</h2><p class="small muted">Average players by day and hour</p>
+        <div class="heat" id="heat"><span></span>${Array.from({ length: 24 }, (_, i) => `<span class="lab">${i % 6 === 0 ? i : ""}</span>`).join("")}
+        ${hm.map((row, di) => `<span class="lab rl">${days[di]}</span>` + row.map((v, hh) => `<span class="c" data-tip="${days[di]} ${String(hh).padStart(2, "0")}:00 · ${v === null ? "no data" : v + " players avg"}"></span>`).join("")).join("")}</div>
+        <div class="legend">fewer ${[0, 2, 4, 6].map(i => `<i data-heat="${i}"></i>`).join("")} more</div></div>
+    </div>
+    <div class="grid g2" style="margin-top:16px">
+      <div class="card tight"><table><thead><tr><th>Top players (30 days)</th><th class="num">Time played</th><th class="num">Sessions</th></tr></thead><tbody>
+        ${d.top.length ? d.top.map(p => `<tr><td><b>${esc(p.name)}</b><div class="small muted">last seen ${esc(ago(p.last_seen))}</div></td><td class="num">${fmtDur(p.seconds)}</td><td class="num">${esc(p.sessions)}</td></tr>`).join("") : `<tr><td colspan="3" class="muted">No players yet</td></tr>`}
+      </tbody></table></div>
+      <div class="card tight"><table><thead><tr><th>Recent sessions</th><th class="num">Started</th><th class="num">Length</th></tr></thead><tbody>
+        ${d.recent.length ? d.recent.slice(0, 12).map(r => `<tr><td>${esc(r.name)}</td><td class="num muted">${esc(fmtTime(r.start))}</td><td class="num">${esc(r.minutes)} min</td></tr>`).join("") : `<tr><td colspan="3" class="muted">No sessions yet</td></tr>`}
+      </tbody></table></div>
+    </div>`;
+  const dl = d.days.map(x => x.date.slice(5).replace("-", "/"));
+  barChart($("#daily"), d.days.map(x => x.players), dl, i => `<b>${esc(d.days[i].date)}</b><br>${d.days[i].players} players · peak ${d.days[i].peak} · ${d.days[i].hours} h played`, { title: "Players per day", labelsMax: 10 });
+  barChart($("#hourly"), d.hourly, d.hourly.map((_, i) => String(i).padStart(2, "0")), i => `<b>${String(i).padStart(2, "0")}:00</b><br>${d.hourly[i]} players on average`, { title: "Average players by hour", labelsMax: 8, h: 170 });
+  m.querySelectorAll("#heat .c").forEach((c, idx) => { const v = hm[Math.floor(idx / 24)][idx % 24]; c.style.background = shade(v); c.title = c.dataset.tip; });
+  m.querySelectorAll("[data-heat]").forEach(i => i.style.background = `var(--heat-${i.dataset.heat})`);
+  $("#clear").onclick = async () => { if (!confirm("Delete all player statistics?")) return; await api("/api/players/clear", { method: "POST" }); show("players"); };
+};
+
+/* ---------------- network */
+VIEWS.network = async m => {
+  m.innerHTML = `<h1>Network check</h1><p class="sub">Finds out whether players can reach your server.</p><p class="muted">Checking…</p>`;
+  const run = async deep => {
+    const d = await api("/api/network" + (deep ? "?deep=1" : ""));
+    const mk = { ok: ["ok", "✓"], bad: ["bad", "✕"], warn: ["warn", "!"], info: ["info", "i"] };
+    m.innerHTML = `<div class="row"><div><h1>Network check</h1><p class="sub">Finds out whether players can reach your server on port ${esc(d.port)}.</p></div><span class="spacer"></span>
+      <button class="btn" id="again">Check again</button><button class="btn primary" id="deep">Check server list</button></div>
+      <div class="grid g3" style="margin-bottom:16px">
+        <div class="card stat"><div class="label">Home network address</div><div class="value mono">${esc(d.lan_ip)}:${esc(d.port)}</div><div class="note">For friends on your Wi-Fi</div></div>
+        <div class="card stat"><div class="label">Internet address</div><div class="value mono">${esc(d.public_ip || "unknown")}${d.public_ip ? ":" + esc(d.port) : ""}</div><div class="note">For friends anywhere else</div></div>
+        <div class="card stat"><div class="label">Port</div><div class="value">${esc(d.port)}</div><div class="note">Forward TCP + UDP on your router</div></div>
+      </div>
+      <div class="card tight">${d.checks.map(c => `<div class="check"><span class="mark ${mk[c.state][0]}">${mk[c.state][1]}</span><div><b>${esc(c.name)}</b><div class="small muted">${esc(c.detail)}</div></div></div>`).join("")}</div>
+      ${d.tips.length ? `<div class="card" style="margin-top:16px"><h2>What to do</h2><ul>${d.tips.map(t => `<li>${esc(t)}</li>`).join("")}</ul></div>` : ""}
+      <p class="small muted" style="margin-top:12px">"Check server list" downloads BeamMP's public list (a few MB) to see whether your server shows up - the most reliable test that internet players can find you.</p>`;
+    $("#again").onclick = () => run(false);
+    $("#deep").onclick = async () => { $("#deep").disabled = true; $("#deep").textContent = "Checking…"; await run(true); };
+  };
+  await run(false);
+};
+
+/* ---------------- updates */
+VIEWS.updates = async m => {
+  const d = await api("/api/updates");
+  const isNew = (a, b) => { if (!a || !b) return false; const x = a.split(".").map(Number), y = b.split(".").map(Number); for (let i = 0; i < 3; i++) { if (x[i] !== y[i]) return x[i] > y[i]; } return false; };
+  const srvNew = isNew(d.latest, d.installed), esNew = isNew(d.easy_latest, d.easy_installed);
+  m.innerHTML = `<div class="row"><div><h1>Updates</h1><p class="sub">${d.checked_at ? "Last checked " + esc(ago(d.checked_at)) : "Not checked yet"}. The dashboard checks every 6 hours and notifies you.</p></div><span class="spacer"></span><button class="btn" id="check">Check now</button></div>
+    ${d.error ? `<div class="banner warn">${esc(d.error)}</div>` : ""}
+    <div class="grid g2">
+      <div class="card"><h2>BeamMP server</h2>
+        <div class="row"><div class="stat"><div class="label">Installed</div><div class="value">${esc(d.installed || "?")}</div></div><span class="spacer"></span><div class="stat"><div class="label">Newest</div><div class="value">${esc(d.latest || "?")}</div></div></div>
+        <p>${srvNew ? `<span class="pill warn"><span class="dot"></span>Update available</span>` : `<span class="pill good"><span class="dot"></span>Up to date</span>`}</p>
+        ${srvNew ? `<p class="small muted">Installing stops the server for a moment (players are disconnected), then starts it again.</p><button class="btn primary" id="install">Install ${esc(d.latest)}</button>` : ""}
+      </div>
+      <div class="card"><h2>BeamMP EasyServer (this dashboard)</h2>
+        <div class="row"><div class="stat"><div class="label">Installed</div><div class="value">${esc(d.easy_installed)}</div></div><span class="spacer"></span><div class="stat"><div class="label">Newest</div><div class="value">${esc(d.easy_latest || "?")}</div></div></div>
+        <p>${esNew ? `<span class="pill warn"><span class="dot"></span>Update available</span>` : `<span class="pill good"><span class="dot"></span>Up to date</span>`}</p>
+        ${esNew ? `<p class="small">Download it from <a href="https://github.com/${esc(d.repo)}/releases/latest" target="_blank" rel="noopener noreferrer">GitHub</a> and run the installer again - your settings and mods are kept.</p>` : ""}
+      </div>
+    </div>`;
+  $("#check").onclick = async () => { $("#check").disabled = true; try { await api("/api/updates/check", { method: "POST" }); } catch (e) { toast(e.message); } show("updates"); };
+  const ib = $("#install");
+  if (ib) ib.onclick = async () => {
+    if (!confirm("Install the update now? Players will be disconnected.")) return;
+    ib.disabled = true; ib.textContent = "Installing…";
+    try { const r = await api("/api/updates/install", { method: "POST" }); toast("Updated to " + (r.installed || "the newest version")); } catch (e) { toast(e.message); }
+    show("updates");
+  };
+};
+
+/* ---------------- logs */
+VIEWS.logs = async m => {
+  let lines = 300, follow = true;
+  const draw = async () => {
+    const d = await api("/api/logs?lines=" + lines);
+    const box = $("#log");
+    if (!box) return;
+    const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
+    box.innerHTML = d.lines.map(l => `<div class="${/\[ERROR\]/.test(l) ? "e" : /\[WARN\]/.test(l) ? "w" : ""}">${esc(l)}</div>`).join("") || `<span class="muted">The log is empty.</span>`;
+    if (follow && atBottom) box.scrollTop = box.scrollHeight;
+    $("#hints").innerHTML = d.hints.length ? `<div class="card" style="margin-bottom:16px"><h2>What the log is telling you</h2>${d.hints.map(x => `<div class="issue warning"><span class="ic">⚠</span><span><b>${esc(x.title)}.</b> ${esc(x.text)}<div class="mono muted" style="margin-top:4px">${esc(x.line)}</div></span></div>`).join("")}</div>` : "";
+  };
+  m.innerHTML = `<div class="row"><div><h1>Server log</h1><p class="sub">Live view of Server.log. Refreshes every 5 seconds.</p></div><span class="spacer"></span>
+    <select id="n" style="width:auto"><option value="300">Last 300 lines</option><option value="1000">Last 1000 lines</option><option value="2000">Last 2000 lines</option></select></div>
+    <div id="hints"></div><div class="log" id="log"></div>`;
+  $("#n").onchange = e => { lines = +e.target.value; draw(); };
+  await draw();
+  $("#log").scrollTop = $("#log").scrollHeight;
+  TIMER = setInterval(() => draw().catch(() => {}), 5000);
+};
+
+/* ---------------- notifications */
+VIEWS.notifications = async m => {
+  const d = await api("/api/notifications");
+  m.innerHTML = `<div class="row"><div><h1>Notifications</h1><p class="sub">Crashes, updates, blocked mods and security events. Choose where they're sent under Settings.</p></div><span class="spacer"></span>
+    <button class="btn" id="read">Mark all read</button><button class="btn danger" id="clear">Clear</button></div>
+    <div class="card tight">${d.items.length ? d.items.map(n => `<div class="notif ${n.read ? "" : "unread"}"><span class="lv ${esc(n.level)}"></span><div><b>${esc(n.title)}</b><div class="small" style="white-space:pre-wrap">${esc(n.message)}</div><div class="small muted">${esc(fmtTime(n.t))}${n.delivery && n.delivery.length ? " · sent: " + esc(n.delivery.join(", ")) : ""}</div></div></div>`).join("") : `<div class="notif"><span class="muted">Nothing yet.</span></div>`}</div>`;
+  $("#read").onclick = async () => { await api("/api/notifications/read", { method: "POST" }); setUnread(0); show("notifications"); };
+  $("#clear").onclick = async () => { if (!confirm("Delete all notifications?")) return; await api("/api/notifications/clear", { method: "POST" }); setUnread(0); show("notifications"); };
+  if (d.items.some(n => !n.read)) { api("/api/notifications/read", { method: "POST" }).then(() => setUnread(0)).catch(() => {}); }
+};
+
+/* ---------------- settings */
+VIEWS.settings = async m => {
+  const s = await api("/api/settings");
+  const tg = (id, label, help, on) => `<label class="toggle"><input type="checkbox" id="${id}" ${on ? "checked" : ""}><span><b>${esc(label)}</b><small>${esc(help)}</small></span></label>`;
+  const N = s.notify;
+  m.innerHTML = `<h1>Settings</h1><p class="sub">Notifications, security, remote access and backups.</p>
+  <div class="grid g2">
+    <div class="card"><h2>Notify me about</h2>
+      ${tg("n_crash", "Crashes", "The server crashed or keeps crashing", N.crash)}
+      ${tg("n_stopped", "Unexpected stops", "The server stopped without you stopping it", N.stopped)}
+      ${tg("n_update", "Updates", "New BeamMP or EasyServer versions", N.update)}
+      ${tg("n_mod_blocked", "Blocked mods", "A mod failed the virus check", N.mod_blocked)}
+      ${tg("n_login_failed", "Security", "Someone keeps typing a wrong dashboard password", N.login_failed)}
+      ${tg("n_player_join", "Player joins", "Every time someone joins (can be a lot)", N.player_join)}
+      ${s.platform === "windows" ? tg("auto_restart", "Restart after a crash", "Start the server again automatically", s.auto_restart) : ""}
+      ${tg("update_check", "Check for updates", "Every 6 hours", s.update_check)}
+      <p class="small muted" style="margin-top:12px">Notifications always appear on the Notifications page. Also send them to:</p>
+    </div>
+    <div class="grid" style="align-content:start">
+      <div class="card"><h2>Discord</h2>${tg("discord_enabled", "Send to Discord", "Posts to a channel via a webhook", s.discord_enabled)}
+        <label class="f" style="margin-top:10px"><span>Webhook URL</span><input type="password" id="webhook" placeholder="${s.has_discord ? "Saved (encrypted) - paste a new one to replace" : "https://discord.com/api/webhooks/…"}" autocomplete="off"><small>Discord channel → Edit channel → Integrations → Webhooks → New webhook → Copy URL</small></label>
+        <button class="btn sm" data-test="discord">Send test</button></div>
+      <div class="card"><h2>Email</h2>${tg("email_enabled", "Send emails", "Uses your email provider's SMTP server", s.email_enabled)}
+        <div class="grid g2" style="margin-top:10px;gap:0 12px">
+          <label class="f"><span>SMTP server</span><input type="text" id="smtp_host" value="${esc(s.smtp_host)}" placeholder="smtp.gmail.com"></label>
+          <label class="f"><span>Port</span><input type="number" id="smtp_port" value="${esc(s.smtp_port)}"></label>
+          <label class="f"><span>Username</span><input type="text" id="smtp_user" value="${esc(s.smtp_user)}" autocomplete="off"></label>
+          <label class="f"><span>Password</span><input type="password" id="smtp_password" placeholder="${s.has_smtp_password ? "Saved (encrypted)" : "App password"}" autocomplete="new-password"></label>
+          <label class="f"><span>Security</span><select id="smtp_security"><option value="starttls">STARTTLS (port 587)</option><option value="ssl">SSL (port 465)</option><option value="none">None</option></select></label>
+          <label class="f"><span>Send to</span><input type="email" id="smtp_to" value="${esc(s.smtp_to)}" placeholder="you@example.com"></label>
+        </div>
+        <small class="muted">Gmail/Outlook: create an "app password" in your account security settings.</small>
+        <div class="row" style="margin-top:10px"><button class="btn sm" data-test="email">Send test</button></div></div>
+    </div>
+  </div>
+  <div class="row" style="margin:16px 0 30px"><button class="btn primary" id="savenotif">Save notification settings</button></div>
+
+  <div class="grid g2">
+    <div class="card"><h2>Mod virus check</h2><p class="small muted">Optional VirusTotal key (free account at virustotal.com → your name → API key). Stored encrypted.</p>
+      <div class="row"><input type="password" id="vt" placeholder="${s.has_vt ? "Saved - paste a new key or type off" : "VirusTotal API key"}" autocomplete="off"><button class="btn" id="savevt">Save</button></div></div>
+    <div class="card"><h2>Password</h2>
+      <label class="f"><span>Current password</span><input type="password" id="pw_cur" autocomplete="current-password"></label>
+      <label class="f"><span>New password</span><input type="password" id="pw_new" autocomplete="new-password"><small>${s.remote_enabled ? "At least 12 characters" : "At least 8 characters (12 for internet access)"}</small></label>
+      <button class="btn" id="savepw">Change password</button></div>
+  </div>
+
+  <div class="card" style="margin-top:16px"><h2>Two-step login</h2>
+    <p class="small muted">Ask for a 6-digit code from an app like Google Authenticator, Microsoft Authenticator or Aegis on every login. Required for access from the internet.</p>
+    <div id="twofa">${s.totp ? `<span class="pill good"><span class="dot"></span>On</span> <button class="btn sm danger" id="tfaoff" style="margin-left:8px">Turn off</button>` : `<button class="btn" id="tfaon">Set up two-step login</button>`}</div></div>
+
+  <div class="card" style="margin-top:16px"><h2>Access from the internet</h2>
+    <p class="small muted">Manage the server from anywhere: needs HTTPS, two-step login and a 12+ character password. You also have to forward port ${esc(s.port)} (TCP) on your router. Leave this off if you only use the dashboard at home.</p>
+    ${tg("https", "HTTPS (encrypted connection)", "Uses a self-made certificate - your browser shows a warning the first time; check the fingerprint below and continue", s.https)}
+    ${tg("remote_enabled", "Allow access from the internet", "Only with HTTPS + two-step login", s.remote_enabled)}
+    ${s.cert_fingerprint ? `<p class="small">Certificate fingerprint (SHA-256): <span class="mono">${esc(s.cert_fingerprint)}</span></p>` : ""}
+    <button class="btn" id="saveremote">Apply</button></div>
+
+  <div class="card" style="margin-top:16px"><h2>Backup / move to another computer</h2>
+    <p class="small muted">Export your server settings (and optionally all mods) into one file, then import it on another server. Keys and passwords are never exported.</p>
+    <div class="row"><a class="btn" href="/api/export" download>Export settings</a><a class="btn" href="/api/export?mods=1" download>Export settings + mods</a>
+      <span class="spacer"></span><button class="btn" id="imp">Import…</button><input type="file" id="impfile" accept=".zip" hidden></div>
+    <div id="impres"></div></div>
+  <p class="small muted" style="margin-top:24px">BeamMP EasyServer ${esc(SESSION.version)} · ${esc(s.platform)} · not affiliated with the BeamMP team</p>`;
+  $("#smtp_security").value = s.smtp_security;
+  m.querySelectorAll("[data-test]").forEach(b => b.onclick = async () => { b.disabled = true; try { await saveNotif(true); await api("/api/notifications/test", { json: { channel: b.dataset.test } }); toast("Test sent"); } catch (e) { toast(e.message); } b.disabled = false; });
+  async function saveNotif(quiet) {
+    const body = { notify: {} };
+    ["crash", "stopped", "update", "mod_blocked", "login_failed", "player_join"].forEach(k => body.notify[k] = $("#n_" + k).checked);
+    ["discord_enabled", "email_enabled", "update_check"].forEach(k => body[k] = $("#" + k).checked);
+    if ($("#auto_restart")) body.auto_restart = $("#auto_restart").checked;
+    ["smtp_host", "smtp_port", "smtp_user", "smtp_to", "smtp_security"].forEach(k => body[k] = $("#" + k).value);
+    body.smtp_from = $("#smtp_user").value.includes("@") ? $("#smtp_user").value : $("#smtp_to").value;
+    if ($("#webhook").value) body.discord_webhook = $("#webhook").value;
+    if ($("#smtp_password").value) body.smtp_password = $("#smtp_password").value;
+    await api("/api/settings", { json: body });
+    $("#webhook").value = ""; $("#smtp_password").value = "";
+    if (!quiet) toast("Saved");
+  }
+  $("#savenotif").onclick = () => saveNotif(false).catch(e => toast(e.message));
+  $("#savevt").onclick = async () => { const v = $("#vt").value.trim(); try { await api("/api/settings", { json: { vt_key: v === "off" ? "" : v } }); toast(v === "off" ? "VirusTotal turned off" : "Saved"); show("settings"); } catch (e) { toast(e.message); } };
+  $("#savepw").onclick = async () => { try { await api("/api/password", { json: { current: $("#pw_cur").value, new: $("#pw_new").value } }); toast("Password changed"); $("#pw_cur").value = $("#pw_new").value = ""; } catch (e) { toast(e.message); } };
+  const on = $("#tfaon");
+  if (on) on.onclick = async () => {
+    const r = await api("/api/2fa/begin", { method: "POST" });
+    $("#twofa").innerHTML = `<ol class="small"><li>Open your authenticator app and add an account with <b>"Enter a setup key"</b>.</li><li>Account name: <b>BeamMP</b>, key:</li></ol>
+      <div class="secret">${esc(r.secret)}</div><p class="small muted">On a phone you can also <a href="${esc(r.uri)}">tap here</a> to add it directly.</p>
+      <label class="f"><span>Enter the 6-digit code the app shows</span><input type="text" id="tfacode" inputmode="numeric" maxlength="7" style="max-width:180px"></label><button class="btn primary" id="tfaok">Turn on</button>`;
+    $("#tfaok").onclick = async () => { try { await api("/api/2fa/confirm", { json: { code: $("#tfacode").value } }); toast("Two-step login is on"); show("settings"); } catch (e) { toast(e.message); } };
+  };
+  const off = $("#tfaoff");
+  if (off) off.onclick = async () => { const p = prompt("Enter your password to turn off two-step login"); if (!p) return; try { await api("/api/2fa/disable", { json: { password: p } }); toast("Two-step login turned off"); show("settings"); } catch (e) { toast(e.message); } };
+  $("#saveremote").onclick = async () => {
+    try {
+      toast("Applying… (creating a certificate can take a few seconds)", 8000);
+      const r = await api("/api/remote", { json: { https: $("#https").checked, remote_enabled: $("#remote_enabled").checked } });
+      if (r.restart) { toast("Restarting the dashboard - you'll be taken to the new address", 6000); setTimeout(() => location.href = r.url.replace(/\/\/[^:/]+/, "//" + location.hostname), 4500); }
+      else { toast("Saved"); show("settings"); }
+    } catch (e) { toast(e.message); }
+  };
+  $("#imp").onclick = () => $("#impfile").click();
+  $("#impfile").onchange = async e => {
+    const f = e.target.files[0]; if (!f) return;
+    if (!confirm("Import " + f.name + "? Your current server config will be replaced (mods in the file are added and virus-checked).")) return;
+    $("#impres").innerHTML = `<p class="muted">Importing…</p>`;
+    const r = await fetch("/api/import", { method: "PUT", headers: { "X-ES-CSRF": CSRF }, body: f });
+    let j = {}; try { j = await r.json(); } catch (x) {}
+    if (!r.ok) { $("#impres").innerHTML = `<div class="banner bad">${esc(j.error || "Import failed")}</div>` + ((j.issues || []).map(i => `<div class="issue ${i.level}"><span class="ic">!</span><span>${esc(i.message)}</span></div>`).join("")); return; }
+    const rep = j.report;
+    $("#impres").innerHTML = `<div class="banner info"><span>✓ Imported. ${rep.mods_added.length} mod(s) added${rep.mods_blocked.length ? ", " + rep.mods_blocked.length + " blocked by the virus check" : ""}. ${esc(j.note)}</span></div>`;
+  };
+};
+
+boot();
+</script>
+</body>
+</html>

@@ -6,6 +6,7 @@
 #   3. starts the server with a temporary config in your private folder and
 #      wipes the key from it again as soon as the server has read it
 # =============================================================================
+param([switch]$Auto)   # -Auto: started by the dashboard, close the window when the server stops
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'easyserver-common.ps1')
 $Dir = Split-Path $PSScriptRoot -Parent
@@ -65,4 +66,4 @@ if ($hasKey) {
 $p.WaitForExit()
 Write-Host ''
 Write-Host "The server stopped (exit code $($p.ExitCode))." -ForegroundColor Yellow
-Read-Host 'Press Enter to close'
+if (-not $Auto) { Read-Host 'Press Enter to close' } else { Start-Sleep -Seconds 3 }
