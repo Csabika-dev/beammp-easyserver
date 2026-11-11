@@ -16,7 +16,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'   # makes downloads much faster
-$EasyVersion  = '1.1.0'
+$EasyVersion  = '1.1.1'
 $DefaultDir   = 'C:\BeamMP-Server'
 $StateFile    = Join-Path $env:ProgramData 'BeamMP-EasyServer\install-dir.txt'
 $ServerUrl    = 'https://github.com/BeamMP/BeamMP-Server/releases/latest/download/BeamMP-Server.exe'
@@ -69,6 +69,27 @@ function Download-Server($dir) {
     Start-Sleep -Milliseconds 500
     Move-Item -Force $tmp (Join-Path $dir 'BeamMP-Server.exe')
     Ok 'Server downloaded'
+}
+
+# Folders created in C:\ can be changed by EVERY user of the PC by default.
+# The server folder holds programs that run as you (and the installer runs
+# as administrator), so only you, administrators and SYSTEM may change it.
+function Protect-EsFolder([string]$dir, [switch]$AdminOnly) {
+    try {
+        $full = [IO.Path]::GetFullPath($dir).TrimEnd('\')
+        $bad = @($env:SystemRoot, $env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:USERPROFILE, $env:ProgramData, $env:PUBLIC) |
+            Where-Object { $_ } | ForEach-Object { $_.TrimEnd('\') }
+        if ($full -match '^[A-Za-z]:$' -or $bad -contains $full) { Warn "Not changing permissions of $full"; return }
+        $me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+        $grants = @('*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F', '*S-1-5-32-545:(OI)(CI)RX')
+        if (-not $AdminOnly) { $grants += "*${me}:(OI)(CI)M" }
+        & icacls.exe $full /inheritance:r /grant:r @grants /Q | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "icacls exit code $LASTEXITCODE" }
+        # everything inside follows the folder again (removes old "Everyone can change" rights)
+        if (Get-ChildItem -LiteralPath $full -Force -ErrorAction SilentlyContinue | Select-Object -First 1) {
+            & icacls.exe (Join-Path $full '*') /reset /T /C /Q | Out-Null
+        }
+    } catch { Warn "Could not lock down the permissions of ${dir}: $($_.Exception.Message)" }
 }
 
 function Copy-EsScripts($dir) {
@@ -204,6 +225,8 @@ if ($Update) {
     if (-not (Test-Path (Join-Path $dir 'BeamMP-Server.exe'))) {
         Warn "No server found in $dir - run Install-BeamMP-Server.bat first."; Finish
     }
+    Protect-EsFolder $dir
+    if (Test-Path (Split-Path $StateFile)) { Protect-EsFolder (Split-Path $StateFile) -AdminOnly }
     Download-Server $dir
     [void](Copy-EsScripts $dir)
     if (Test-Path (Join-Path $dir 'EasyServer\python\pythonw.exe')) {
@@ -380,6 +403,8 @@ try {
     Step 'Creating the server folder'
     New-Item -ItemType Directory -Force -Path $cfg.Dir, (Join-Path $cfg.Dir 'Resources\Client'), (Join-Path $cfg.Dir 'Resources\Server') | Out-Null
     New-Item -ItemType Directory -Force -Path (Split-Path $StateFile) | Out-Null
+    Protect-EsFolder $cfg.Dir
+    Protect-EsFolder (Split-Path $StateFile) -AdminOnly
     Set-Content -Path $StateFile -Value $cfg.Dir
     Ok $cfg.Dir
 
