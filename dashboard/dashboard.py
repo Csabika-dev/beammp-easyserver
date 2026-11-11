@@ -38,7 +38,7 @@ import zipfile
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-EASY_VERSION = "1.2.0"
+EASY_VERSION = "1.2.1"
 REPO = "Csabika-dev/beammp-easyserver"
 BEAMMP_REPO = "BeamMP/BeamMP-Server"
 IS_WIN = os.name == "nt"
@@ -3416,4 +3416,21 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if IS_WIN and (sys.stderr is None or sys.stdout is None):
+        # started hidden (pythonw): keep messages and crashes in a log file
+        try:
+            os.makedirs(DATA_DIR, exist_ok=True)
+            _log = open(os.path.join(DATA_DIR, "dashboard.log"), "a", encoding="utf-8", buffering=1)
+            sys.stdout = sys.stderr = _log
+        except OSError:
+            pass
+    try:
+        main()
+    except SystemExit:
+        raise
+    except BaseException:
+        import traceback
+        if sys.stderr:
+            sys.stderr.write(time.strftime("%Y-%m-%d %H:%M:%S ") + "dashboard crashed:\n" + traceback.format_exc())
+            sys.stderr.flush()
+        raise
