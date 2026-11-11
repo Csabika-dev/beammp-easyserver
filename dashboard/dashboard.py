@@ -23,6 +23,7 @@ import shutil
 import smtplib
 import socket
 import ssl
+import stat
 import struct
 import subprocess
 import sys
@@ -37,7 +38,7 @@ import zipfile
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-EASY_VERSION = "1.1.0"
+EASY_VERSION = "1.1.1"
 REPO = "Csabika-dev/beammp-easyserver"
 BEAMMP_REPO = "BeamMP/BeamMP-Server"
 IS_WIN = os.name == "nt"
@@ -134,8 +135,8 @@ class Instance:
         if self.meta.get("name"):
             return self.meta["name"]
         try:
-            with open(self.CONFIG, encoding="utf-8") as f:
-                n = toml_parse(f.read())[0].get("General", {}).get("Name")
+            with open_shared(self.CONFIG) as f:
+                n = toml_parse(f.read(262144))[0].get("General", {}).get("Name")
             if isinstance(n, str) and n.strip():
                 return re.sub(r"\^.", "", n).strip()[:60]
         except OSError:
@@ -144,8 +145,8 @@ class Instance:
 
     def port(self):
         try:
-            with open(self.CONFIG, encoding="utf-8") as f:
-                v = toml_parse(f.read())[0].get("General", {}).get("Port")
+            with open_shared(self.CONFIG) as f:
+                v = toml_parse(f.read(262144))[0].get("General", {}).get("Port")
             return v if isinstance(v, int) else None
         except OSError:
             return None
@@ -233,10 +234,31 @@ def ensure_dirs():
         pass
 
 
+def open_shared(path, mode="r"):
+    """Open a file in a folder the game server can also write to.
+
+    Never follows links (a hacked game server could point them at the
+    dashboard's own files) and never blocks on FIFOs. Text mode is UTF-8."""
+    flags = {"r": os.O_RDONLY, "rb": os.O_RDONLY, "w": os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+             "a": os.O_WRONLY | os.O_CREAT | os.O_APPEND}[mode]
+    flags |= (getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0) |
+              getattr(os, "O_BINARY", 0))
+    fd = os.open(path, flags, 0o664)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError("not a regular file: %s" % path)
+        if "b" in mode:
+            return os.fdopen(fd, mode)
+        return os.fdopen(fd, mode, encoding="utf-8", errors="replace", newline="\n" if mode != "r" else None)
+    except BaseException:
+        os.close(fd)
+        raise
+
+
 def read_json(path, default):
     try:
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
+        with open_shared(path) as f:
+            return json.loads(f.read(4 * 1024 * 1024))
     except (OSError, ValueError):
         return default
 
@@ -888,6 +910,8 @@ def validate_config(text, dashboard_port, has_authkey):
                     add("error", key, 'Map must look like "/levels/NAME/info.json"', sec)
                 elif name not in BUILTIN_MAPS and name not in enabled_mod_maps():
                     add("warning", key, "Map '%s' isn't a built-in map and no enabled mod contains it" % name, sec)
+            if key == "ResourceFolder" and isinstance(v, str) and not re.fullmatch(r"[A-Za-z0-9_\-]{1,64}", v):
+                add("error", key, "Resource folder must be a simple folder name next to the server (normally Resources)", sec)
             if key == "UpdateReminderTime" and v and not re.fullmatch(r"\d+\s*(s|min|h|d)?", v.strip()):
                 add("warning", key, "Update reminder interval should look like 30s or 5min", sec)
     port = g.get("Port")
@@ -934,7 +958,7 @@ def list_mods():
             continue
         for n in names:
             p = os.path.join(folder, n)
-            if n.lower().endswith(".zip") and os.path.isfile(p):
+            if n.lower().endswith(".zip") and os.path.isfile(p) and not os.path.islink(p):
                 r = modscan.cached_result(p)
                 out.append({"name": n, "size": os.path.getsize(p), "enabled": enabled,
                             "maps": zip_maps(p) or [], "safety": r["verdict"] if r else "unchecked",
@@ -1059,8 +1083,8 @@ def short_err(e):
 
 def server_name():
     try:
-        with open(I().CONFIG, encoding="utf-8") as f:
-            data, _, _ = toml_parse(f.read())
+        with open_shared(I().CONFIG) as f:
+            data, _, _ = toml_parse(f.read(262144))
         return str(data.get("General", {}).get("Name", ""))
     except OSError:
         return ""
@@ -1074,8 +1098,8 @@ ALLOW_MAX = 1000
 def read_allowlist():
     on, names = False, []
     try:
-        with open(I().ALLOW_FILE, encoding="utf-8", errors="replace") as f:
-            for line in f:
+        with open_shared(I().ALLOW_FILE) as f:
+            for line in f.read(1024 * 1024).splitlines():
                 line = line.strip()
                 m = re.fullmatch(r"mode\s*=\s*(\w+)", line)
                 if m:
@@ -1106,24 +1130,33 @@ def clean_allow_names(raw):
 def write_allowlist(on, names):
     os.makedirs(I().STATS_DIR, exist_ok=True)
     tmp = I().ALLOW_FILE + ".tmp"
-    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    with open_shared(tmp, "w") as f:
         f.write("# Managed by the BeamMP EasyServer dashboard (Config -> Who can join).\n")
         f.write("# mode=on: only the names below can join. Names are not case-sensitive.\n")
         f.write("mode=%s\n" % ("on" if on else "off"))
         for n in names:
             f.write(n + "\n")
-    try:
-        os.chmod(tmp, 0o664)
-    except OSError:
-        pass
     os.replace(tmp, I().ALLOW_FILE)
+
+
+def clean_player_name(n):
+    """Player names come from the game server's log. BeamMP names only use
+    letters, digits, _ . - and spaces - anything else (Discord formatting,
+    links, mentions, control characters) is removed before it is shown or sent."""
+    n = re.sub(r"[^\w .\-]", "", str(n or ""))
+    n = re.sub(r"\s+", " ", n).strip()[:40]
+    return n or "?"
 
 
 def recent_denied(days=7):
     seen, out = set(), []
     for e in reversed(read_events(now() - days * 86400)):
         if e.get("ev") == "denied":
-            n = str(e.get("name", ""))[:40]
+            n = clean_player_name(e.get("name"))
             if n.lower() in seen:
                 continue
             seen.add(n.lower())
@@ -1172,8 +1205,8 @@ def system_info():
 def read_mapvote():
     on, maps = False, []
     try:
-        with open(I().VOTE_FILE, encoding="utf-8", errors="replace") as f:
-            for line in f:
+        with open_shared(I().VOTE_FILE) as f:
+            for line in f.read(256 * 1024).splitlines():
                 line = line.strip()
                 m = re.fullmatch(r"mode\s*=\s*(\w+)", line)
                 if m:
@@ -1188,15 +1221,15 @@ def read_mapvote():
 def write_mapvote(on, maps):
     os.makedirs(I().STATS_DIR, exist_ok=True)
     tmp = I().VOTE_FILE + ".tmp"
-    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    with open_shared(tmp, "w") as f:
         f.write("# Managed by the BeamMP EasyServer dashboard (Config -> Map vote).\n")
         f.write("mode=%s\n" % ("on" if on else "off"))
         for m in maps:
             f.write(m + "\n")
-    try:
-        os.chmod(tmp, 0o664)
-    except OSError:
-        pass
     os.replace(tmp, I().VOTE_FILE)
 
 
@@ -1205,8 +1238,11 @@ def read_events(since=0):
     evs = []
     for name in ("events.log.1", "events.log"):
         try:
-            with open(os.path.join(I().STATS_DIR, name), encoding="utf-8", errors="replace") as f:
-                for line in f:
+            with open_shared(os.path.join(I().STATS_DIR, name), "rb") as f:
+                size = os.fstat(f.fileno()).st_size
+                if size > 32 * 1024 ** 2:           # only the newest part of a huge log
+                    f.seek(size - 32 * 1024 ** 2)
+                for line in f.read(32 * 1024 ** 2).decode("utf-8", "replace").splitlines():
                     try:
                         e = json.loads(line)
                         if isinstance(e, dict) and isinstance(e.get("t"), int) and e["t"] >= since:
@@ -1537,6 +1573,43 @@ def ip_is_lan(ip):
         return False
 
 
+def fail_key(ip):
+    """Address used for login lockouts. IPv6 users can pick any address in their
+    /64 network, so the whole /64 counts as one address."""
+    try:
+        a = ipaddress.ip_address(ip)
+        if a.version == 6 and a.ipv4_mapped:
+            return str(a.ipv4_mapped)
+        if a.version == 6:
+            return str(ipaddress.ip_network(str(a) + "/64", strict=False))
+        return str(a)
+    except ValueError:
+        return str(ip)
+
+
+LOCAL_SUFFIXES = (".local", ".lan", ".home", ".home.arpa", ".internal", ".localdomain", ".box",
+                  ".router", ".intranet", ".private", ".corp", ".localnet", ".gateway")
+
+
+def host_name(host_header):
+    """The host part of a Host header ('[::1]:30815' -> '::1'), lower case."""
+    h = (host_header or "").strip().lower()
+    if h.startswith("["):
+        return h[1:h.find("]")] if "]" in h else ""
+    return h.rsplit(":", 1)[0] if h.count(":") == 1 else h
+
+
+def host_is_local_name(host):
+    if host in ("localhost",) or host.endswith(".localhost"):
+        return True
+    try:
+        ipaddress.ip_address(host)
+        return True                 # a plain address can't be used for DNS rebinding
+    except ValueError:
+        pass
+    return bool(re.fullmatch(r"[a-z0-9-]{1,63}", host)) or host.endswith(LOCAL_SUFFIXES)
+
+
 def ip_is_loopback(ip):
     try:
         a = ipaddress.ip_address(ip)
@@ -1581,8 +1654,8 @@ class App:
     # ---------- config helpers
     def read_config_text(self):
         try:
-            with open(I().CONFIG, encoding="utf-8") as f:
-                return f.read()
+            with open_shared(I().CONFIG) as f:
+                return f.read(262144)
         except OSError:
             return "[General]\n"
 
@@ -1595,7 +1668,7 @@ class App:
             os.replace(tmp, I().CONFIG)
         else:
             # in place: the dashboard user may write the file but not the server folder
-            with open(I().CONFIG, "w", encoding="utf-8") as f:
+            with open_shared(I().CONFIG, "w") as f:
                 f.write(text)
         self.config_changed()
 
@@ -1733,10 +1806,13 @@ class App:
             if size < S["ev_pos"]:
                 S["ev_pos"] = 0
             if size > S["ev_pos"]:
-                with open(path, encoding="utf-8", errors="replace") as f:
+                with open_shared(path, "rb") as f:
                     f.seek(S["ev_pos"])
-                    chunk = f.read(256 * 1024)
-                    S["ev_pos"] += len(chunk.encode("utf-8"))
+                    raw = f.read(256 * 1024)
+                    if len(raw) == 256 * 1024 and b"\n" in raw:
+                        raw = raw[:raw.rindex(b"\n") + 1]     # never cut a line in half
+                    S["ev_pos"] += len(raw)
+                    chunk = raw.decode("utf-8", "replace")
                 joined, denied = [], []
                 for line in chunk.splitlines():
                     try:
@@ -1746,11 +1822,11 @@ class App:
                     if not isinstance(e, dict) or not isinstance(e.get("t"), int) or e["t"] < S["last_t"]:
                         continue
                     if e.get("ev") == "join":
-                        joined.append(str(e.get("name", "?"))[:64])
+                        joined.append(clean_player_name(e.get("name")))
                     elif e.get("ev") == "mapvote" and isinstance(e.get("map"), str):
-                        S["pending_map"] = (now() + 30, e["map"][:80], str(e.get("by", ""))[:64])
+                        S["pending_map"] = (now() + 30, e["map"][:80], clean_player_name(e.get("by")))
                     elif e.get("ev") == "denied":
-                        n = str(e.get("name", "?"))[:64]
+                        n = clean_player_name(e.get("name"))
                         if not any(d[0] == n for d in denied):
                             denied.append((n, bool(e.get("guest"))))
                     S["last_t"] = max(S["last_t"], e["t"])
@@ -1845,25 +1921,40 @@ class App:
     # ---------- login protection
     def is_locked(self, ip):
         t = now()
+        key = fail_key(ip)
         with LOCK:
-            if self.locked.get(ip, 0) > t:
+            if self.locked.get(key, 0) > t:
                 return True
+            if ip_is_loopback(ip):
+                return False            # someone sitting at the server itself
             if not ip_is_lan(ip):
                 self.global_fails = [x for x in self.global_fails if x > t - 600]
                 if len(self.global_fails) >= 30:
+                    return True
+            else:
+                # many addresses on the network guessing together (or one device
+                # changing its address) - pause logins from the network for a while
+                self.lan_fails = [x for x in getattr(self, "lan_fails", []) if x > t - 600]
+                if len(self.lan_fails) >= 60:
                     return True
         return False
 
     def login_failed(self, ip):
         t = now()
+        key = fail_key(ip)
         with LOCK:
-            f = [x for x in self.fails.get(ip, []) if x > t - 900] + [t]
-            self.fails[ip] = f
+            if len(self.fails) > 5000:      # don't let random addresses fill the memory
+                self.fails = {k: v for k, v in self.fails.items() if v and v[-1] > t - 900}
+                self.locked = {k: v for k, v in self.locked.items() if v > t}
+            f = [x for x in self.fails.get(key, []) if x > t - 900] + [t]
+            self.fails[key] = f
             if not ip_is_lan(ip):
                 self.global_fails.append(t)
+            elif not ip_is_loopback(ip):
+                self.lan_fails = getattr(self, "lan_fails", []) + [t]
             if len(f) >= 5:
-                self.locked[ip] = t + 900
-                self.fails[ip] = []
+                self.locked[key] = t + 900
+                self.fails[key] = []
                 lock = True
             else:
                 lock = False
@@ -1960,8 +2051,19 @@ class Handler(BaseHTTPRequestHandler):
     def fail(self, code, msg, **extra):
         self.send(code, dict({"ok": False, "error": msg}, **extra))
 
+    def content_length(self):
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            raise ValueError("bad Content-Length")
+        if n < 0:
+            raise ValueError("bad Content-Length")
+        if self.headers.get("Transfer-Encoding"):
+            raise ValueError("chunked uploads are not supported")
+        return n
+
     def body_json(self, limit=1024 * 1024):
-        n = int(self.headers.get("Content-Length") or 0)
+        n = self.content_length()
         if n > limit:
             raise ValueError("request too large")
         raw = self.rfile.read(n) if n else b"{}"
@@ -1972,7 +2074,7 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("bad JSON")
 
     def body_to_file(self, path, limit):
-        n = int(self.headers.get("Content-Length") or 0)
+        n = self.content_length()
         if n <= 0:
             raise ValueError("empty upload")
         if n > limit:
@@ -2008,6 +2110,14 @@ class Handler(BaseHTTPRequestHandler):
             if not (app.settings.get("remote_enabled") and self.https and app.secrets.has("TOTP_SECRET")):
                 self.send(403, "Remote access to this dashboard is turned off.", "text/plain")
                 return False
+        # DNS rebinding: a web page on some other site could point its own name
+        # at this computer and talk to the dashboard through a friend's browser.
+        # Only addresses and local names are accepted (any name once internet
+        # access is set up, because then you use your own domain).
+        host = host_name(self.headers.get("Host"))
+        if not host or not (host_is_local_name(host) or app.settings.get("remote_enabled")):
+            self.send(421, "Open the dashboard by its address (for example http://192.168.1.20:30815).", "text/plain")
+            return False
         if not app.secrets.has("MODS_PASSWORD") and not ip_is_loopback(self.ip):
             path, _ = self.route()
             if path.startswith("/api/") and path not in ("/api/session",):
@@ -2016,7 +2126,7 @@ class Handler(BaseHTTPRequestHandler):
         return True
 
     def csrf_ok(self, sess):
-        if self.headers.get("X-ES-CSRF") != sess["csrf"]:
+        if not hmac.compare_digest((self.headers.get("X-ES-CSRF") or "").encode(), sess["csrf"].encode()):
             return False
         origin = self.headers.get("Origin")
         if origin:
@@ -2103,7 +2213,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send(200, {
             "logged_in": bool(sess), "csrf": sess["csrf"] if sess else None,
             "needs_setup": not app.secrets.has("MODS_PASSWORD"),
-            "setup_allowed": ip_is_loopback(self.ip),
+            "setup_allowed": ip_is_loopback(self.ip) and host_name(self.headers.get("Host")) in ("localhost", "127.0.0.1", "::1"),
             "totp": app.secrets.has("TOTP_SECRET"),
             "version": EASY_VERSION, "platform": "windows" if IS_WIN else "linux",
             "https": self.https,
@@ -2113,7 +2223,13 @@ class Handler(BaseHTTPRequestHandler):
         app = APP
         if app.secrets.has("MODS_PASSWORD") or not ip_is_loopback(self.ip):
             return self.fail(403, "Setup is only possible once, on the server computer itself")
-        b = self.body_json()
+        host = host_name(self.headers.get("Host"))
+        origin = self.headers.get("Origin")
+        if host not in ("localhost", "127.0.0.1", "::1") or (
+                origin and host_name(urllib.parse.urlparse(origin).netloc) != host):
+            return self.fail(403, "Open http://localhost:%s on this computer to set the password" % (
+                self.server.server_address[1]))
+        b = self.body_json(4096)
         pw = str(b.get("password", ""))
         if len(pw) < 8:
             return self.fail(400, "Use at least 8 characters")
@@ -2137,13 +2253,16 @@ class Handler(BaseHTTPRequestHandler):
         pw = str(b.get("password", ""))
         good = app.secrets.get("MODS_PASSWORD")
         ok_pw = bool(good) and hmac.compare_digest(pw.encode(), good.encode())
-        if ok_pw and app.secrets.has("TOTP_SECRET") and not app.verify_totp(str(b.get("code", ""))):
-            app.login_failed(self.ip)
-            return self.fail(401, "Wrong or expired two-step code", need_code=True)
-        if not ok_pw:
+        has_totp = app.secrets.has("TOTP_SECRET")
+        # the code is only checked (and used up) when the password is right, but
+        # the answer is the same either way - so it never tells a guesser that
+        # the password part was correct
+        ok_code = (not has_totp) or (ok_pw and app.verify_totp(str(b.get("code", ""))))
+        if not (ok_pw and ok_code):
             time.sleep(0.7)
             app.login_failed(self.ip)
-            return self.fail(401, "Wrong password", need_code=app.secrets.has("TOTP_SECRET"))
+            return self.fail(401, "Wrong password or two-step code" if has_totp else "Wrong password",
+                             need_code=has_totp)
         tok = app.new_session(self.ip)
         self.send(200, {"ok": True}, extra={"Set-Cookie": self.cookie_header(tok)})
 
@@ -2510,7 +2629,13 @@ class Handler(BaseHTTPRequestHandler):
         name = safe_zip_name(q.get("name"))
         if not name:
             return self.fail(400, "Only .zip files can be uploaded")
-        tmp = os.path.join(UPLOAD_TMP, name)
+        tdir = tempfile.mkdtemp(dir=UPLOAD_TMP, prefix=".up-")   # own folder: parallel uploads can't mix
+        try:
+            return self._mods_upload(name, os.path.join(tdir, name))
+        finally:
+            shutil.rmtree(tdir, ignore_errors=True)
+
+    def _mods_upload(self, name, tmp):
         self.body_to_file(tmp, 4 * 1024 ** 3)
         result = modscan.scan(tmp)
         if result["verdict"] == "blocked":
@@ -2522,14 +2647,13 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             pass
         dest = os.path.join(I().CLIENT_DIR, name)
-        shutil.move(tmp, dest)
+        maps = zip_maps(tmp) or []
         if not IS_WIN:
-            try:
-                os.chmod(dest, 0o664)
-            except OSError:
-                pass
+            os.chmod(tmp, 0o664)      # set while it is still in our private folder
+        shutil.move(tmp, dest)
+        modscan.remember(dest, result.get("sha256"))
         APP.config_changed()
-        self.send(200, {"ok": True, "name": name, "maps": zip_maps(dest) or [],
+        self.send(200, {"ok": True, "name": name, "maps": maps,
                         "safety": result["verdict"], "reasons": result["reasons"], "checks": result["checks"]})
 
     def post_mods_action(self, q):
@@ -2544,11 +2668,15 @@ class Handler(BaseHTTPRequestHandler):
                     os.remove(p)
         elif act == "toggle":
             if os.path.exists(on):
-                shutil.move(on, off)
+                src, dst = on, off
             elif os.path.exists(off):
-                shutil.move(off, on)
+                src, dst = off, on
             else:
                 return self.fail(404, "not found")
+            r = modscan.cached_result(src)
+            shutil.move(src, dst)
+            if r:
+                modscan.remember(dst, r.get("sha256"))
         elif act == "qdelete":
             for p in (os.path.join(I().QUAR_DIR, name), os.path.join(I().QUAR_DIR, name + ".why.txt")):
                 if os.path.exists(p):
@@ -2567,8 +2695,7 @@ class Handler(BaseHTTPRequestHandler):
                 os.makedirs(I().QUAR_DIR, exist_ok=True)
                 dest = os.path.join(I().QUAR_DIR, m["name"])
                 shutil.move(os.path.join(folder, m["name"]), dest)
-                with open(dest + ".why.txt", "w", encoding="utf-8") as f:
-                    f.write("Blocked by the BeamMP EasyServer mod safety check:\n- " + "\n- ".join(r["reasons"]) + "\n")
+                modscan.write_note(dest + ".why.txt", modscan.why_text(r["reasons"]))
             res.append({"name": m["name"], "verdict": r["verdict"], "reasons": r["reasons"]})
         self.send(200, {"ok": True, "results": res})
 
@@ -2667,31 +2794,12 @@ class Handler(BaseHTTPRequestHandler):
     def post_settings(self, q):
         app = APP
         b = self.body_json()
-        upd = {}
-        if isinstance(b.get("notify"), dict):
-            cur = app.settings.get("notify")
-            cur.update({k: bool(v) for k, v in b["notify"].items() if k in DEFAULT_SETTINGS["notify"]})
-            upd["notify"] = cur
-        for k in ("discord_enabled", "email_enabled", "auto_restart", "update_check"):
-            if k in b:
-                upd[k] = bool(b[k])
-        for k in ("smtp_host", "smtp_user", "smtp_from", "smtp_to"):
-            if k in b:
-                v = str(b[k]).strip()
-                if len(v) > 300 or "\n" in v:
-                    return self.fail(400, "%s is invalid" % k)
-                upd[k] = v
-        if "smtp_port" in b:
-            try:
-                p = int(b["smtp_port"])
-                assert 1 <= p <= 65535
-                upd["smtp_port"] = p
-            except (TypeError, ValueError, AssertionError):
-                return self.fail(400, "SMTP port must be a number")
-        if "smtp_security" in b:
-            if b["smtp_security"] not in ("starttls", "ssl", "none"):
-                return self.fail(400, "bad SMTP security")
-            upd["smtp_security"] = b["smtp_security"]
+        upd = clean_settings(b)
+        # The saved email password only ever goes to the mail server it was
+        # typed in for: changing the server or login without typing the
+        # password again forgets it (so a stolen login can't redirect it).
+        if smtp_target_changed(upd) and b.get("smtp_password") is None:
+            app.secrets.set("SMTP_PASSWORD", "")
         if "discord_webhook" in b:
             url = str(b["discord_webhook"]).strip()
             if url and not valid_webhook(url):
@@ -2849,16 +2957,23 @@ class Handler(BaseHTTPRequestHandler):
                 if any(i["level"] == "error" for i in issues):
                     return self.send(400, {"ok": False, "error": "The imported config has errors", "issues": issues})
                 if q.get("settings", "1") == "1" and "easyserver-export.json" in names:
-                    meta = json.loads(z.read("easyserver-export.json")[:1024 * 1024] or b"{}")
+                    if z.getinfo("easyserver-export.json").file_size > 1024 * 1024:
+                        return self.fail(400, "easyserver-export.json is too large")
+                    try:
+                        meta = json.loads(z.read("easyserver-export.json") or b"{}")
+                    except ValueError:
+                        meta = None
                     s = meta.get("settings") if isinstance(meta, dict) else None
                     if isinstance(s, dict):
-                        allowed = {k: s[k] for k in s if k in ("notify", "smtp_host", "smtp_port", "smtp_security",
-                                                               "smtp_user", "smtp_from", "smtp_to", "auto_restart",
-                                                               "update_check", "discord_enabled", "email_enabled")}
-                        if isinstance(allowed.get("notify"), dict):
-                            cur = app.settings.get("notify")
-                            cur.update({k: bool(v) for k, v in allowed["notify"].items() if k in cur})
-                            allowed["notify"] = cur
+                        try:
+                            allowed = clean_settings(s)
+                        except ValueError as e:
+                            return self.fail(400, "Imported settings: %s" % e)
+                        if smtp_target_changed(allowed) and app.secrets.has("SMTP_PASSWORD"):
+                            # never send the saved email password to a mail server from a file
+                            for k in ("smtp_host", "smtp_user", "smtp_port", "smtp_security"):
+                                allowed.pop(k, None)
+                            report["skipped"].append("email server settings (keeps your current mail server)")
                         app.settings.update(allowed)
                         report["settings"] = True
                 if "allowlist.txt" in names and z.getinfo("allowlist.txt").file_size < 256 * 1024:
@@ -2872,6 +2987,7 @@ class Handler(BaseHTTPRequestHandler):
                     except ValueError:
                         report["skipped"].append("allowlist.txt")
                 if q.get("mods", "1") == "1":
+                    total = 0
                     for n in names:
                         m = re.fullmatch(r"(mods|mods-disabled)/([^/]+)", n)
                         if not m:
@@ -2882,25 +2998,83 @@ class Handler(BaseHTTPRequestHandler):
                         if not name:
                             report["skipped"].append(n[:120])
                             continue
-                        dest_tmp = os.path.join(UPLOAD_TMP, name)
-                        with z.open(n) as src, open(dest_tmp, "wb") as dst:
-                            shutil.copyfileobj(src, dst)
-                        r = modscan.scan(dest_tmp)
-                        if r["verdict"] == "blocked":
-                            os.remove(dest_tmp)
-                            report["mods_blocked"].append({"name": name, "reasons": r["reasons"]})
+                        zi = z.getinfo(n)
+                        # zip bombs: a tiny entry that unpacks to many GB fills the disk
+                        total += zi.file_size
+                        if (zi.file_size > 4 * 1024 ** 3 or total > 40 * 1024 ** 3 or
+                                (zi.file_size > 50 * 1024 ** 2 and zi.file_size > 200 * max(zi.compress_size, 1)) or
+                                shutil.disk_usage(UPLOAD_TMP).free < zi.file_size + 1024 ** 3):
+                            report["skipped"].append(n[:120] + " (too large)")
                             continue
-                        shutil.move(dest_tmp, os.path.join(I().CLIENT_DIR if m.group(1) == "mods" else I().DISABLED_DIR, name))
-                        report["mods_added"].append(name)
+                        tdir = tempfile.mkdtemp(dir=UPLOAD_TMP, prefix=".imp-")
+                        try:
+                            dest_tmp = os.path.join(tdir, name)
+                            with z.open(zi) as src, open(dest_tmp, "wb") as dst:
+                                shutil.copyfileobj(src, dst)   # stops at the size listed above
+                            r = modscan.scan(dest_tmp)
+                            if r["verdict"] == "blocked":
+                                report["mods_blocked"].append({"name": name, "reasons": r["reasons"]})
+                                continue
+                            if not IS_WIN:
+                                os.chmod(dest_tmp, 0o664)
+                            final = os.path.join(I().CLIENT_DIR if m.group(1) == "mods" else I().DISABLED_DIR, name)
+                            shutil.move(dest_tmp, final)
+                            modscan.remember(final, r.get("sha256"))
+                            report["mods_added"].append(name)
+                        finally:
+                            shutil.rmtree(tdir, ignore_errors=True)
+            old_port = (toml_parse(app.read_config_text())[0].get("General") or {}).get("Port")
             text = app.move_plaintext_authkey(text)
             app.write_config_text(text)
             report["config"] = True
+            new_port = (toml_parse(text)[0].get("General") or {}).get("Port")
+            if isinstance(new_port, int) and new_port != old_port and not IS_WIN:
+                control("firewall-game", old=old_port if isinstance(old_port, int) else None, new=new_port, timeout=30)
+                app.notifier.add("network", "Server port changed", "Import changed the port %s -> %d. "
+                                 "Remember to forward the new port on your router." % (old_port, new_port))
             self.send(200, {"ok": True, "report": report, "note": app.applied_note()})
         finally:
             try:
                 os.remove(tmp)
             except OSError:
                 pass
+
+
+def clean_settings(b):
+    """Checked copy of the user-changeable notification settings in b (raises ValueError)."""
+    upd = {}
+    if isinstance(b.get("notify"), dict):
+        cur = APP.settings.get("notify")
+        cur.update({k: bool(v) for k, v in b["notify"].items() if k in DEFAULT_SETTINGS["notify"]})
+        upd["notify"] = cur
+    for k in ("discord_enabled", "email_enabled", "auto_restart", "update_check"):
+        if k in b:
+            upd[k] = bool(b[k])
+    for k in ("smtp_host", "smtp_user", "smtp_from", "smtp_to"):
+        if k in b:
+            v = str(b[k]).strip()
+            if len(v) > 300 or any(c in v for c in "\r\n\x00"):
+                raise ValueError("%s is invalid" % k)
+            upd[k] = v
+    if upd.get("smtp_host") and not re.fullmatch(r"[A-Za-z0-9.\-]{1,253}|\[?[0-9A-Fa-f:.]+\]?", upd["smtp_host"]):
+        raise ValueError("SMTP server must be a host name like smtp.gmail.com")
+    if "smtp_port" in b:
+        try:
+            p = int(b["smtp_port"])
+            assert 1 <= p <= 65535
+            upd["smtp_port"] = p
+        except (TypeError, ValueError, AssertionError):
+            raise ValueError("SMTP port must be a number")
+    if "smtp_security" in b:
+        if b["smtp_security"] not in ("starttls", "ssl", "none"):
+            raise ValueError("bad SMTP security")
+        upd["smtp_security"] = b["smtp_security"]
+    return upd
+
+
+def smtp_target_changed(upd):
+    cur = APP.settings
+    return any(k in upd and str(upd[k]) != str(cur.get(k)) for k in ("smtp_host", "smtp_user", "smtp_port", "smtp_security"))
 
 
 def analytics_online():
@@ -2946,9 +3120,40 @@ class Server(ThreadingHTTPServer):
     allow_reuse_address = True
     request_queue_size = 64
 
+    MAX_CONN = 96          # at once, in total
+    MAX_CONN_PER_IP = 24
+
     def __init__(self, addr, tls_ctx=None):
         self.tls_ctx = tls_ctx
+        self.conn_lock = threading.Lock()
+        self.conns = {}
         super().__init__(addr, Handler)
+
+    def process_request(self, request, client_address):
+        ip = fail_key(client_address[0])
+        with self.conn_lock:
+            total = sum(self.conns.values())
+            if total >= self.MAX_CONN or self.conns.get(ip, 0) >= self.MAX_CONN_PER_IP:
+                busy = True
+            else:
+                busy = False
+                self.conns[ip] = self.conns.get(ip, 0) + 1
+        if busy:            # too many open connections: drop instead of piling up threads
+            self.shutdown_request(request)
+            return
+        super().process_request(request, client_address)
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            ip = fail_key(client_address[0])
+            with self.conn_lock:
+                n = self.conns.get(ip, 1) - 1
+                if n > 0:
+                    self.conns[ip] = n
+                else:
+                    self.conns.pop(ip, None)
 
     def get_request(self):
         sock, addr = self.socket.accept()
