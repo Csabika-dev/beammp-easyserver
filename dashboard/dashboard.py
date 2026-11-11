@@ -38,7 +38,7 @@ import zipfile
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-EASY_VERSION = "1.2.1"
+EASY_VERSION = "1.2.2"
 REPO = "Csabika-dev/beammp-easyserver"
 BEAMMP_REPO = "BeamMP/BeamMP-Server"
 IS_WIN = os.name == "nt"
@@ -2177,7 +2177,35 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt, *args):
-        sys.stderr.write("%s %s\n" % (self.client_address[0], (fmt % args).split("?")[0]))
+        # only the method and path - never query strings, request bodies or
+        # garbled request lines (those could contain a password)
+        line = getattr(self, "requestline", "") or ""
+        parts = line.split(" ")
+        if len(parts) == 3 and parts[0] in ("GET", "POST", "PUT", "HEAD") and parts[1].startswith("/"):
+            what = "%s %s" % (parts[0], parts[1].split("?")[0][:120])
+        else:
+            what = "(malformed request)"
+        code = args[1] if fmt.startswith('"%s" %s') and len(args) > 1 else ""
+        sys.stderr.write("%s %s %s\n" % (self.client_address[0], what, code))
+
+    def log_error(self, fmt, *args):
+        sys.stderr.write("%s request error (details not logged)\n" % self.client_address[0])
+
+    def send_error(self, code, message=None, explain=None):
+        # the standard error page repeats the request line, which can contain
+        # leftover data - answer with a plain message instead
+        self.close_connection = True
+        try:
+            self.send_response(code)
+            data = ("Error %d\n" % code).encode()
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            if self.command != "HEAD" and code >= 200 and code not in (204, 304):
+                self.wfile.write(data)
+        except OSError:
+            pass
 
     # ---------- plumbing
     @property
@@ -2202,6 +2230,16 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def send(self, code, obj=None, ctype="application/json", extra=None):
+        # An answer sent before the request body was read (a refusal, an error)
+        # must close the connection: otherwise the unread body (which may hold
+        # a password) would be taken as the start of the next request.
+        try:
+            pending = int(self.headers.get("Content-Length") or 0) > 0 and not getattr(self, "_body_done", False)
+        except ValueError:
+            pending = True
+        if pending or self.headers.get("Transfer-Encoding"):
+            self.close_connection = True
+            extra = dict(extra or {}, Connection="close")
         if isinstance(obj, (bytes, bytearray)):
             data = bytes(obj)
         elif ctype == "application/json":
@@ -2233,6 +2271,7 @@ class Handler(BaseHTTPRequestHandler):
         if n > limit:
             raise ValueError("request too large")
         raw = self.rfile.read(n) if n else b"{}"
+        self._body_done = True
         try:
             v = json.loads(raw or b"{}")
             return v if isinstance(v, dict) else {}
@@ -2256,6 +2295,7 @@ class Handler(BaseHTTPRequestHandler):
         if left:
             os.remove(path)
             raise ValueError("upload interrupted")
+        self._body_done = True
 
     def cookie(self, name):
         for part in (self.headers.get("Cookie") or "").split(";"):
@@ -2329,6 +2369,7 @@ class Handler(BaseHTTPRequestHandler):
         self.dispatch("PUT")
 
     def dispatch(self, method):
+        self._body_done = False
         try:
             if not self.gate():
                 return
