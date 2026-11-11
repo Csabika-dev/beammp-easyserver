@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.4.0 - Cars & chat
+
+New card **Config → Cars & chat**. Everything runs in the server plugin: players don't need to install anything, and changes work without a restart.
+
+- **Scheduled car cleanup - on by default.** Removes all cars every day at 04:00, or every 1, 2, 3, 4, 6, 8 or 12 hours if your server is busy. Players get a countdown in the chat first (30 minutes by default, adjustable), then 15, 10, 5, 2, 1 minute, 30 seconds and 10…1.
+- **Remove abandoned cars** (off by default): cars that haven't moved for 5 minutes (adjustable) are removed, with a warning to the owner 1 minute before.
+- **Chat commands** (off by default): `/countdown` for races, `/tag` chat tags like `[DRIFT]`, `/top` server records (top speed, distance, longest drive without a reset - also on the Players page) and `/help`.
+- **Mods page** shows how much players have to download before joining, and can add it to the server description ("| Mods: 1.2 GB").
+- The installer now also updates the plugin on extra servers made in the dashboard (before, only the main server got plugin updates).
+
 ## 1.3.0 - Hide your IP (DDoS protection)
 
 New section **Settings → Hide your IP (DDoS protection)**. Everything in it is **off by default**, and the settings page explains the trade-off: much less chance of a DDoS hitting your home, but more lag.
