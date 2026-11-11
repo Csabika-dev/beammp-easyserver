@@ -38,7 +38,7 @@ import zipfile
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-EASY_VERSION = "1.3.0"
+EASY_VERSION = "1.4.0"
 REPO = "Csabika-dev/beammp-easyserver"
 BEAMMP_REPO = "BeamMP/BeamMP-Server"
 IS_WIN = os.name == "nt"
@@ -129,6 +129,8 @@ class Instance:
         self.STATS_DIR = os.path.join(self.RES, "Server", "EasyServerStats")
         self.ALLOW_FILE = os.path.join(self.STATS_DIR, "allowlist.txt")
         self.VOTE_FILE = os.path.join(self.STATS_DIR, "mapvote.txt")
+        self.EXTRAS_FILE = os.path.join(self.STATS_DIR, "extras.txt")
+        self.RECORDS_FILE = os.path.join(self.STATS_DIR, "records.tsv")
         self.CONFIG = os.path.join(self.SERVER_DIR, "ServerConfig.toml")
         self.SERVER_LOG = os.path.join(self.SERVER_DIR, "Server.log")
         self.authkey_name = "BEAMMP_AUTH_KEY" if iid == "main" else "BEAMMP_AUTH_KEY_" + iid.upper()
@@ -1360,6 +1362,124 @@ def write_mapvote(on, maps):
         for m in maps:
             f.write(m + "\n")
     os.replace(tmp, I().VOTE_FILE)
+
+
+# Cars & chat (Config page): read by the EasyServerStats plugin every 10 s.
+# Without the file the plugin uses these same defaults - the scheduled car
+# cleanup is on (every day at 04:00), everything else is off.
+EXTRAS_DEFAULTS = {"clear": True, "every": 24, "at": "04:00", "warn": 30,
+                   "afk": False, "afk_minutes": 5, "countdown": False, "tag": False, "top": False,
+                   "tags": ["DRIFT", "COP", "CRUISE", "RACE", "CHILL", "AFK"]}
+CLEAR_EVERY = (1, 2, 3, 4, 6, 8, 12, 24)
+WARN_CHOICES = (0, 1, 2, 5, 10, 15, 30, 60)
+
+
+def read_extras():
+    d = json.loads(json.dumps(EXTRAS_DEFAULTS))
+    try:
+        with open_shared(I().EXTRAS_FILE) as f:
+            lines = f.read(64 * 1024).splitlines()
+    except OSError:
+        return d
+    for line in lines:
+        m = re.fullmatch(r"\s*([\w]+)\s*=\s*(.*?)\s*", line)
+        if not m:
+            continue
+        k, v = m.group(1), m.group(2)
+        if k in ("clear", "afk", "countdown", "tag", "top"):
+            d[k] = v.lower() == "on"
+        elif k == "every" and v.isdigit() and int(v) in CLEAR_EVERY:
+            d["every"] = int(v)
+        elif k == "at" and re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", v):
+            d["at"] = "%02d:%s" % (int(v.split(":")[0]), v.split(":")[1])
+        elif k == "warn" and v.isdigit() and int(v) <= 60:
+            d["warn"] = int(v)
+        elif k == "afk_minutes" and v.isdigit() and 2 <= int(v) <= 120:
+            d["afk_minutes"] = int(v)
+        elif k == "tags":
+            t = clean_tags(v.split(","))
+            if t:
+                d["tags"] = t
+    return d
+
+
+def clean_tags(items):
+    out = []
+    for t in items:
+        t = re.sub(r"[^A-Za-z0-9-]", "", str(t)).upper()[:12]
+        if t and t not in out and len(out) < 20:
+            out.append(t)
+    return out
+
+
+def write_extras(d):
+    os.makedirs(I().STATS_DIR, exist_ok=True)
+    tmp = I().EXTRAS_FILE + ".tmp"
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    onoff = lambda b: "on" if b else "off"
+    with open_shared(tmp, "w") as f:
+        f.write("# Managed by the BeamMP EasyServer dashboard (Config -> Cars & chat).\n")
+        f.write("clear=%s\nevery=%d\nat=%s\nwarn=%d\nafk=%s\nafk_minutes=%d\ncountdown=%s\ntag=%s\ntop=%s\ntags=%s\n" % (
+            onoff(d["clear"]), d["every"], d["at"], d["warn"], onoff(d["afk"]), d["afk_minutes"],
+            onoff(d["countdown"]), onoff(d["tag"]), onoff(d["top"]), ",".join(d["tags"])))
+    os.replace(tmp, I().EXTRAS_FILE)
+
+
+def next_clear(d, t=None):
+    """When the plugin removes all cars next (same rule as in main.lua)."""
+    t = time.localtime(t or time.time())
+    h, m = map(int, d["at"].split(":"))
+    base = time.mktime((t.tm_year, t.tm_mon, t.tm_mday, h, m, 0, 0, 0, -1)) - 86400
+    step = d["every"] * 3600
+    nowt = time.mktime(t)
+    return int(base + (int((nowt - base) // step) + 1) * step)
+
+
+def read_records(limit=10):
+    rows = []
+    try:
+        with open_shared(I().RECORDS_FILE) as f:
+            for line in f.read(2 * 1024 * 1024).splitlines():
+                p = line.split("\t")
+                if len(p) == 4:
+                    try:
+                        rows.append({"name": p[0][:64], "speed": float(p[1]), "dist": float(p[2]), "streak": int(float(p[3]))})
+                    except ValueError:
+                        continue
+    except OSError:
+        return {}
+    top = lambda k: [r for r in sorted(rows, key=lambda r: -r[k]) if r[k] > 0][:limit]
+    return {"speed": top("speed"), "dist": top("dist"), "streak": top("streak")}
+
+
+MOD_DESC_RE = re.compile(r"\s*\|\s*(Mods: [\d.]+ [KMGT]?B|No mods to download)$")
+
+
+def fmt_bytes(n):
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024 or unit == "TB":
+            return ("%d %s" if unit in ("B", "KB") else "%.1f %s") % (n, unit)
+        n /= 1024.0
+
+
+def refresh_mod_desc():
+    """Keep "| Mods: 1.2 GB" at the end of the server description up to date
+    (when that's turned on), so players see the download size before joining."""
+    on = bool(I().meta.get("desc_modsize"))
+    text = APP.read_config_text()
+    desc = toml_parse(text)[0].get("General", {}).get("Description", "")
+    desc = desc if isinstance(desc, str) else ""
+    base = MOD_DESC_RE.sub("", desc)
+    if on:
+        total = sum(m["size"] for m in list_mods() if m["enabled"])
+        base += " | " + ("Mods: " + fmt_bytes(total) if total else "No mods to download")
+    if base != desc:
+        APP.write_config_text(toml_set(text, "General", "Description", base[:1000]))
+        return True
+    return False
 
 
 # ----------------------------------------------------------------------------- analytics
@@ -3066,6 +3186,60 @@ class Handler(BaseHTTPRequestHandler):
         write_mapvote(on, maps)
         self.send(200, {"ok": True, "note": "Saved - players can type /vote in chat right away." if on else "Saved - map voting is off."})
 
+    def get_extras(self, q):
+        d = read_extras()
+        d.update({"next_clear": next_clear(d) if d["clear"] else None, "every_choices": list(CLEAR_EVERY),
+                  "warn_choices": list(WARN_CHOICES), "file": os.path.exists(I().EXTRAS_FILE),
+                  "plugin": os.path.exists(os.path.join(I().STATS_DIR, "main.lua"))})
+        self.send(200, d)
+
+    def post_extras(self, q):
+        b = self.body_json()
+        d = read_extras()
+        for k in ("clear", "afk", "countdown", "tag", "top"):
+            if k in b:
+                d[k] = bool(b[k])
+        if "every" in b:
+            if int(b["every"]) not in CLEAR_EVERY:
+                return self.fail(400, "Pick how often from the list")
+            d["every"] = int(b["every"])
+        if "at" in b:
+            at = str(b["at"]).strip()
+            if not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", at):
+                return self.fail(400, "Enter the time like 04:00")
+            d["at"] = "%02d:%s" % (int(at.split(":")[0]), at.split(":")[1])
+        if "warn" in b:
+            if int(b["warn"]) not in WARN_CHOICES:
+                return self.fail(400, "Pick the countdown length from the list")
+            d["warn"] = int(b["warn"])
+        if d["warn"] * 60 >= d["every"] * 3600:
+            return self.fail(400, "The countdown must be shorter than the time between cleanups")
+        if "afk_minutes" in b:
+            n = int(b["afk_minutes"])
+            if not 2 <= n <= 120:
+                return self.fail(400, "Abandoned cars: use 2 to 120 minutes")
+            d["afk_minutes"] = n
+        if "tags" in b:
+            if not isinstance(b["tags"], list):
+                return self.fail(400, "bad tags")
+            t = clean_tags(b["tags"])
+            if d["tag"] and not t:
+                return self.fail(400, "Add at least one tag")
+            d["tags"] = t or EXTRAS_DEFAULTS["tags"]
+        write_extras(d)
+        nxt = next_clear(d) if d["clear"] else None
+        self.send(200, {"ok": True, "next_clear": nxt,
+                        "note": "Saved - works right away, no restart needed." +
+                                (" Next car cleanup: %s." % time.strftime("%a %H:%M", time.localtime(nxt)) if nxt else "")})
+
+    def post_mods_desc(self, q):
+        on = bool(self.body_json().get("enabled"))
+        set_server_meta(I().id, desc_modsize=True if on else None)
+        changed = refresh_mod_desc()
+        self.send(200, {"ok": True, "note": ("The download size is now at the end of the server description. " if on else
+                                             "Removed the download size from the description. ") +
+                                            (APP.applied_note() if changed else "")})
+
     def post_server_action(self, q):
         what = self.body_json().get("action")
         r = APP.server.action(what)
@@ -3178,8 +3352,12 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---------- mods
     def get_mods(self, q):
-        self.send(200, {"mods": list_mods(), "quarantine": list_quarantine(),
-                        "checks": active_checks(), "auto_apply": not IS_WIN})
+        mods = list_mods()
+        self.send(200, {"mods": mods, "quarantine": list_quarantine(),
+                        "checks": active_checks(), "auto_apply": not IS_WIN,
+                        "download": sum(m["size"] for m in mods if m["enabled"]),
+                        "maps_size": sum(m["size"] for m in mods if m["enabled"] and m["maps"]),
+                        "desc_modsize": bool(I().meta.get("desc_modsize"))})
 
     def put_mods_upload(self, q):
         name = safe_zip_name(q.get("name"))
@@ -3209,6 +3387,7 @@ class Handler(BaseHTTPRequestHandler):
             os.chmod(tmp, 0o664)      # set while it is still in our private folder
         shutil.move(tmp, dest)
         modscan.remember(dest, result.get("sha256"))
+        refresh_mod_desc()
         APP.config_changed()
         self.send(200, {"ok": True, "name": name, "maps": maps,
                         "safety": result["verdict"], "reasons": result["reasons"], "checks": result["checks"]})
@@ -3240,6 +3419,7 @@ class Handler(BaseHTTPRequestHandler):
                     os.remove(p)
         else:
             return self.fail(400, "bad action")
+        refresh_mod_desc()
         APP.config_changed()
         self.send(200, {"ok": True, "note": APP.applied_note()})
 
@@ -3258,7 +3438,10 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---------- players
     def get_players(self, q):
-        self.send(200, analytics(APP.max_players()))
+        a = analytics(APP.max_players())
+        a["records"] = read_records()
+        a["records_on"] = read_extras()["top"]
+        self.send(200, a)
 
     def post_players_clear(self, q):
         for n in ("events.log", "events.log.1"):
