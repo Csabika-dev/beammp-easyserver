@@ -18,8 +18,8 @@ No config files, no command line knowledge needed. The installer downloads the n
 
 ## Windows
 
-1. Click the green **Code** button → **Download ZIP**, then extract it
-2. Open the `windows` folder and double-click **`Install-BeamMP-Server.bat`**
+1. Download **BeamMP-EasyServer-Windows.zip** from the [Releases page](https://github.com/scheidlerbalint1103-dev/beammp-easyserver/releases/latest) and extract it (or use the green **Code** button → **Download ZIP** and open the `windows` folder)
+2. Double-click **`Install-BeamMP-Server.bat`**
 3. Click **Yes** when Windows asks for permission
 4. Fill in the window (paste your AuthKey) and press **Install**
 
@@ -53,11 +53,11 @@ Open a terminal and paste:
 curl -fsSL https://raw.githubusercontent.com/scheidlerbalint1103-dev/beammp-easyserver/main/linux/install.sh | sudo bash
 ```
 
-### Option B: double-click
+### Option B: download and run
 
-1. Download the ZIP and extract it
-2. In the `linux` folder, double-click **`install.sh`** and choose **Run in Terminal**
-   (or double-click **Install BeamMP Server** and allow launching it)
+1. Download **BeamMP-EasyServer-Linux.zip** from the [Releases page](https://github.com/scheidlerbalint1103-dev/beammp-easyserver/releases/latest) and extract it
+2. Double-click **`install.sh`** and choose **Run in Terminal**
+   - Doesn't run? Right-click inside the folder → **Open in Terminal**, then type `bash install.sh` and press Enter
 3. Enter your password and answer the questions
 
 ### What the Linux installer does automatically
