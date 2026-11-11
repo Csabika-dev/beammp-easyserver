@@ -51,49 +51,93 @@ def systemctl(action, unit="beammp-server"):
     return {"ok": r.returncode == 0, "msg": "done" if r.returncode == 0 else (r.stderr.strip()[-300:] or "failed")}
 
 
+def read_untrusted(path, limit=262144):
+    """Read a file in a folder the game server controls: no links, no FIFOs/devices, size-capped."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError("not a regular file")
+        with os.fdopen(fd, "rb", closefd=False) as f:
+            return f.read(limit).decode("utf-8", "replace")
+    finally:
+        os.close(fd)
+
+
 def server_port(server):
     path = os.path.join(SERVER_DIR if server == "main" else os.path.join(SERVERS, server), "ServerConfig.toml")
     try:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            m = re.search(r"(?m)^\s*Port\s*=\s*(\d+)", f.read())
-        return int(m.group(1)) if m else None
-    except OSError:
+        m = re.search(r"(?m)^\s*Port\s*=\s*(\d+)", read_untrusted(path))
+        port = int(m.group(1)) if m else None
+        return port if port and 1 <= port <= 65535 else None
+    except (OSError, ValueError):
         return None
 
 
 # ---------------------------------------------------------------- extra servers
+def open_servers_dir():
+    """Open servers/ safely and return (fd, path-through-fd).
+
+    /opt/beammp-server belongs to the game server user, so it could replace
+    "servers" with a link at any moment. We open the real folder once (no
+    links allowed), make sure it is root-owned, and from then on only use the
+    /proc/self/fd/<n> path, which always points at that exact folder."""
+    try:
+        os.mkdir(SERVERS, 0o755)
+    except FileExistsError:
+        pass
+    fd = os.open(SERVERS, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    os.fchown(fd, 0, 0)
+    os.fchmod(fd, 0o755)
+    return fd, "/proc/self/fd/%d" % fd
+
+
 def create_server(server, config, start):
     if not ID_RE.fullmatch(str(server or "")) or server == "main":
         return {"ok": False, "msg": "bad server id"}
     if not isinstance(config, str) or not 10 < len(config) < 60000 or "[General]" not in config:
         return {"ok": False, "msg": "bad config"}
-    d = os.path.join(SERVERS, server)
+    try:
+        sfd, base = open_servers_dir()
+    except OSError:
+        return {"ok": False, "msg": "the servers folder is not a normal folder"}
+    try:
+        return _create_server(server, config, start, base)
+    finally:
+        os.close(sfd)
+
+
+def _create_server(server, config, start, base):
+    d = os.path.join(base, server)
     if os.path.lexists(d):
         return {"ok": False, "msg": "a server with this id already exists"}
     u = pwd.getpwnam("beammp")
     dash = pwd.getpwnam("beammp-dash")
-    os.makedirs(SERVERS, exist_ok=True)
-    os.chown(SERVERS, 0, 0)
-    os.chmod(SERVERS, 0o755)
-    os.mkdir(d)
+    # Everything is built while the folder is still root-only (0700) and all
+    # modes are set before ownership is handed over - so the game server user
+    # never gets a chance to swap a path for a link while root works on it.
+    os.mkdir(d, 0o700)
     for sub in ("Resources/Client", "Resources/Client-disabled", "Resources/Quarantine", "Resources/Server/EasyServerStats"):
         os.makedirs(os.path.join(d, sub), exist_ok=True)
     with open(os.path.join(d, "ServerConfig.toml"), "w", encoding="utf-8") as f:
         f.write(config if config.endswith("\n") else config + "\n")
     src = os.path.join(SERVER_DIR, "Resources/Server/EasyServerStats/main.lua")
-    if os.path.isfile(src) and not os.path.islink(src):
-        shutil.copyfile(src, os.path.join(d, "Resources/Server/EasyServerStats/main.lua"))
+    try:
+        lua = read_untrusted(src, 1024 * 1024)   # same plugin as the main server
+    except OSError:
+        lua = None
+    if lua:
+        with open(os.path.join(d, "Resources/Server/EasyServerStats/main.lua"), "w", encoding="utf-8") as f:
+            f.write(lua)
+    os.chmod(os.path.join(d, "ServerConfig.toml"), 0o660)
+    for sub in ("Resources/Client", "Resources/Client-disabled", "Resources/Server/EasyServerStats", "Resources/Quarantine"):
+        os.chmod(os.path.join(d, sub), 0o2775)
+    q = os.path.join(d, "Resources/Quarantine")
     for root, dirs, files in os.walk(d):
         for x in dirs + files:
             os.lchown(os.path.join(root, x), u.pw_uid, u.pw_gid)
-    os.chown(d, u.pw_uid, u.pw_gid)
-    os.chmod(d, 0o2770)
-    os.chmod(os.path.join(d, "ServerConfig.toml"), 0o660)
-    for sub in ("Resources/Client", "Resources/Client-disabled", "Resources/Server/EasyServerStats"):
-        os.chmod(os.path.join(d, sub), 0o2775)
-    q = os.path.join(d, "Resources/Quarantine")
-    os.chown(q, dash.pw_uid, u.pw_gid)
-    os.chmod(q, 0o2775)
+    os.lchown(q, dash.pw_uid, u.pw_gid)
+    os.chmod(d, 0o2770)            # still root-owned here, so this can't be redirected
+    os.lchown(d, u.pw_uid, u.pw_gid)  # hand over last
     run([LIB + "/apply.sh", "--record", server])
     run(["systemctl", "enable", "beammp-mods-apply@%s.path" % server, "beammp-server@%s" % server], timeout=60)
     run(["systemctl", "start", "beammp-mods-apply@%s.path" % server], timeout=60)
@@ -106,8 +150,19 @@ def create_server(server, config, start):
 def delete_server(server):
     if not ID_RE.fullmatch(str(server or "")) or server == "main":
         return {"ok": False, "msg": "bad server id"}
-    d = os.path.join(SERVERS, server)
-    if os.path.islink(d) or not os.path.isdir(d) or os.path.realpath(d) != d:
+    try:
+        sfd, base = open_servers_dir()
+    except OSError:
+        return {"ok": False, "msg": "the servers folder is not a normal folder"}
+    try:
+        return _delete_server(server, base)
+    finally:
+        os.close(sfd)
+
+
+def _delete_server(server, base):
+    d = os.path.join(base, server)
+    if os.path.islink(d) or not os.path.isdir(d):
         return {"ok": False, "msg": "no such server"}
     port = server_port(server)
     run(["systemctl", "disable", "--now", "beammp-server@%s" % server, "beammp-mods-apply@%s.path" % server], timeout=120)
@@ -238,18 +293,22 @@ def update_server():
     asset = read_env().get("ASSET", "")
     if not re.fullmatch(r"BeamMP-Server\.[a-z]+\.\d+(\.\d+)?\.(x86_64|arm64)", asset):
         return {"ok": False, "msg": "unknown server build - re-run the installer"}
+    # The server folder belongs to the game server user, so the file is only
+    # ever touched through the descriptor mkstemp gave us (never by name).
     fd, tmp = tempfile.mkstemp(dir=SERVER_DIR, prefix=".update-")
-    os.close(fd)
     try:
         req = urllib.request.Request(RELEASE_BASE + asset, headers={"User-Agent": "BeamMP-EasyServer"})
-        with urllib.request.urlopen(req, timeout=300) as r, open(tmp, "wb") as f:
+        with urllib.request.urlopen(req, timeout=300) as r, os.fdopen(fd, "wb", closefd=False) as f:
             shutil.copyfileobj(r, f)
-        with open(tmp, "rb") as f:
-            if f.read(4) != b"\x7fELF":
-                return {"ok": False, "msg": "download was not a Linux program"}
+            f.flush()
+        os.lseek(fd, 0, 0)
+        if os.read(fd, 4) != b"\x7fELF":
+            return {"ok": False, "msg": "download was not a Linux program"}
         u = pwd.getpwnam("beammp")
-        os.chown(tmp, u.pw_uid, u.pw_gid)
-        os.chmod(tmp, 0o755)
+        os.fchown(fd, u.pw_uid, u.pw_gid)
+        os.fchmod(fd, 0o755)
+        os.close(fd)
+        fd = None
         units = ["beammp-server"] + ["beammp-server@%s" % x for x in sorted(os.listdir(SERVERS))
                                      if ID_RE.fullmatch(x)] if os.path.isdir(SERVERS) else ["beammp-server"]
         active = [u_ for u_ in units if run(["systemctl", "is-active", u_]).stdout.strip() == "active"]
@@ -262,7 +321,9 @@ def update_server():
     except Exception as e:
         return {"ok": False, "msg": "update failed: %s" % e.__class__.__name__}
     finally:
-        if os.path.exists(tmp):
+        if fd is not None:
+            os.close(fd)
+        if os.path.lexists(tmp):
             os.remove(tmp)
 
 
