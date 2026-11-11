@@ -292,8 +292,21 @@ def virustotal_check(path, sha, key, upload_max_mb):
 
 # --------------------------------------------------------------------------- main API
 def _file_id(path):
+    # ctime + inode can't be set back by hand (unlike the modified date), so a
+    # changed file can't pretend to be one that was checked before
     st = os.stat(path)
-    return "%s|%d|%d" % (os.path.basename(path), st.st_size, int(st.st_mtime))
+    return "%s|%d|%d|%d|%d" % (os.path.basename(path), st.st_size, int(st.st_mtime), st.st_ino, st.st_ctime_ns)
+
+
+def remember(path, sha):
+    """Note that the file at path has this (already checked) content - e.g. after it was moved."""
+    try:
+        cache = load_cache()
+        if sha in cache:
+            cache.setdefault("_index", {})[_file_id(path)] = sha
+            save_cache(cache)
+    except OSError:
+        pass
 
 
 def cached_result(path):
@@ -363,6 +376,21 @@ def scan(path, use_cache=True, force=False):
     return result
 
 
+def write_note(path, text):
+    """Write a small text file in a shared folder without following links."""
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o664)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text)
+
+
+def why_text(reasons):
+    return "Blocked by the BeamMP EasyServer mod safety check:\n- " + "\n- ".join(reasons) + "\n"
+
+
 def sweep(folder, quarantine):
     """Scan all zips in folder; move blocked ones into quarantine. Returns count blocked."""
     blocked = 0
@@ -370,16 +398,14 @@ def sweep(folder, quarantine):
         return 0
     for n in sorted(os.listdir(folder)):
         p = os.path.join(folder, n)
-        if not (n.lower().endswith(".zip") and os.path.isfile(p)):
-            continue
+        if not (n.lower().endswith(".zip") and os.path.isfile(p)) or os.path.islink(p):
+            continue            # links are ignored: they could point at private files
         r = scan(p)
         if r["verdict"] == "blocked":
             os.makedirs(quarantine, exist_ok=True)
             dest = os.path.join(quarantine, n)
             os.replace(p, dest)
-            with open(dest + ".why.txt", "w", encoding="utf-8") as f:
-                f.write("Blocked by the BeamMP EasyServer mod safety check:\n- " +
-                        "\n- ".join(r["reasons"]) + "\n")
+            write_note(dest + ".why.txt", why_text(r["reasons"]))
             print("BLOCKED and moved to quarantine: %s" % n)
             for reason in r["reasons"]:
                 print("   - " + reason)
