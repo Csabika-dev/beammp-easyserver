@@ -1,13 +1,16 @@
 -- BeamMP EasyServer - player statistics plugin
 -- Records joins, leaves and the player count once a minute so the dashboard
 -- can show player analytics. Stores only player names and times, locally.
+-- It also enforces the allow-list ("Who can join" in the dashboard).
 -- Files (next to this script):
---   events.log   one JSON line per event
---   online.json  who is online right now (refreshed every 30 s)
+--   events.log     one JSON line per event
+--   online.json    who is online right now (refreshed every 30 s)
+--   allowlist.txt  written by the dashboard: "mode=on|off" + one name per line
 
 local DIR = "Resources/Server/EasyServerStats/"
 local EVENTS = DIR .. "events.log"
 local ONLINE = DIR .. "online.json"
+local ALLOW = DIR .. "allowlist.txt"
 local MAX_LOG = 20 * 1024 * 1024   -- roll the log over at 20 MB
 
 local function jsonEscape(s)
@@ -62,6 +65,41 @@ function esOnLeave(id)
   writeOnline()
 end
 
+-- Allow-list. The file is read on every join attempt, so changes in the
+-- dashboard work immediately - no server restart needed.
+local function trim(s)
+  return (tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+local function readAllowList()
+  local f = io.open(ALLOW, "r")
+  if not f then return false, {} end
+  local on, names = false, {}
+  for line in f:lines() do
+    line = trim(line)
+    local mode = line:match("^mode%s*=%s*(%a+)$")
+    if mode then
+      on = mode:lower() == "on"
+    elseif line ~= "" and line:sub(1, 1) ~= "#" then
+      names[line:lower()] = true
+    end
+  end
+  f:close()
+  return on, names
+end
+
+function esOnAuth(name, role, isGuest, identifiers)
+  local on, names = readAllowList()
+  if not on then return end
+  name = tostring(name or "")
+  if not isGuest and names[name:lower()] then return end
+  event("denied", string.format(',"name":"%s","guest":%s', jsonEscape(name), isGuest and "true" or "false"))
+  if isGuest then
+    return "This server is invite-only. Log in with your BeamMP account and ask the owner to add you."
+  end
+  return "This server is invite-only and " .. name .. " is not on the list. Ask the server owner to add you."
+end
+
 function esMinute()
   event("count", string.format(',"n":%d', MP.GetPlayerCount() or 0))
 end
@@ -70,6 +108,7 @@ function esHalfMinute()
   writeOnline()
 end
 
+MP.RegisterEvent("onPlayerAuth", "esOnAuth")
 MP.RegisterEvent("onPlayerJoining", "esOnJoin")
 MP.RegisterEvent("onPlayerDisconnect", "esOnLeave")
 MP.RegisterEvent("esMinute", "esMinute")
@@ -80,3 +119,4 @@ MP.CreateEventTimer("esHalfMinute", 30000)
 event("start")
 writeOnline()
 print("EasyServerStats: recording player statistics for the dashboard")
+if readAllowList() then print("EasyServerStats: allow-list is ON - only listed players can join") end
