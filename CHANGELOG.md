@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.3 - QR code for two-step login
+
+- Settings → Two-step login now shows a QR code you can scan with your authenticator app, instead of only a key to type.
+- The setup explains that clicking "Set up" again makes a new key (only the key on screen works).
+
 ## 1.2.2 - Security fix
 
 - Dashboard: when a request was refused before it was read completely (for example the "create password" form sent twice), the rest of it - which could contain the password - was taken as the start of the next request, shown in an error page and written to the log. Such connections are now closed, error pages no longer repeat what was sent, and the log only records the method and path.
