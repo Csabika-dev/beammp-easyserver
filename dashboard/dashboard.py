@@ -38,7 +38,7 @@ import zipfile
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-EASY_VERSION = "1.2.2"
+EASY_VERSION = "1.2.3"
 REPO = "Csabika-dev/beammp-easyserver"
 BEAMMP_REPO = "BeamMP/BeamMP-Server"
 IS_WIN = os.name == "nt"
@@ -1677,6 +1677,222 @@ def tail_log(lines=300):
     return out, hints
 
 
+# ----------------------------------------------------------------------------- QR code (for two-step setup)
+# Small QR encoder: byte mode, error correction level M, versions 1-15.
+# Only used to show the two-step login key as a QR code; no extra packages needed.
+_QR_M = {  # version: (ec codewords per block, [(blocks, data codewords per block), ...])
+    1: (10, [(1, 16)]), 2: (16, [(1, 28)]), 3: (26, [(1, 44)]), 4: (18, [(2, 32)]),
+    5: (24, [(2, 43)]), 6: (16, [(4, 27)]), 7: (18, [(4, 31)]), 8: (22, [(2, 38), (2, 39)]),
+    9: (22, [(3, 36), (2, 37)]), 10: (26, [(4, 43), (1, 44)]), 11: (30, [(1, 50), (4, 51)]),
+    12: (22, [(6, 36), (2, 37)]), 13: (22, [(8, 37), (1, 38)]), 14: (24, [(4, 40), (5, 41)]),
+    15: (24, [(5, 41), (5, 42)]),
+}
+_QR_ALIGN = {1: [], 2: [6, 18], 3: [6, 22], 4: [6, 26], 5: [6, 30], 6: [6, 34], 7: [6, 22, 38],
+             8: [6, 24, 42], 9: [6, 26, 46], 10: [6, 28, 50], 11: [6, 30, 54], 12: [6, 32, 58],
+             13: [6, 34, 62], 14: [6, 26, 46, 66], 15: [6, 26, 48, 70]}
+
+
+def _qr_gf_mul(a, b):
+    r = 0
+    while b:
+        if b & 1:
+            r ^= a
+        a <<= 1
+        if a & 0x100:
+            a ^= 0x11D
+        b >>= 1
+    return r
+
+
+def _qr_ecc(data, n):
+    gen = [1]
+    root = 1
+    for _ in range(n):
+        nxt = [0] * (len(gen) + 1)
+        for i, g in enumerate(gen):
+            nxt[i] ^= g
+            nxt[i + 1] ^= _qr_gf_mul(g, root)
+        gen = nxt
+        root = _qr_gf_mul(root, 2)
+    rem = [0] * n
+    for byte in data:
+        f = byte ^ rem[0]
+        rem = rem[1:] + [0]
+        for i in range(n):
+            rem[i] ^= _qr_gf_mul(gen[i + 1], f)
+    return rem
+
+
+def qr_matrix(text):
+    """Return the QR code for text as a list of rows of booleans (True = dark)."""
+    data = text.encode("utf-8")
+    for ver in range(1, 16):
+        ec, groups = _QR_M[ver]
+        cap = sum(b * d for b, d in groups)
+        lenbits = 8 if ver < 10 else 16
+        if 4 + lenbits + 8 * len(data) <= cap * 8:
+            break
+    else:
+        raise ValueError("text too long for a QR code")
+    bits = [0, 1, 0, 0] + [(len(data) >> i) & 1 for i in range(lenbits - 1, -1, -1)]
+    for byte in data:
+        bits += [(byte >> i) & 1 for i in range(7, -1, -1)]
+    bits += [0] * min(4, cap * 8 - len(bits))
+    bits += [0] * (-len(bits) % 8)
+    words = [int("".join(map(str, bits[i:i + 8])), 2) for i in range(0, len(bits), 8)]
+    pad = 0xEC
+    while len(words) < cap:
+        words.append(pad)
+        pad ^= 0xEC ^ 0x11
+    blocks, k = [], 0
+    for count, size in groups:
+        for _ in range(count):
+            blocks.append(words[k:k + size])
+            k += size
+    eccs = [_qr_ecc(b, ec) for b in blocks]
+    final = []
+    for i in range(max(len(b) for b in blocks)):
+        final += [b[i] for b in blocks if i < len(b)]
+    for i in range(ec):
+        final += [e[i] for e in eccs]
+
+    size = ver * 4 + 17
+    mod = [[False] * size for _ in range(size)]
+    fixed = [[False] * size for _ in range(size)]
+
+    def put(x, y, dark):
+        mod[y][x] = dark
+        fixed[y][x] = True
+
+    for i in range(size):  # timing patterns
+        put(6, i, i % 2 == 0)
+        put(i, 6, i % 2 == 0)
+    for cx, cy in ((3, 3), (size - 4, 3), (3, size - 4)):  # finder patterns + separators
+        for dy in range(-4, 5):
+            for dx in range(-4, 5):
+                x, y = cx + dx, cy + dy
+                if 0 <= x < size and 0 <= y < size:
+                    d = max(abs(dx), abs(dy))
+                    put(x, y, d not in (2, 4))
+    al = _QR_ALIGN[ver]
+    for i, ax in enumerate(al):
+        for j, ay in enumerate(al):
+            if (i == 0 and j == 0) or (i == 0 and j == len(al) - 1) or (i == len(al) - 1 and j == 0):
+                continue
+            for dy in range(-2, 3):
+                for dx in range(-2, 3):
+                    put(ax + dx, ay + dy, max(abs(dx), abs(dy)) != 1)
+
+    def draw_format(mask):
+        val = (0 << 3) | mask  # level M = 00
+        rem = val
+        for _ in range(10):
+            rem = (rem << 1) ^ ((rem >> 9) * 0x537)
+        fb = ((val << 10) | rem) ^ 0x5412
+        b = [(fb >> i) & 1 == 1 for i in range(15)]
+        for i in range(6):
+            put(8, i, b[i])
+        put(8, 7, b[6])
+        put(8, 8, b[7])
+        put(7, 8, b[8])
+        for i in range(9, 15):
+            put(14 - i, 8, b[i])
+        for i in range(8):
+            put(size - 1 - i, 8, b[i])
+        for i in range(8, 15):
+            put(8, size - 15 + i, b[i])
+        put(8, size - 8, True)
+
+    draw_format(0)  # reserve the format areas
+    if ver >= 7:
+        rem = ver
+        for _ in range(12):
+            rem = (rem << 1) ^ ((rem >> 11) * 0x1F25)
+        vb = (ver << 12) | rem
+        for i in range(18):
+            dark = (vb >> i) & 1 == 1
+            a, b = size - 11 + i % 3, i // 3
+            put(a, b, dark)
+            put(b, a, dark)
+
+    allbits = [(w >> i) & 1 for w in final for i in range(7, -1, -1)]
+    i = 0
+    right = size - 1
+    while right >= 1:
+        if right == 6:
+            right = 5
+        for vert in range(size):
+            for j in range(2):
+                x = right - j
+                upward = ((right + 1) & 2) == 0
+                y = size - 1 - vert if upward else vert
+                if not fixed[y][x]:
+                    if i < len(allbits):
+                        mod[y][x] = allbits[i] == 1
+                    i += 1
+        right -= 2
+
+    masks = [
+        lambda x, y: (x + y) % 2 == 0, lambda x, y: y % 2 == 0, lambda x, y: x % 3 == 0,
+        lambda x, y: (x + y) % 3 == 0, lambda x, y: (x // 3 + y // 2) % 2 == 0,
+        lambda x, y: x * y % 2 + x * y % 3 == 0, lambda x, y: (x * y % 2 + x * y % 3) % 2 == 0,
+        lambda x, y: ((x + y) % 2 + x * y % 3) % 2 == 0,
+    ]
+
+    def penalty(m):
+        p = 0
+        lines = m + [list(c) for c in zip(*m)]
+        for row in lines:
+            run, prev = 0, None
+            for v in row:
+                if v == prev:
+                    run += 1
+                else:
+                    if run >= 5:
+                        p += run - 2
+                    run, prev = 1, v
+            if run >= 5:
+                p += run - 2
+            s = "".join("1" if v else "0" for v in row)
+            p += 40 * (s.count("10111010000") + s.count("00001011101"))
+        for y in range(size - 1):
+            for x in range(size - 1):
+                if m[y][x] == m[y][x + 1] == m[y + 1][x] == m[y + 1][x + 1]:
+                    p += 3
+        dark = sum(sum(r) for r in m)
+        p += 10 * (abs(dark * 20 - size * size * 10) // (size * size))
+        return p
+
+    base = [r[:] for r in mod]
+    best = None
+    for mi, fn in enumerate(masks):
+        for y in range(size):
+            for x in range(size):
+                mod[y][x] = base[y][x] ^ (not fixed[y][x] and fn(x, y))
+        draw_format(mi)
+        score = penalty(mod)
+        if best is None or score < best[0]:
+            best = (score, [r[:] for r in mod])
+    return best[1]
+
+
+def qr_svg_path(text):
+    """QR code as (size, SVG path data) - one 1x1 square per dark module."""
+    m = qr_matrix(text)
+    d = []
+    for y, row in enumerate(m):
+        x = 0
+        while x < len(row):
+            if row[x]:
+                start = x
+                while x < len(row) and row[x]:
+                    x += 1
+                d.append("M%d %dh%dv1h-%dz" % (start, y, x - start, x - start))
+            else:
+                x += 1
+    return len(m), "".join(d)
+
+
 # ----------------------------------------------------------------------------- auth helpers
 def totp_code(secret_b32, counter):
     key = base64.b32decode(secret_b32 + "=" * (-len(secret_b32) % 8), casefold=True)
@@ -3074,7 +3290,12 @@ class Handler(BaseHTTPRequestHandler):
         self.sess["pending_totp"] = secret
         label = urllib.parse.quote("BeamMP EasyServer:%s" % (server_name() or socket.gethostname())[:40])
         uri = "otpauth://totp/%s?secret=%s&issuer=BeamMP%%20EasyServer" % (label, secret)
-        self.send(200, {"secret": " ".join(secret[i:i + 4] for i in range(0, len(secret), 4)), "uri": uri})
+        try:
+            qr_size, qr_path = qr_svg_path(uri)
+        except ValueError:
+            qr_size, qr_path = 0, ""
+        self.send(200, {"secret": " ".join(secret[i:i + 4] for i in range(0, len(secret), 4)), "uri": uri,
+                        "qr_size": qr_size, "qr_path": qr_path})
 
     def post_2fa_confirm(self, q):
         secret = self.sess.get("pending_totp")
