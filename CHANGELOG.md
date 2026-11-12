@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.7.0 - Rotation, messages, backups, fixed address
+
+- **Server templates** (Config): one click sets up a Drift, Racing, Roleplay or Chill server - player limit, car cleanup, AFK removal, chat tags, chat rules, welcome message and tips, and optionally the map.
+- **Map rotation** (Config, off by default): switch to the next map in your list every 1-24 hours, with a countdown in the chat. Can wait until nobody is online.
+- **Welcome message** for new players and **announcements** that go to everyone every 5-120 minutes, in turn. `{name}` and `{players}` are filled in. Work right away, no restart.
+- **Nightly backups** (Settings, on by default): every server's settings, allow-list, bans, moderation, messages and rotation are saved at 03:30, optionally with mods. The last 7 are kept; download one or restore it with Import. Export and Import now include these files too.
+- **Fixed address with DuckDNS** (Settings): friends join at `yourname.duckdns.org` and it keeps working when your home IP changes. The dashboard updates DuckDNS by itself.
+- **Low-resource warnings**: a notification when the computer runs out of memory, the processor is maxed out for 5 minutes, or the server uses almost all of your upload - with a suggested player limit. Enter your upload speed from a speed test for the upload warning.
+
 ## 1.6.0 - Discord commands
 
 - **Discord bot** (Settings -> Discord bot, off by default): control your servers from Discord with slash commands.
