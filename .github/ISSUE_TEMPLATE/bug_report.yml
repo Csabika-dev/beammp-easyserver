@@ -1,0 +1,51 @@
+name: Bug report
+description: Something doesn't work as it should
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! The more of this you fill in, the faster it can be fixed.
+        **Security problem?** Please don't post it here - use private reporting on the Security tab instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+      placeholder: "I clicked Restart on the Overview page and ... "
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: EasyServer version
+      description: Shown at the top left of the dashboard, e.g. "Dashboard 1.12.0"
+      placeholder: "1.12.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: System
+      options:
+        - Windows 11
+        - Windows 10
+        - Ubuntu / Linux Mint / Pop!_OS / Zorin
+        - Debian
+        - Raspberry Pi OS
+        - Other Linux
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: Diagnostic report (recommended)
+      description: |
+        Dashboard → **Health** → **Download diagnostic report**, then drag the file here.
+        Keys, passwords and addresses are removed from it automatically, but have a quick look before posting.
+  - type: textarea
+    id: log
+    attributes:
+      label: Error messages or log lines
+      description: From **Logs** (tip - "Explain the whole log" often already says what's wrong)
+      render: text

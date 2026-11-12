@@ -1,0 +1,17 @@
+name: Idea or feature request
+description: Suggest something new or a better way to do something
+labels: ["idea"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What would you like to do?
+      description: Describe what you're trying to achieve - the problem, not only the solution.
+      placeholder: "I run a drift server and want to ..."
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How could it work?
+      description: Optional - your idea for how it could look or work in the dashboard.

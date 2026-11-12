@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security problem privately
+    url: https://github.com/Csabika-dev/beammp-easyserver/security/advisories/new
+    about: Please don't post security problems publicly.
+  - name: Step-by-step guides
+    url: https://github.com/Csabika-dev/beammp-easyserver#-guides
+    about: How to set up every feature - your answer may already be there.
+  - name: Help with BeamMP itself (the game, the launcher)
+    url: https://forum.beammp.com
+    about: The BeamMP forum, for problems that aren't about EasyServer.
