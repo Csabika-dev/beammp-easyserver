@@ -533,10 +533,30 @@ def can_suspend():
     return "mem" in _sysread("/sys/power/state").split() or "freeze" in _sysread("/sys/power/state").split()
 
 
+def power_supply():
+    """Laptop? On mains power? (Wake-on-LAN on laptops usually only works plugged in.)"""
+    laptop, ac = False, None
+    base = "/sys/class/power_supply"
+    for n in (os.listdir(base) if os.path.isdir(base) else []):
+        t = _sysread(os.path.join(base, n, "type"))
+        if t == "Battery" and _sysread(os.path.join(base, n, "scope"), "System") == "System":
+            laptop = True
+        elif t == "Mains":
+            ac = (ac or False) or _sysread(os.path.join(base, n, "online")) == "1"
+    return {"laptop": laptop, "ac": ac}
+
+
 def power_status():
     rtc = os.path.exists("/sys/class/rtc/rtc0/wakealarm") and bool(shutil.which("rtcwake"))
-    return {"ok": True, "adapters": adapters(), "can_sleep": can_suspend(), "rtc": rtc,
-            "persist": os.path.exists(WOL_UNIT)}
+    ads = adapters()
+    for a in ads:
+        w = _sysread(os.path.join(SYS_NET, a["name"], "device", "power", "wakeup"))
+        a["os_wake"] = w or "unknown"                 # "enabled" = the system lets this card wake it
+    mem = _sysread("/sys/power/mem_sleep")             # e.g. "s2idle [deep]"
+    return {"ok": True, "adapters": ads, "can_sleep": can_suspend(), "rtc": rtc,
+            "persist": os.path.exists(WOL_UNIT), "power": power_supply(),
+            "sleep_kind": "deep" if "[deep]" in mem else ("s2idle" if "[s2idle]" in mem else ""),
+            "deep_available": "deep" in mem}
 
 
 def wol_enable(iface):
