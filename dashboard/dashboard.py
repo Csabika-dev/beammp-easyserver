@@ -38,7 +38,7 @@ import zipfile
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-EASY_VERSION = "1.4.0"
+EASY_VERSION = "1.5.0"
 REPO = "Csabika-dev/beammp-easyserver"
 BEAMMP_REPO = "BeamMP/BeamMP-Server"
 IS_WIN = os.name == "nt"
@@ -81,7 +81,8 @@ DEFAULT_SETTINGS = {
     "https": False,
     "remote_enabled": False,
     "notify": {"crash": True, "stopped": True, "update": True, "mod_blocked": True,
-               "login_failed": True, "player_join": False, "player_denied": True},
+               "login_failed": True, "player_join": False, "player_denied": True,
+               "moderation": True, "network": True, "restart": False},
     "discord_enabled": False,
     "email_enabled": False,
     "smtp_host": "", "smtp_port": 587, "smtp_security": "starttls",
@@ -97,6 +98,7 @@ DEFAULT_SETTINGS = {
     "relay_host": "",
     "relay_ports": {},             # server id -> port players use on the relay
     "flood_protect": False,        # Linux: per-address limits on the game ports (nftables)
+    "auto_update": False,          # install BeamMP updates at a scheduled restart
 }
 SECURITY_FILE = os.path.join(DATA_DIR, "security.json")
 SECURITY_REPEAT = 15 * 60
@@ -131,6 +133,10 @@ class Instance:
         self.VOTE_FILE = os.path.join(self.STATS_DIR, "mapvote.txt")
         self.EXTRAS_FILE = os.path.join(self.STATS_DIR, "extras.txt")
         self.RECORDS_FILE = os.path.join(self.STATS_DIR, "records.tsv")
+        self.MOD_FILE = os.path.join(self.STATS_DIR, "moderation.txt")
+        self.BANS_FILE = os.path.join(self.STATS_DIR, "bans.txt")
+        self.ACTIONS_FILE = os.path.join(self.STATS_DIR, "actions.txt")
+        self.VERIFIED_FILE = os.path.join(self.STATS_DIR, "verified.txt")
         self.CONFIG = os.path.join(self.SERVER_DIR, "ServerConfig.toml")
         self.SERVER_LOG = os.path.join(self.SERVER_DIR, "Server.log")
         self.authkey_name = "BEAMMP_AUTH_KEY" if iid == "main" else "BEAMMP_AUTH_KEY_" + iid.upper()
@@ -1482,6 +1488,143 @@ def refresh_mod_desc():
     return False
 
 
+
+# ----------------------------------------------------------------------------- moderation
+MOD_DEFAULTS = {"admins": [], "filter": False, "words": [], "spam": False, "spam_limit": 5,
+                "antibot": False, "verify": True, "per_ip": 3, "join_flood": 8, "guests": True}
+NAME_RE = re.compile(r"[^\t\r\n,]{1,64}")
+
+
+def clean_name(n):
+    n = str(n or "").strip()
+    if not NAME_RE.fullmatch(n):
+        raise ValueError("Enter a player name (no tabs or commas)")
+    return n
+
+
+def shared_write(path, text):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    with open_shared(tmp, "w") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+def shared_read(path, limit=1024 * 1024):
+    try:
+        with open_shared(path) as f:
+            return f.read(limit)
+    except OSError:
+        return ""
+
+
+def read_mod():
+    d = json.loads(json.dumps(MOD_DEFAULTS))
+    for line in shared_read(I().MOD_FILE, 256 * 1024).splitlines():
+        m = re.fullmatch(r"\s*(\w+)\s*=\s*(.*?)\s*", line)
+        if not m:
+            continue
+        k, v = m.groups()
+        if k in ("admins", "words"):
+            d[k] = [x.strip() for x in v.split(",") if x.strip()][:500]
+        elif k in ("filter", "spam", "antibot", "verify"):
+            d[k] = v.lower() == "on"
+        elif k == "guests":
+            d["guests"] = v.lower() != "block"
+        elif k in ("spam_limit", "per_ip", "join_flood") and v.isdigit() and int(v) <= 100:
+            d[k] = int(v)
+    return d
+
+
+def write_mod(d):
+    onoff = lambda b: "on" if b else "off"
+    shared_write(I().MOD_FILE,
+                 "# Managed by the BeamMP EasyServer dashboard (Config -> Moderation).\n"
+                 "admins=%s\nfilter=%s\nwords=%s\nspam=%s\nspam_limit=%d\nantibot=%s\nverify=%s\nper_ip=%d\njoin_flood=%d\nguests=%s\n" % (
+                     ",".join(d["admins"]), onoff(d["filter"]), ",".join(d["words"]), onoff(d["spam"]), d["spam_limit"],
+                     onoff(d["antibot"]), onoff(d["verify"]), d["per_ip"], d["join_flood"],
+                     "allow" if d["guests"] else "block"))
+
+
+def read_bans():
+    out, t = [], now()
+    for line in shared_read(I().BANS_FILE).splitlines():
+        p = line.split("\t")
+        if len(p) >= 2 and p[1].isdigit():
+            u = int(p[1])
+            if u == 0 or u > t:
+                out.append({"name": p[0][:64], "until": u, "reason": (p[2] if len(p) > 2 else "")[:200],
+                            "by": (p[3] if len(p) > 3 else "")[:64], "at": int(p[4]) if len(p) > 4 and p[4].isdigit() else 0})
+    return out
+
+
+def write_bans(bans):
+    clean = lambda x: re.sub(r"[\t\r\n]", " ", str(x))
+    shared_write(I().BANS_FILE, "".join("%s\t%d\t%s\t%s\t%d\n" % (clean(b["name"]), b["until"], clean(b["reason"]), clean(b["by"]), b["at"])
+                                        for b in bans[:5000]))
+
+
+def ban_player(name, until, reason, by):
+    bans = [b for b in read_bans() if b["name"].lower() != name.lower()]
+    bans.insert(0, {"name": name, "until": until, "reason": reason, "by": by, "at": now()})
+    write_bans(bans)
+
+
+def unban_player(name):
+    bans = read_bans()
+    hit = [b["name"] for b in bans if b["name"].lower() == name.lower()]
+    write_bans([b for b in bans if b["name"].lower() != name.lower()])
+    return hit[0] if hit else None
+
+
+_ACTION_LOCK = threading.Lock()
+
+
+def queue_action(action, name="", num="", text=""):
+    """Tell the plugin to do something now (kick, mute, chat message). It reads
+    the file every second; old lines are dropped after a while."""
+    clean = lambda x: re.sub(r"[\t\r\n]", " ", str(x))
+    with _ACTION_LOCK:
+        lines = [l for l in shared_read(I().ACTIONS_FILE, 256 * 1024).splitlines() if re.match(r"\d+\t\d+\t", l)]
+        seq = max([int(l.split("\t")[0]) for l in lines] or [0]) + 1
+        lines = lines[-40:] + ["%d\t%d\t%s\t%s\t%s\t%s" % (seq, now(), action, clean(name), num, clean(text)[:300])]
+        shared_write(I().ACTIONS_FILE, "\n".join(lines) + "\n")
+
+
+RESTART_DEFAULTS = {"on": False, "every": 24, "at": "05:00", "warn": 10, "when": "countdown"}
+
+
+def restart_cfg(inst):
+    r = dict(RESTART_DEFAULTS)
+    m = inst.meta.get("restart")
+    if isinstance(m, dict):
+        r.update({k: m[k] for k in RESTART_DEFAULTS if k in m})
+    return r
+
+
+def fmt_secs(sec):
+    if sec >= 120:
+        return "%d minutes" % round(sec / 60.0)
+    if sec >= 60:
+        return "1 minute"
+    return "%d seconds" % sec
+
+
+def online_names():
+    o = read_json(os.path.join(I().STATS_DIR, "online.json"), None)
+    if isinstance(o, dict) and now() - int(o.get("t", 0)) < 120:
+        return [str(p)[:64] for p in o.get("players", [])][:200]
+    return []
+
+
+def chat_say(text):
+    queue_action("say", text=text)
+
+
 # ----------------------------------------------------------------------------- analytics
 def read_events(since=0):
     evs = []
@@ -2294,6 +2437,10 @@ class App:
             except Exception as e:
                 sys.stderr.write("flood protection: %s\n" % short_err(e))
             try:
+                self.addr_tick()
+            except Exception as e:
+                sys.stderr.write("address check: %s\n" % short_err(e))
+            try:
                 if self.settings.get("update_check") and now() >= next_update:
                     next_update = now() + 6 * 3600
                     self.check_updates(notify=True)
@@ -2375,8 +2522,97 @@ class App:
                                "plugin was hacked. Remove unknown plugins from Resources/Server, delete the links "
                                "and check the mods." % (inst.name, "\n".join(found[:10])), sig="\n".join(sorted(found)))
 
+    def _restart_tick(self, inst, S):
+        """Scheduled restarts (Config -> Restarts & updates): countdown in the chat,
+        optional BeamMP update, or wait until nobody is online."""
+        r = restart_cfg(inst)
+        if not r["on"]:
+            S.pop("rs", None)
+            return
+        t = now()
+        key = json.dumps(r, sort_keys=True)
+        rs = S.get("rs")
+        if not rs or rs["key"] != key:
+            nxt = next_clear(r, t)
+            rs = S["rs"] = {"key": key, "at": nxt, "last_left": nxt - t}
+        left = rs["at"] - t
+        running = inst.server.status()["state"] == "running"
+        online = online_names() if running else []
+        if r["when"] == "countdown" and online and left > 0:
+            warn = r["warn"] * 60
+            for p in sorted({1800, 900, 600, 300, 120, 60, 30, 10, warn}, reverse=True):
+                if 0 < p <= warn and rs["last_left"] > p >= left:
+                    chat_say("Scheduled restart: the server restarts in %s. You can rejoin right after." % fmt_secs(p))
+                    break
+        rs["last_left"] = left
+        if left > 0:
+            return
+        if r["when"] == "empty" and online:
+            if t - rs["at"] < 7200:
+                return                              # wait for an empty server (up to 2 hours)
+            self.notifier.add("restart", "Scheduled restart skipped",
+                              "Players were online for 2 hours after the restart time of %s." % inst.name, "info")
+        elif running:
+            did = "restarted"
+            if self.settings.get("auto_update") and inst.id == "main":
+                up = self.check_updates(notify=False)
+                if up.get("latest") and up.get("installed") and newer(up["latest"], up["installed"]):
+                    if online:
+                        chat_say("Updating the server now - rejoin in a minute.")
+                    res = inst.server.update()
+                    did = ("updated to BeamMP %s and restarted" % up["latest"]) if res.get("ok") else \
+                          "couldn't be updated (%s) - restarted instead" % res.get("msg", "error")
+                    if res.get("ok"):
+                        inst.server.version_cache = (None, None)
+                    else:
+                        inst.server.action("restart")
+                else:
+                    inst.server.action("restart")
+            else:
+                inst.server.action("restart")
+            self.notifier.add("restart", "Scheduled restart: %s %s" % (inst.name, did),
+                              "Next one: %s." % time.strftime("%a %H:%M", time.localtime(next_clear(r, t + 61))), "info")
+        rs["at"] = next_clear(r, t + 61)
+        rs["last_left"] = rs["at"] - t
+
+    def addr_tick(self):
+        """Warn when this computer's address on the home network or the public
+        IP changes - links, bookmarks and port forwards stop working then."""
+        if now() < getattr(self, "addr_next", 0):
+            return
+        self.addr_next = now() + 300
+        ips = [i for i in tlsgen.local_ips() if i != "127.0.0.1"]
+        old_l, old_p = self.state.get("addr_lan"), self.state.get("addr_pub")
+        changed = False
+        if ips:
+            if old_l and old_l not in ips:
+                new = lan_ip()
+                self.notifier.add("network", "This computer's home network address changed",
+                                  "It was %s, now it's %s. Links and bookmarks with the old address (like the dashboard "
+                                  "on your phone) stop working - use %s now.\n"
+                                  "To stop this happening: in your router, set a DHCP reservation (also called a static "
+                                  "lease) for this computer. Search for \"<your router model> DHCP reservation\". "
+                                  "If you forward the game port, point the forward at %s too."
+                                  % (old_l, new, dashboard_url(), new), "warning")
+            if old_l not in ips:
+                self.state["addr_lan"], changed = lan_ip(), True
+        pip = public_ip()
+        if pip and pip != old_p:
+            if old_p and not relay_on():
+                self.notifier.add("network", "Your public IP address changed",
+                                  "It was %s, now it's %s. Friends who join from outside your home need the new "
+                                  "address: %s:%s. Most home internet gets a new IP now and then." %
+                                  (old_p, pip, pip, (INSTANCES["main"].port() if "main" in INSTANCES else None) or 30814), "warning")
+            self.state["addr_pub"], changed = pip, True
+        if changed:
+            self.save_state()
+
     def _monitor_one(self, inst, S):
         self._check_tampering(inst, S)
+        try:
+            self._restart_tick(inst, S)
+        except Exception as e:
+            sys.stderr.write("scheduled restart %s: %s\n" % (inst.id, short_err(e)))
         srv = inst.server
         st = srv.status()
         last = S["last"]
@@ -2430,7 +2666,7 @@ class App:
                         raw = raw[:raw.rindex(b"\n") + 1]     # never cut a line in half
                     S["ev_pos"] += len(raw)
                     chunk = raw.decode("utf-8", "replace")
-                joined, denied = [], []
+                joined, denied, modmsgs, bots, refused = [], [], [], 0, []
                 for line in chunk.splitlines():
                     try:
                         e = json.loads(line)
@@ -2446,7 +2682,45 @@ class App:
                         n = clean_player_name(e.get("name"))
                         if not any(d[0] == n for d in denied):
                             denied.append((n, bool(e.get("guest"))))
+                    elif e.get("ev") in ("ban", "unban", "kick", "mute"):
+                        n, by = clean_player_name(e.get("name")), clean_player_name(e.get("by") or "?")
+                        reason = re.sub(r"[\t\r\n]", " ", str(e.get("reason") or ""))[:200]
+                        if e["ev"] == "ban" and isinstance(e.get("until"), int):
+                            try:
+                                ban_player(n, e["until"], reason, "in game: " + by)
+                            except OSError:
+                                pass
+                            modmsgs.append("%s banned %s %s%s" % (by, n, "forever" if not e["until"] else "until " +
+                                           time.strftime("%a %H:%M", time.localtime(e["until"])), (" - " + reason) if reason else ""))
+                        elif e["ev"] == "unban":
+                            try:
+                                unban_player(n)
+                            except OSError:
+                                pass
+                            modmsgs.append("%s unbanned %s" % (by, n))
+                        elif e["ev"] == "kick":
+                            modmsgs.append("%s kicked %s%s" % (by, n, (" - " + reason) if reason else ""))
+                        elif isinstance(e.get("minutes"), int):
+                            modmsgs.append("%s muted %s for %d min" % (by, n, e["minutes"]))
+                    elif e.get("ev") == "botkick":
+                        bots += 1
+                    elif e.get("ev") == "refused" and e.get("why") in ("banned", "guest", "name", "per_ip"):
+                        refused.append("%s (%s)" % (clean_player_name(e.get("name")), {"banned": "banned", "guest": "guest",
+                                       "name": "name not allowed", "per_ip": "too many from one IP"}[e["why"]]))
+                    elif e.get("ev") == "joinflood":
+                        self.alerts.raise_("joinflood:" + inst.id, "Lots of new players are joining %s at once" % inst.name,
+                                           "More than %s new players tried to join within a minute - that's usually bots "
+                                           "trying to fill the server. Anti-bot paused new joins for 2 minutes; players "
+                                           "who joined before can still come in." % e.get("count"))
                     S["last_t"] = max(S["last_t"], e["t"])
+                if modmsgs:
+                    self.notifier.add("moderation", modmsgs[0] if len(modmsgs) == 1 else "%d moderation actions" % len(modmsgs),
+                                      "\n".join(modmsgs[:20]), "info")
+                if bots or refused:
+                    parts = (["%d player%s kicked for not verifying (anti-bot)" % (bots, "" if bots == 1 else "s")] if bots else []) + \
+                            (["Refused: " + ", ".join(refused[:15])] if refused else [])
+                    self.notifier.add("moderation", "Anti-bot / bans blocked %d join%s" % (bots + len(refused), "" if bots + len(refused) == 1 else "s"),
+                                      "\n".join(parts), "info", send=False)
                 if denied:
                     names = [n + (" (guest)" if g else "") for n, g in denied]
                     links = [n for n, g in denied if not g]
@@ -3148,6 +3422,7 @@ class Handler(BaseHTTPRequestHandler):
             "map": map_name(g.get("Map")), "port": g.get("Port"), "max_players": g.get("MaxPlayers"),
             "private": g.get("Private"), "online": online, "lan_ip": lan_ip(),
             "relay": fmt_addr(*game_address()[:2]) if relay_on() else None,
+            "reviewed": bool(I().meta.get("reviewed")),
             "config_errors": sum(1 for i in issues if i["level"] == "error"),
             "config_warnings": sum(1 for i in issues if i["level"] == "warning"),
             "has_authkey": I().has_authkey(),
@@ -3232,6 +3507,122 @@ class Handler(BaseHTTPRequestHandler):
                         "note": "Saved - works right away, no restart needed." +
                                 (" Next car cleanup: %s." % time.strftime("%a %H:%M", time.localtime(nxt)) if nxt else "")})
 
+    def get_moderation(self, q):
+        d = read_mod()
+        d["verified"] = len([l for l in shared_read(I().VERIFIED_FILE).splitlines() if l.strip()])
+        self.send(200, d)
+
+    def post_moderation(self, q):
+        b = self.body_json()
+        d = read_mod()
+        for k in ("filter", "spam", "antibot", "verify", "guests"):
+            if k in b:
+                d[k] = bool(b[k])
+        for k in ("admins", "words"):
+            if k in b:
+                if not isinstance(b[k], list):
+                    return self.fail(400, "bad list")
+                items = []
+                for x in b[k][:500]:
+                    x = re.sub(r"[\t\r\n,]", "", str(x)).strip()[:64]
+                    if k == "words":
+                        x = x.lower()
+                    if x and x not in items:
+                        items.append(x)
+                d[k] = items
+        for k, lo, hi in (("spam_limit", 2, 30), ("per_ip", 0, 20), ("join_flood", 0, 100)):
+            if k in b:
+                v = int(b[k])
+                if not lo <= v <= hi:
+                    return self.fail(400, "%s must be between %d and %d" % (k.replace("_", " "), lo, hi))
+                d[k] = v
+        write_mod(d)
+        self.send(200, {"ok": True, "note": "Saved - works right away, no restart needed."})
+
+    def get_bans(self, q):
+        self.send(200, {"bans": read_bans(), "online": online_names()})
+
+    def post_bans_add(self, q):
+        b = self.body_json()
+        name = clean_name(b.get("name"))
+        minutes = int(b.get("minutes") or 0)
+        if minutes < 0 or minutes > 10 * 365 * 1440:
+            return self.fail(400, "bad duration")
+        reason = re.sub(r"[\t\r\n]", " ", str(b.get("reason") or ""))[:200]
+        until = now() + minutes * 60 if minutes else 0
+        ban_player(name, until, reason, "dashboard")
+        queue_action("ban", name, "", "Banned" + ((": " + reason) if reason else ""))
+        self.send(200, {"ok": True, "note": "%s is banned%s." % (name, "" if minutes else " forever")})
+
+    def post_bans_remove(self, q):
+        name = clean_name(self.body_json().get("name"))
+        name = unban_player(name) or name
+        queue_action("unban", name)
+        self.send(200, {"ok": True, "note": "%s can join again." % name})
+
+    def post_players_act(self, q):
+        b = self.body_json()
+        act = b.get("action")
+        name = clean_name(b.get("name"))
+        if act == "kick":
+            queue_action("kick", name, "", "Kicked by an admin" + ((": " + str(b.get("reason"))[:150]) if b.get("reason") else ""))
+            note = "%s will be kicked in a second." % name
+        elif act == "mute":
+            mins = int(b.get("minutes") or 10)
+            if not 1 <= mins <= 1440:
+                return self.fail(400, "Mute for 1 to 1440 minutes")
+            queue_action("mute", name, str(mins))
+            note = "%s is muted for %d minutes." % (name, mins)
+        elif act == "unmute":
+            queue_action("unmute", name)
+            note = "%s can chat again." % name
+        elif act == "say":
+            text = re.sub(r"[\r\n\t]", " ", str(b.get("text") or "")).strip()[:300]
+            if not text:
+                return self.fail(400, "Type a message")
+            chat_say(text)
+            note = "Sent to the chat."
+        else:
+            return self.fail(400, "bad action")
+        self.send(200, {"ok": True, "note": note})
+
+    def get_restarts(self, q):
+        r = restart_cfg(I())
+        up = APP.updates
+        self.send(200, dict(r, next=next_clear(r) if r["on"] else None, auto_update=bool(APP.settings.get("auto_update")),
+                            update_available=bool(up.get("latest") and up.get("installed") and newer(up["latest"], up["installed"])),
+                            every_choices=list(CLEAR_EVERY), warn_choices=[0, 1, 2, 5, 10, 15, 30]))
+
+    def post_restarts(self, q):
+        b = self.body_json()
+        r = restart_cfg(I())
+        if "on" in b:
+            r["on"] = bool(b["on"])
+        if "every" in b:
+            if int(b["every"]) not in CLEAR_EVERY:
+                return self.fail(400, "Pick how often from the list")
+            r["every"] = int(b["every"])
+        if "at" in b:
+            at = str(b["at"]).strip()
+            if not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", at):
+                return self.fail(400, "Enter the time like 05:00")
+            r["at"] = "%02d:%s" % (int(at.split(":")[0]), at.split(":")[1])
+        if "warn" in b:
+            if int(b["warn"]) not in (0, 1, 2, 5, 10, 15, 30):
+                return self.fail(400, "Pick the countdown length from the list")
+            r["warn"] = int(b["warn"])
+        if "when" in b:
+            if b["when"] not in ("countdown", "empty"):
+                return self.fail(400, "bad option")
+            r["when"] = b["when"]
+        if r["warn"] * 60 >= r["every"] * 3600:
+            return self.fail(400, "The countdown must be shorter than the time between restarts")
+        set_server_meta(I().id, restart=r)
+        if "auto_update" in b:
+            APP.settings.update({"auto_update": bool(b["auto_update"])})
+        self.send(200, {"ok": True, "next": next_clear(r) if r["on"] else None,
+                        "note": "Saved." + (" Next restart: %s." % time.strftime("%a %H:%M", time.localtime(next_clear(r))) if r["on"] else "")})
+
     def post_mods_desc(self, q):
         on = bool(self.body_json().get("enabled"))
         set_server_meta(I().id, desc_modsize=True if on else None)
@@ -3240,8 +3631,34 @@ class Handler(BaseHTTPRequestHandler):
                                              "Removed the download size from the description. ") +
                                             (APP.applied_note() if changed else "")})
 
+    def get_review(self, q):
+        """Everything worth a look before a server goes live for the first time."""
+        app = APP
+        g = toml_parse(app.read_config_text())[0].get("General", {})
+        ex, md, rs = read_extras(), read_mod(), restart_cfg(I())
+        al_on, _ = read_allowlist()
+        self.send(200, {
+            "reviewed": bool(I().meta.get("reviewed")), "server": I().name,
+            "game": {"name": g.get("Name"), "map": map_name(g.get("Map")), "max_players": g.get("MaxPlayers"),
+                     "max_cars": g.get("MaxCars"), "private": bool(g.get("Private")), "port": g.get("Port"),
+                     "description": g.get("Description"), "authkey": I().has_authkey(), "allowlist": bool(al_on)},
+            "security": {"totp": app.secrets.has("TOTP_SECRET"), "remote": bool(app.settings.get("remote_enabled")),
+                         "https": bool(app.settings.get("https")), "alerts": bool(app.settings.get("security_alerts")),
+                         "discord": bool(app.settings.get("discord_enabled"))},
+            "protection": {"antibot": md["antibot"], "filter": md["filter"], "admins": md["admins"],
+                           "relay": relay_on(), "flood": bool(app.settings.get("flood_protect"))},
+            "cars": {"clear": ex["clear"], "every": ex["every"], "at": ex["at"], "afk": ex["afk"]},
+            "restarts": {"on": rs["on"], "every": rs["every"], "at": rs["at"]},
+        })
+
+    def post_review_ok(self, q):
+        set_server_meta(I().id, reviewed=True)
+        self.send(200, {"ok": True})
+
     def post_server_action(self, q):
         what = self.body_json().get("action")
+        if what == "start" and not I().meta.get("reviewed"):
+            return self.fail(409, "Look over the settings first - open the dashboard and press Start again.")
         r = APP.server.action(what)
         if r.get("ok"):
             self.send(200, {"ok": True})
