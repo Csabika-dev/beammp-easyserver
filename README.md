@@ -80,6 +80,10 @@ The **Map** card on Overview switches the map and restarts the server. With **Co
 
 **Config → Join alerts** posts in your Discord channel when one of your chosen players joins ("Dani just joined - 3/8 online, come and play!"), optionally pinging people or a role (`@here`, `<@user id>`, `<@&role id>`) and including the address. When someone who isn't on your allow-list tries to join, the Discord message has an **Approve** link: tap it, confirm, and they can join right away.
 
+### Discord commands (optional, off by default)
+
+**Settings → Discord bot** adds slash commands to your Discord: `/status` shows every server with online players, map, CPU and memory (anyone can use it), and `/start`, `/stop` and `/restart` let people with **Manage Server** (or the Discord users you allow) control the servers. You make a free bot in the Discord Developer Portal and paste its token; the dashboard walks you through it. The bot only answers in the Discord server you choose and needs no port forwarding.
+
 ### Invite-only servers (allow-list)
 
 BeamMP has no join password, so EasyServer adds a guest list instead: **Config → Who can join**. Turn it on, type the BeamMP usernames of your friends (one per line, not case-sensitive) and press **Save list**. Everyone else, and all guests, get an "invite-only" message when they try to join. It works immediately, without a restart. Refused players show up under **Recently refused** with a one-click **+ allow**, and you can get a notification when it happens.
@@ -236,7 +240,7 @@ To turn on VirusTotal, make a free account at [virustotal.com](https://www.virus
 
 ## 🔐 Your keys are encrypted
 
-Your **BeamMP AuthKey**, your **VirusTotal key** and the **mod page password** are never stored in plain text, and never in `ServerConfig.toml`.
+Your **BeamMP AuthKey**, your **VirusTotal key**, your **Discord bot token** and the **mod page password** are never stored in plain text, and never in `ServerConfig.toml`.
 
 - **Windows:** encrypted with Windows' own DPAPI, tied to your Windows account. The file is useless on any other PC or account.
 - **Linux:** AES-256 encrypted (`/var/lib/beammp-easyserver/secrets.enc`). The unlock key is a separate root-only file in `/etc/beammp-easyserver`.
