@@ -38,7 +38,7 @@ import zipfile
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-EASY_VERSION = "1.7.0"
+EASY_VERSION = "1.8.0"
 REPO = "Csabika-dev/beammp-easyserver"
 BEAMMP_REPO = "BeamMP/BeamMP-Server"
 IS_WIN = os.name == "nt"
@@ -108,6 +108,9 @@ DEFAULT_SETTINGS = {
     "backup_mods": False,          # ...including the mods (can be big)
     "duckdns_domain": "",          # name.duckdns.org - a fixed address even when the home IP changes
     "upload_mbit": 0,              # the user's upload speed from a speed test (0 = unknown)
+    "discord_status_msg": False,   # a status message in the webhook channel that updates itself every minute
+    "discord_bridge": False,       # game chat <-> Discord channel (the webhook's channel)
+    "discord_bridge_server": "main",
 }
 SECURITY_FILE = os.path.join(DATA_DIR, "security.json")
 SECURITY_REPEAT = 15 * 60
@@ -147,6 +150,7 @@ class Instance:
         self.ACTIONS_FILE = os.path.join(self.STATS_DIR, "actions.txt")
         self.VERIFIED_FILE = os.path.join(self.STATS_DIR, "verified.txt")
         self.MSG_FILE = os.path.join(self.STATS_DIR, "messages.txt")
+        self.BRIDGE_FILE = os.path.join(self.STATS_DIR, "bridge.txt")
         self.CONFIG = os.path.join(self.SERVER_DIR, "ServerConfig.toml")
         self.SERVER_LOG = os.path.join(self.SERVER_DIR, "Server.log")
         self.authkey_name = "BEAMMP_AUTH_KEY" if iid == "main" else "BEAMMP_AUTH_KEY_" + iid.upper()
@@ -1612,7 +1616,7 @@ MSG_EVERY = (5, 10, 15, 20, 30, 45, 60, 90, 120)
 
 
 def clean_msg(t):
-    return re.sub(r"[\x00-\x1f\x7f]", " ", str(t)).strip()[:200]
+    return re.sub(r"[\x00-\x1f\x7f]", " ", str(t if t is not None else "")).strip()[:200]
 
 
 def read_messages():
@@ -2604,6 +2608,104 @@ def sys_upload_kbps():
     return round((sent - prev[1]) * 8 / 1000.0 / (t - prev[0]), 1)
 
 
+# ----------------------------------------------------------------------------- Discord webhook helpers
+def webhook_parts():
+    url = APP.secrets.get("DISCORD_WEBHOOK") if APP else ""
+    m = re.fullmatch(r"https://(?:(?:ptb|canary)\.)?discord(?:app)?\.com/api/webhooks/(\d+)/([\w-]+)", url or "")
+    return (m.group(1), m.group(2)) if m else (None, None)
+
+
+def webhook_call(method, suffix="", body=None, query=""):
+    wid, wtok = webhook_parts()
+    if not wid:
+        raise ValueError("Add your Discord webhook under Settings -> Notifications first")
+    return discord_api(method, "/webhooks/%s/%s%s%s" % (wid, wtok, suffix, query), body=body)
+
+
+def webhook_channel():
+    """The Discord channel the webhook posts to (the chat bridge listens there)."""
+    key = APP.secrets.get("DISCORD_WEBHOOK")
+    cache = getattr(APP, "_wh_chan", None)
+    if cache and cache[0] == key:
+        return cache[1]
+    chan = str((webhook_call("GET") or {}).get("channel_id") or "")
+    APP._wh_chan = (key, chan)
+    return chan
+
+
+def playtime_top(inst, days=30, n=10):
+    use_server(inst.id)
+    data = analytics(8)
+    return data["top"][:n]
+
+
+def fmt_hours(sec):
+    h = sec / 3600.0
+    return ("%.1f h" % h) if h >= 1 else ("%d min" % max(1, round(sec / 60)))
+
+
+def set_mod_enabled(name, on):
+    """Move a mod between Client (players download it) and Client-disabled. True if it moved."""
+    name = safe_zip_name(name)
+    if not name:
+        return False
+    a, b = os.path.join(I().CLIENT_DIR, name), os.path.join(I().DISABLED_DIR, name)
+    src, dst = (b, a) if on else (a, b)
+    if not os.path.exists(src) or os.path.exists(dst):
+        return False
+    r = modscan.cached_result(src)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    shutil.move(src, dst)
+    if r:
+        modscan.remember(dst, r.get("sha256"))
+    return True
+
+
+# ----------------------------------------------------------------------------- scheduled events
+EVENT_DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+
+def events_cfg(inst):
+    ev = inst.meta.get("events")
+    return [e for e in ev if isinstance(e, dict)] if isinstance(ev, list) else []
+
+
+def event_next_start(e, t):
+    """The next start time (local) of a weekly event at or after t - 1 minute."""
+    h, m = (int(x) for x in e["at"].split(":"))
+    lt = time.localtime(t)
+    for add in range(0, 8):
+        day = time.localtime(time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday + add, 0, 0, 0, 0, 0, -1)))
+        if day.tm_wday not in e["days"]:
+            continue
+        st = int(time.mktime((day.tm_year, day.tm_mon, day.tm_mday, h, m, 0, 0, 0, -1)))
+        if st >= t - 60:
+            return st
+    return None
+
+
+def upcoming_events_text():
+    t = now()
+    rows = []
+    with LOCK:
+        insts = list(INSTANCES.values())
+    for inst in insts:
+        for e in events_cfg(inst):
+            if not e.get("on", True):
+                continue
+            st = event_next_start(e, t)
+            act = inst.meta.get("event_active")
+            if isinstance(act, dict) and act.get("id") == e.get("id"):
+                rows.append((t, "🔴 **%s** - happening now on %s (map %s), until %s" % (
+                    discord_escape(e["name"]), discord_escape(inst.name), discord_escape(e["map"]),
+                    time.strftime("%H:%M", time.localtime(act["end"])))))
+            elif st:
+                rows.append((st, "📅 **%s** - <t:%d:F> (<t:%d:R>), %s, map %s" % (
+                    discord_escape(e["name"]), st, st, discord_escape(inst.name), discord_escape(e["map"]))))
+    rows.sort()
+    return "\n".join(r for _, r in rows[:10]) or "No events planned."
+
+
 class WSClosed(Exception):
     def __init__(self, code):
         super().__init__("Discord closed the connection (%s)" % code)
@@ -2766,7 +2868,10 @@ class DiscordBot:
                 "state": self.state, "error": self.error, "bot_name": self.user, "app_id": self.app_id,
                 "guild": s.get("discord_bot_guild") or "", "guilds": guilds,
                 "users": s.get("discord_bot_users") or [],
-                "invite": ("https://discord.com/oauth2/authorize?client_id=%s&scope=bot%%20applications.commands&permissions=0"
+                "status_msg": bool(s.get("discord_status_msg")), "bridge": bool(s.get("discord_bridge")),
+                "bridge_server": s.get("discord_bridge_server") or "main", "has_webhook": bool(webhook_parts()[0]),
+                "servers": [{"id": i.id, "name": i.name} for i in sorted(INSTANCES.values(), key=lambda i: (i.id != "main", i.id))],
+                "invite": ("https://discord.com/oauth2/authorize?client_id=%s&scope=bot%%20applications.commands&permissions=68608"
                            % self.app_id) if self.app_id else None}
 
     def reconnect(self):
@@ -2793,6 +2898,10 @@ class DiscordBot:
                 self.state = "error"
                 if e.code == 4004:
                     self.error = "Discord rejected the bot token. Copy a new one (Developer Portal → Bot → Reset Token)."
+                    backoff = 3600
+                elif e.code == 4014:
+                    self.error = ("The chat bridge needs permission to read messages: Developer Portal → your app → Bot → "
+                                  "turn on MESSAGE CONTENT INTENT → Save, then press Save here again.")
                     backoff = 3600
                 else:
                     self.error = str(e)
@@ -2834,7 +2943,9 @@ class DiscordBot:
                 time.sleep(interval)
 
         threading.Thread(target=beat, daemon=True).start()
-        ws.send(json.dumps({"op": 2, "d": {"token": token, "intents": 1,      # GUILDS: names of the Discord servers
+        # GUILDS (names of the Discord servers); with the chat bridge also GUILD_MESSAGES + MESSAGE_CONTENT
+        intents = 1 | ((512 | 32768) if self.app.settings.get("discord_bridge") else 0)
+        ws.send(json.dumps({"op": 2, "d": {"token": token, "intents": intents,
                                            "properties": {"os": sys.platform, "browser": "beammp-easyserver",
                                                           "device": "beammp-easyserver"}}}))
         while True:
@@ -2865,8 +2976,35 @@ class DiscordBot:
             elif op == 0 and t == "GUILD_DELETE" and d.get("id") and not d.get("unavailable"):
                 with LOCK:
                     self.guilds.pop(str(d["id"]), None)
+            elif op == 0 and t == "MESSAGE_CREATE":
+                self.on_message(d)
             elif op == 0 and t == "INTERACTION_CREATE":
                 threading.Thread(target=self.on_interaction, args=(d,), daemon=True).start()
+
+    def on_message(self, d):
+        """Chat bridge, Discord -> game: messages in the webhook's channel go to the game chat."""
+        s = self.app.settings
+        if not s.get("discord_bridge") or d.get("webhook_id") or (d.get("author") or {}).get("bot"):
+            return
+        if str(d.get("guild_id") or "") != (s.get("discord_bot_guild") or "x"):
+            return
+        try:
+            if str(d.get("channel_id")) != webhook_channel():
+                return
+        except Exception:
+            return
+        a = d.get("author") or {}
+        who = clean_player_name((d.get("member") or {}).get("nick") or a.get("global_name") or a.get("username"))
+        text = re.sub(r"<a?:(\w+):\d+>", r":\1:", str(d.get("content") or ""))          # custom emoji -> :name:
+        text = re.sub(r"<[@#][!&]?\d+>", "@someone", text)
+        text = clean_msg(text)[:150]
+        if not text:
+            return
+        with LOCK:
+            inst = INSTANCES.get(s.get("discord_bridge_server") or "main") or INSTANCES.get("main")
+        use_server(inst.id)
+        if inst.server.status()["state"] == "running":
+            chat_say("[Discord] %s: %s" % (who, text))
 
     def pick_guild(self):
         """The first Discord server the bot joins becomes the one it answers in."""
@@ -2897,6 +3035,17 @@ class DiscordBot:
             dict(admin, name="start", type=1, description="Start the BeamMP server"),
             dict(admin, name="stop", type=1, description="Stop the BeamMP server (kicks everyone)"),
             dict(admin, name="restart", type=1, description="Restart the BeamMP server"),
+            {"name": "top", "description": "Who played the most in the last 30 days", "type": 1, "contexts": [0],
+             "options": opts},
+            {"name": "whitelist", "description": "Manage who can join (the allow-list)", "type": 1, "contexts": [0],
+             "default_member_permissions": str(PERM_MANAGE_GUILD),
+             "options": [{"type": 3, "name": "action", "description": "What to do", "required": True,
+                          "choices": [{"name": "add", "value": "add"}, {"name": "remove", "value": "remove"},
+                                      {"name": "list", "value": "list"}, {"name": "on (invite-only)", "value": "on"},
+                                      {"name": "off (anyone can join)", "value": "off"}]},
+                         {"type": 3, "name": "player", "description": "BeamMP player name", "required": False,
+                          "max_length": 40}] + opts},
+            {"name": "events", "description": "Upcoming events on the BeamMP server", "type": 1, "contexts": [0]},
         ]
 
     def sync_commands(self, token):
@@ -2934,22 +3083,84 @@ class DiscordBot:
                 return discord_api("PATCH", edit, body={"embeds": [{
                     "title": "BeamMP servers", "color": 0x3B82F6, "fields": discord_server_status(),
                     "footer": {"text": "BeamMP EasyServer"}}], "allowed_mentions": {"parse": []}})
-            if name not in ("start", "stop", "restart"):
+            opts = {o.get("name"): o.get("value") for o in (d.get("data") or {}).get("options") or []}
+            if name == "top":
+                with LOCK:
+                    inst = INSTANCES.get(str(opts.get("server") or "main")) or INSTANCES["main"]
+                discord_api("POST", cb, body={"type": 5})
+                top = playtime_top(inst)
+                medal = ["🥇", "🥈", "🥉"]
+                lines = ["%s **%s** - %s" % (medal[i] if i < 3 else "%d." % (i + 1), discord_escape(p["name"]),
+                                             fmt_hours(p["seconds"])) for i, p in enumerate(top)]
+                return discord_api("PATCH", edit, body={"embeds": [{
+                    "title": "Most played - last 30 days" + (" (%s)" % inst.name if len(INSTANCES) > 1 else ""),
+                    "description": "\n".join(lines) or "Nobody has played yet.", "color": 0xF5A524}],
+                    "allowed_mentions": {"parse": []}})
+            if name == "events":
+                discord_api("POST", cb, body={"type": 5})
+                return discord_api("PATCH", edit, body={"embeds": [{"title": "Upcoming events", "color": 0x8B5CF6,
+                                                                    "description": upcoming_events_text()}],
+                                                        "allowed_mentions": {"parse": []}})
+            if name not in ("start", "stop", "restart", "whitelist"):
                 return
             perms = int(member.get("permissions") or 0)
             if not (perms & (PERM_ADMIN | PERM_MANAGE_GUILD)) and uid not in (self.app.settings.get("discord_bot_users") or []):
                 return discord_api("POST", cb, body={"type": 4, "data": {
                     "content": "Only people with **Manage Server** (or who are allowed in the dashboard) can do that.",
                     "flags": 64}})
-            opts = {o.get("name"): o.get("value") for o in (d.get("data") or {}).get("options") or []}
             with LOCK:
                 inst = INSTANCES.get(str(opts.get("server") or "main"))
             if not inst:
                 return discord_api("POST", cb, body={"type": 4, "data": {"content": "That server doesn't exist any more.", "flags": 64}})
+            if name == "whitelist":
+                return discord_api("POST", cb, body={"type": 4, "data": {
+                    "content": self.do_whitelist(inst, opts.get("action"), str(opts.get("player") or ""), who),
+                    "allowed_mentions": {"parse": []}}})
             discord_api("POST", cb, body={"type": 5})
             discord_api("PATCH", edit, body={"content": self.do_action(inst, name, who), "allowed_mentions": {"parse": []}})
         except Exception as e:
             sys.stderr.write("discord command: %s\n" % short_err(e))
+
+    def do_whitelist(self, inst, action, player, who):
+        use_server(inst.id)
+        on, names = read_allowlist()
+        label = discord_escape(inst.name)
+        if action == "list":
+            return ("**%s** is %s. On the list (%d): %s" % (label, "invite-only" if on else "open to everyone", len(names),
+                                                            ", ".join(discord_escape(n) for n in names[:60]) or "nobody")
+                    + (" …" if len(names) > 60 else ""))[:1900]
+        if action in ("on", "off"):
+            if action == "on" and not names:
+                return "Add at least one player first: /whitelist add <name>"
+            write_allowlist(action == "on", names)
+            self.app.notifier.add("moderation", "Allow-list turned %s from Discord" % action, "By %s." % who[:60], "info", send=False)
+            return ("🔒 **%s** is now invite-only (%d players)." % (label, len(names)) if action == "on"
+                    else "🔓 Anyone can join **%s** now." % label)
+        try:
+            clean = clean_allow_names([player])
+        except ValueError as e:
+            return "❌ %s" % discord_escape(e)
+        if not clean:
+            return "Type the BeamMP player name too, for example: /whitelist add Dani"
+        n = clean[0]
+        have = [x.lower() for x in names]
+        if action == "add":
+            if n.lower() in have:
+                return "%s is already on the list." % discord_escape(n)
+            try:
+                write_allowlist(on, clean_allow_names(names + [n]))
+            except ValueError as e:
+                return "❌ %s" % discord_escape(e)
+            msg = "✅ Added **%s** to the allow-list of %s." % (discord_escape(n), label)
+        else:
+            if n.lower() not in have:
+                return "%s isn't on the list." % discord_escape(n)
+            real = next(x for x in names if x.lower() == n.lower())
+            write_allowlist(on, [x for x in names if x.lower() != n.lower()])
+            msg = "➖ Removed **%s** from the allow-list of %s." % (discord_escape(real), label)
+        self.app.notifier.add("moderation", "Allow-list changed from Discord", "%s by %s." % (msg.replace("*", ""), who[:60]),
+                              "info", send=False)
+        return msg + ("" if on else " (The list isn't switched on - /whitelist on makes the server invite-only.)")
 
     def do_action(self, inst, what, who):
         use_server(inst.id)
@@ -3127,7 +3338,8 @@ class App:
             except Exception as e:
                 sys.stderr.write("flood protection: %s\n" % short_err(e))
             for name, fn in (("address check", self.addr_tick), ("backup", self.backup_tick),
-                             ("duckdns", self.duck_tick), ("resources", self.resource_tick)):
+                             ("duckdns", self.duck_tick), ("resources", self.resource_tick),
+                             ("discord status", self.status_msg_tick)):
                 try:
                     fn()
                 except Exception as e:
@@ -3273,6 +3485,8 @@ class App:
         with a countdown in the chat."""
         r = rotation_cfg(inst)
         maps = [m for m in r["maps"] if m in BUILTIN_MAPS or m in enabled_mod_maps()]
+        if inst.meta.get("event_active"):
+            return                                  # an event is running - it switches the map back itself
         if not r["on"] or len(maps) < 2:
             S.pop("rot", None)
             return
@@ -3451,8 +3665,128 @@ class App:
         if changed:
             self.save_state()
 
+    def bridge_out(self, chat):
+        """Chat bridge, game -> Discord: one webhook message per batch, never pinging anyone."""
+        lines = ["**%s**: %s" % (discord_escape(n), discord_escape(m)) for n, m in chat if m]
+        try:
+            while lines:
+                part = []
+                while lines and len("\n".join(part + [lines[0]])) < 1900:
+                    part.append(lines.pop(0))
+                if not part:
+                    part = [lines.pop(0)[:1900]]
+                webhook_call("POST", body={"username": "Game chat", "content": "\n".join(part),
+                                           "allowed_mentions": {"parse": []}})
+        except Exception as e:
+            sys.stderr.write("chat bridge: %s\n" % short_err(e))
+
+    def status_msg_tick(self):
+        """A message in the webhook's Discord channel that shows the servers and updates itself every minute."""
+        if not self.settings.get("discord_status_msg") or not webhook_parts()[0]:
+            return
+        t = now()
+        if t < getattr(self, "status_next", 0):
+            return
+        self.status_next = t + 60
+        body = {"username": "BeamMP servers", "allowed_mentions": {"parse": []},
+                "embeds": [{"title": "BeamMP servers", "color": 0x3B82F6, "fields": discord_server_status(),
+                            "footer": {"text": "Updates every minute · last update"},
+                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))}]}
+        up = upcoming_events_text()
+        if up != "No events planned.":
+            body["embeds"].append({"title": "Upcoming events", "color": 0x8B5CF6, "description": up})
+        use_server("main")
+        mid = self.state.get("status_msg")
+        key = APP.secrets.get("DISCORD_WEBHOOK")[-12:]
+        if mid and self.state.get("status_key") == key:
+            try:
+                webhook_call("PATCH", "/messages/%s" % mid, body)
+                return
+            except urllib.error.HTTPError as e:
+                if e.code not in (404, 403):
+                    raise                         # Discord hiccup - try again next minute
+        r = webhook_call("POST", body=body, query="?wait=true")
+        self.state.update({"status_msg": str((r or {}).get("id") or ""), "status_key": key})
+        self.save_state()
+
+    def _event_tick(self, inst, S):
+        """Weekly events (Config -> Events): announce, switch map and mods, switch back."""
+        evs = [e for e in events_cfg(inst) if e.get("on", True)]
+        act = inst.meta.get("event_active")
+        t = now()
+        if isinstance(act, dict):
+            if t < act.get("end", 0):
+                return
+            # the event is over: put the map and mods back
+            for m in act.get("mods") or []:
+                set_mod_enabled(m, False)
+            if online_names():
+                chat_say("%s is over - thanks for joining! Switching back to %s." % (act.get("name", "The event"), act.get("prev_map")))
+                time.sleep(2)
+            set_server_meta(inst.id, event_active=None)
+            ok, note = self.switch_map(act.get("prev_map")) if act.get("prev_map") else (True, "")
+            if act.get("mods") and not act.get("prev_map"):
+                self.config_changed()
+            self.notifier.add("rotation", "Event ended: %s" % act.get("name"), note or "Back to normal.", "info")
+            return
+        warned = S.setdefault("ev_warned", {})
+        for e in evs:
+            st = event_next_start(e, t)
+            if not st:
+                continue
+            left = st - t
+            ann = int(e.get("announce", 30)) * 60
+            k = "%s@%d" % (e.get("id"), st)
+            if 0 < left <= ann and k not in warned:
+                warned[k] = True
+                txt = "📅 **%s** starts <t:%d:R> on %s - map %s.%s" % (
+                    discord_escape(e["name"]), st, discord_escape(inst.name), discord_escape(e["map"]),
+                    (" " + discord_escape(e.get("text"))) if e.get("text") else "")
+                if webhook_parts()[0]:
+                    try:
+                        webhook_call("POST", body={"username": "BeamMP events",
+                                                   "content": ("@everyone " if e.get("ping") else "") + txt,
+                                                   "allowed_mentions": {"parse": ["everyone"] if e.get("ping") else []}})
+                    except Exception as ex:
+                        sys.stderr.write("event announce: %s\n" % short_err(ex))
+                if online_names():
+                    chat_say("Event: %s starts in %s on map %s!" % (e["name"], fmt_secs(left), e["map"]))
+            if left <= 0:
+                prev = current_map()
+                moved = [m for m in e.get("mods") or [] if set_mod_enabled(m, True)]
+                set_server_meta(inst.id, event_active={"id": e.get("id"), "name": e["name"], "end": st + int(e["minutes"]) * 60,
+                                                        "prev_map": prev if prev != e["map"] else None, "mods": moved})
+                if online_names():
+                    chat_say("%s starts now! Switching to %s - rejoin in a moment." % (e["name"], e["map"]))
+                    time.sleep(2)
+                if e["map"] != prev:
+                    ok, note = self.switch_map(e["map"])
+                else:
+                    ok, note = True, ""
+                    if moved:
+                        self.config_changed()
+                self.notifier.add("rotation", "Event started: %s" % e["name"], note or "Map %s." % e["map"], "info")
+                return
+        for k in [k for k in warned if int(k.rsplit("@", 1)[1]) < t - 3600]:
+            warned.pop(k, None)
+
+    def _bridge_flag(self, inst, S):
+        want = "on" if (self.settings.get("discord_bridge") and
+                        (self.settings.get("discord_bridge_server") or "main") == inst.id and webhook_parts()[0]) else "off"
+        if S.get("bridge_flag") != want and os.path.isdir(inst.STATS_DIR):
+            shared_write(inst.BRIDGE_FILE, "# Managed by the dashboard (Settings -> Discord bot -> chat bridge)\nbridge=%s\n" % want)
+            S["bridge_flag"] = want
+
     def _monitor_one(self, inst, S):
         self._check_tampering(inst, S)
+        try:
+            self._bridge_flag(inst, S)
+        except OSError:
+            pass
+        try:
+            self._event_tick(inst, S)
+        except Exception as e:
+            sys.stderr.write("events %s: %s\n" % (inst.id, short_err(e)))
         try:
             self._rotation_tick(inst, S)
         except Exception as e:
@@ -3514,7 +3848,7 @@ class App:
                         raw = raw[:raw.rindex(b"\n") + 1]     # never cut a line in half
                     S["ev_pos"] += len(raw)
                     chunk = raw.decode("utf-8", "replace")
-                joined, denied, modmsgs, bots, refused = [], [], [], 0, []
+                joined, denied, modmsgs, bots, refused, chat = [], [], [], 0, [], []
                 for line in chunk.splitlines():
                     try:
                         e = json.loads(line)
@@ -3524,6 +3858,8 @@ class App:
                         continue
                     if e.get("ev") == "join":
                         joined.append(clean_player_name(e.get("name")))
+                    elif e.get("ev") == "chat" and len(chat) < 40:
+                        chat.append((clean_player_name(e.get("name")), clean_msg(e.get("msg"))[:300]))
                     elif e.get("ev") == "mapvote" and isinstance(e.get("map"), str):
                         S["pending_map"] = (now() + 30, e["map"][:80], clean_player_name(e.get("by")))
                     elif e.get("ev") == "denied":
@@ -3587,6 +3923,9 @@ class App:
                     self.notifier.add("player_join", "%d players joined" % len(joined), ", ".join(joined[:20]), "info")
                 if joined:
                     self.join_alert(inst, joined)
+                if chat and self.settings.get("discord_bridge") and \
+                        (self.settings.get("discord_bridge_server") or "main") == inst.id:
+                    self.bridge_out(chat)
         except OSError:
             pass
         # a map vote passed in game: switch ~30 s later (players were told)
@@ -5013,6 +5352,64 @@ class Handler(BaseHTTPRequestHandler):
         APP.settings.update({"upload_mbit": round(v, 1)})
         self.send(200, {"ok": True, "note": "Saved."})
 
+    # ---------- scheduled events
+    def get_events(self, q):
+        avail = BUILTIN_MAPS + [m for m in enabled_mod_maps() if m not in BUILTIN_MAPS]
+        act = I().meta.get("event_active")
+        evs = []
+        for e in events_cfg(I()):
+            st = event_next_start(e, now()) if e.get("on", True) else None
+            evs.append(dict(e, next=st))
+        self.send(200, {"events": evs, "maps": avail, "mods": [m["name"] for m in list_mods()],
+                        "days": list(EVENT_DAYS), "active": act if isinstance(act, dict) else None,
+                        "has_webhook": bool(webhook_parts()[0])})
+
+    def post_events(self, q):
+        b = self.body_json()
+        raw = b.get("events")
+        if not isinstance(raw, list) or len(raw) > 20:
+            return self.fail(400, "At most 20 events")
+        avail = set(BUILTIN_MAPS) | set(enabled_mod_maps())
+        allmods = {m["name"] for m in list_mods()}
+        out = []
+        for e in raw:
+            if not isinstance(e, dict):
+                return self.fail(400, "bad event")
+            name = clean_msg(e.get("name"))[:60]
+            if not name:
+                return self.fail(400, "Give every event a name")
+            days = sorted({int(d) for d in (e.get("days") or []) if str(d).isdigit() and 0 <= int(d) <= 6})
+            if not days:
+                return self.fail(400, "Pick at least one day for %s" % name)
+            at = str(e.get("at") or "").strip()
+            if not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", at):
+                return self.fail(400, "Enter the start time of %s like 20:00" % name)
+            try:
+                minutes = int(e.get("minutes") or 0)
+                assert 15 <= minutes <= 720
+            except (TypeError, ValueError, AssertionError):
+                return self.fail(400, "%s must last 15 minutes to 12 hours" % name)
+            mp = str(e.get("map") or "")
+            mods = [m for m in (e.get("mods") or []) if m in allmods][:20]
+            if mp not in avail and not mods:
+                return self.fail(400, "Pick the map for %s" % name)
+            ann = int(e.get("announce") or 0)
+            if ann not in (0, 10, 30, 60, 120, 1440):
+                return self.fail(400, "bad announce time")
+            out.append({"id": re.sub(r"[^a-z0-9]", "", str(e.get("id") or ""))[:12] or uuid.uuid4().hex[:8],
+                        "name": name, "days": days, "at": "%02d:%s" % (int(at.split(":")[0]), at.split(":")[1]),
+                        "minutes": minutes, "map": mp, "mods": mods, "announce": ann, "ping": bool(e.get("ping")),
+                        "text": clean_msg(e.get("text"))[:200], "on": bool(e.get("on", True))})
+        set_server_meta(I().id, events=out)
+        self.send(200, {"ok": True, "note": "Saved %d event%s." % (len(out), "" if len(out) == 1 else "s")})
+
+    def post_events_stop(self, q):
+        act = I().meta.get("event_active")
+        if not isinstance(act, dict):
+            return self.fail(400, "No event is running")
+        set_server_meta(I().id, event_active=dict(act, end=0))
+        self.send(200, {"ok": True, "note": "Ending the event - the map switches back within a few seconds."})
+
     # ---------- Discord bot
     def get_discordbot(self, q):
         self.send(200, APP.bot.info())
@@ -5060,9 +5457,31 @@ class Handler(BaseHTTPRequestHandler):
                 if u not in ids:
                     ids.append(u)
             upd["discord_bot_users"] = ids
+        for k, sk in (("status_msg", "discord_status_msg"), ("bridge", "discord_bridge")):
+            if k in b:
+                if b[k] and not webhook_parts()[0]:
+                    return self.fail(400, "Add your Discord webhook under Settings -> Notifications first - "
+                                          "the status message and the game chat go to its channel")
+                upd[sk] = bool(b[k])
+        if "bridge_server" in b:
+            with LOCK:
+                if str(b["bridge_server"]) not in INSTANCES:
+                    return self.fail(400, "Pick a server")
+            upd["discord_bridge_server"] = str(b["bridge_server"])
+        bridge_changed = "discord_bridge" in upd and upd["discord_bridge"] != bool(app.settings.get("discord_bridge"))
+        status_off = upd.get("discord_status_msg") is False and app.settings.get("discord_status_msg")
         if upd:
             app.settings.update(upd)
-        if "token" in b or "enabled" in b:
+        if status_off and app.state.get("status_msg"):
+            try:
+                webhook_call("DELETE", "/messages/%s" % app.state["status_msg"])
+            except Exception:
+                pass
+            app.state.pop("status_msg", None)
+            app.save_state()
+        if upd.get("discord_status_msg"):
+            app.status_next = 0
+        if "token" in b or "enabled" in b or bridge_changed:
             app.bot.reconnect()
         elif "guild" in b:
             threading.Thread(target=lambda: app.bot.sync_commands(app.secrets.get("DISCORD_BOT_TOKEN")),
