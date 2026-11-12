@@ -331,7 +331,7 @@ function renderShell() {
   document.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => show(b.dataset.tab));
   const flip = () => { const cur = document.documentElement.dataset.theme; store.set("es-theme", cur === "dark" ? "light" : "dark"); applyTheme(); setThemeIcon(); if (TAB === "players") show("players"); };
   $("#theme").onclick = flip; $("#theme2").onclick = flip; setThemeIcon();
-  $("#logout").onclick = async () => { try { await api("/api/logout", { method: "POST" }); } catch (e) {} clearInterval(SECTIMER); boot(); };
+  $("#logout").onclick = async () => { try { await api("/api/logout", { method: "POST" }); } catch (e) {} try { if ("caches" in window) (await caches.open("es-shell-v2")).delete("/__wake.json"); } catch (e) {} clearInterval(SECTIMER); boot(); };
   clearInterval(SECTIMER); checkSecurity(); SECTIMER = setInterval(() => checkSecurity().catch(() => {}), 30000);
 }
 
@@ -1236,6 +1236,112 @@ async function loadPhone() {
   if ($("#nt_copy")) $("#nt_copy").onclick = () => { navigator.clipboard && navigator.clipboard.writeText(nt.subscribe.split("/").pop()).then(() => toast("Copied")); };
 }
 
+/* ---------------- sleep + Wake-on-LAN (Settings) */
+const ROUTERS = [
+  ["fritz", "FRITZ!Box", m => `<ol class="small"><li>Open <b>fritz.box</b> → <b>Home Network</b> → <b>Network</b> → <b>Network Connections</b>.</li>
+    <li>Click the pencil next to this computer (MAC <span class="mono">${m}</span>).</li>
+    <li>Turn on <b>"Start this computer automatically as soon as it is accessed from the internet"</b> → OK. <b>Start Computer</b> on the same page wakes it right now.</li></ol>
+    <p class="small muted">Then friends who join with your address (or DuckDNS name) wake the computer up just by trying to connect - the first try fails, joining again after about 30 seconds works. Away from home you can press <b>Start Computer</b> through MyFRITZ! or the FRITZ!Box VPN. The FRITZ!Box only does this if the computer was idle for at least 15 minutes.</p>`],
+  ["asus", "ASUS", m => `<ol class="small"><li>Open <b>router.asus.com</b> → <b>Advanced Settings</b> → <b>Network Tools</b> → <b>Wake on LAN</b>.</li>
+    <li>Enter the MAC <span class="mono">${m}</span> (or pick the computer from the list and press <b>+</b>), then <b>Wake up</b>.</li></ol>
+    <p class="small muted">Away from home: the <b>ASUS Router</b> app (Android/iPhone) has <b>WOL</b> too, when remote access is on in the app.</p>`],
+  ["tplink", "TP-Link (Deco, Archer)", m => `<ol class="small"><li><b>Deco app</b>: More → Advanced → <b>WOL</b> → Add WOL Device. <b>Tether app</b> (Archer routers): More → Advanced Settings → <b>WOL</b> → Add WOL Device.</li>
+    <li>Pick this computer (MAC <span class="mono">${m}</span>) while it's on, then tap the alarm icon to wake it.</li></ol>
+    <p class="small muted">Only on models with recent firmware - if you don't see WOL, update the firmware in the app or use the wake helper.</p>`],
+  ["unifi", "Ubiquiti (UniFi, EdgeRouter)", m => `<p class="small">UniFi gateways and EdgeRouters have no Wake-on-LAN button, and a wake-up signal doesn't travel through the UniFi VPN (Teleport / WireGuard) either. Use the <b>wake helper</b> below on any device that's always on - it works with every UniFi setup, needs no port forwarding and adds <b>/start</b> in Discord.</p>
+    <p class="small muted">At home, any Wake-on-LAN phone app on your Wi-Fi works too (MAC <span class="mono">${m}</span>). Wired and wireless clients must be in the same network (VLAN) as this computer.</p>`],
+  ["mikrotik", "MikroTik", m => `<p class="small">WinBox / WebFig: <b>Tools → WoL</b> → MAC <span class="mono">${m}</span>, interface <b>bridge</b> → Wake. In the terminal:</p>
+    <pre class="mono small" style="white-space:pre-wrap">/tool/wol mac=${m.toUpperCase()} interface=bridge</pre><p class="small muted">From outside, connect with the MikroTik app or your VPN first.</p>`],
+  ["openwrt", "OpenWrt / GL.iNet", m => `<ol class="small"><li>LuCI → <b>System → Software</b> → install <b>luci-app-wol</b> (GL.iNet: open LuCI from Advanced first).</li>
+    <li><b>Services → Wake on LAN</b> → interface <b>br-lan</b>, host MAC <span class="mono">${m}</span> → Wake up.</li></ol>`],
+  ["netgear", "Netgear (Nighthawk, Orbi)", m => `<p class="small">Netgear's own firmware has no Wake-on-LAN button. Use the <b>wake helper</b> below, or a Wake-on-LAN phone app while you're on the home Wi-Fi (MAC <span class="mono">${m}</span>).</p>`],
+  ["other", "Something else / don't know", m => `<p class="small">Look for <b>Wake on LAN</b> or <b>WOL</b> in your router's web page or app (often under Tools, Advanced or the device list). Many provider routers, Google/Nest Wifi, eero and Linksys don't have it - then use the <b>wake helper</b> below. At home, any Wake-on-LAN app on your phone works with the MAC <span class="mono">${m}</span>.</p>`],
+];
+async function cacheWake() {   // lets the "server is asleep" page offer a Wake button (needs HTTPS)
+  if (!("caches" in window) || !window.isSecureContext) return;
+  try { const d = await api("/api/power/offline"); const c = await caches.open("es-shell-v2"); if (d.topic) await c.put("/__wake.json", new Response(JSON.stringify(d))); else await c.delete("/__wake.json"); } catch (e) {}
+}
+async function loadPower(refresh) {
+  const el = $("#powercard"); if (!el) return;
+  let p; try { p = await api("/api/power" + (refresh ? "?refresh=1" : "")); } catch (e) { el.innerHTML = `<h2>Sleep &amp; wake-up</h2><p class="small muted">${esc(e.message)}</p>`; return; }
+  cacheWake();
+  const S = p.settings, wired = p.adapters.filter(a => !a.wifi), main = p.adapters.find(a => a.name === p.main);
+  const wolOk = main && main.wol === "on";
+  const WB = { on: ["good", "On"], off: ["warn", "Off"], unsupported: ["bad", "Not supported"], wifi: ["", "Wi-Fi - can't wake"], unknown: ["", "Unknown"], "no-ethtool": ["warn", "Off?"] };
+  const mins = [15, 30, 45, 60, 120, 240, 480];
+  if (!mins.includes(S.sleep_idle)) mins.push(S.sleep_idle);
+  const status = !S.sleep_on ? "" : p.busy ? `Staying awake: ${esc(p.busy)}.` : !p.in_window ? "Outside the sleep hours - staying awake." : p.sleeps_at ? `Nobody's around - goes to sleep in about ${esc(fmtDur(p.sleeps_at - Date.now() / 1000))}.` : "";
+  const m = esc(p.mac || "aa:bb:cc:dd:ee:ff");
+  el.innerHTML = `<h2>Sleep &amp; wake-up <span class="badge ${S.sleep_on ? "good" : ""}">${S.sleep_on ? "Auto-sleep on" : "Auto-sleep off"}</span></h2>
+    <p class="small muted">Don't run the computer 24/7: it can go to sleep when nobody plays and wake up again when someone wants to play - from your router, your phone, Discord, or by itself before an event. Sleeping uses about as little power as switched off.</p>
+    ${p.error ? `<div class="issue warning"><span class="ic">⚠</span><span>${esc(p.error)}</span></div>` : ""}
+    <h3 style="margin:14px 0 4px">1. Wake-on-LAN ${wolOk ? `<span class="badge good">Ready</span>` : `<span class="badge warn">Not ready</span>`}</h3>
+    <p class="small muted">Lets another device wake this computer with a "magic packet". Needs a <b>network cable</b> - it doesn't work over Wi-Fi - and laptops must stay plugged in.</p>
+    ${p.on_wifi ? `<div class="issue warning"><span class="ic">⚠</span><span>This computer is on <b>Wi-Fi</b>. Connect it to the router with a network cable, then press Refresh.</span></div>` : ""}
+    ${!wired.length ? `<div class="issue warning"><span class="ic">⚠</span><span>No network cable adapter found. Wake-on-LAN needs one (a USB network adapter usually can't wake a computer).</span></div>` : ""}
+    <div style="margin:6px 0">${p.adapters.map(a => `<div class="row small" style="padding:4px 0;gap:8px;flex-wrap:wrap"><b>${esc(a.name)}</b>${a.desc ? `<span class="muted">${esc(a.desc)}</span>` : ""}<span class="mono">${esc(a.mac)}</span>${a.ip ? `<span class="mono">${blurIPs(esc(a.ip))}</span>` : ""}<span class="muted">${a.wifi ? "Wi-Fi" : a.cable ? "cable plugged in" : "no cable"}</span><span class="badge ${(WB[a.wol] || WB.unknown)[0]}">${(WB[a.wol] || WB.unknown)[1]}</span><span class="spacer"></span>${!a.wifi && a.wol !== "on" && a.wol !== "unsupported" ? `<button class="btn sm" data-wol="${esc(a.name)}">Turn on</button>` : ""}</div>`).join("") || `<p class="small muted">No network adapters found.</p>`}</div>
+    <details style="margin:6px 0"><summary class="small"><b>It still doesn't wake up? Check the BIOS</b></summary><div class="small">
+      <p>Wake-on-LAN must also be allowed in the computer's BIOS/UEFI setup (press F2, F10, F12 or Del while it starts). Look for:</p><ul>
+      <li><b>Wake on LAN</b>, <b>Power On By PCI-E</b>, <b>Resume by LAN</b> or <b>PME Event Wake Up</b> → Enabled</li>
+      <li><b>ErP</b> / <b>EuP</b> / <b>Deep Sleep</b> → Disabled (they cut power to the network chip)</li>
+      <li>HP: <b>Built-In Device Options → Wake on LAN</b>. Dell: <b>Power Management → Wake on LAN</b>. Lenovo ThinkPad: <b>Config → Network → Wake On LAN</b> (AC only).</li></ul>
+      <p>Test it: press <b>Sleep now</b>, wait a minute, then wake it from your router or phone. The network light on the computer should stay on while it sleeps.</p></div></details>
+
+    <h3 style="margin:16px 0 4px">2. Auto-sleep</h3>
+    ${!p.can_sleep ? `<div class="issue warning"><span class="ic">⚠</span><span>This computer can't go to sleep (no sleep support found).</span></div>` : ""}
+    <label class="toggle"><input type="checkbox" id="pw_on" ${S.sleep_on ? "checked" : ""}><span><b>Go to sleep when nobody plays</b><small>Off by default. Never while someone is online, an event runs or starts soon, or the dashboard is in use</small></span></label>
+    <div class="grid g2" style="gap:0 12px;margin-top:8px">
+      <label class="f"><span>After nobody played for</span><select id="pw_idle">${mins.sort((a, b) => a - b).map(v => `<option value="${v}" ${v === S.sleep_idle ? "selected" : ""}>${v < 60 ? v + " minutes" : v / 60 + (v === 60 ? " hour" : " hours")}</option>`).join("")}</select></label>
+      <label class="f"><span>Only between (optional)</span><span class="row" style="gap:6px"><input type="time" id="pw_from" value="${esc(S.sleep_from)}" style="max-width:130px;color-scheme:light dark;color:inherit"> and <input type="time" id="pw_to" value="${esc(S.sleep_to)}" style="max-width:130px;color-scheme:light dark;color:inherit"></span><small>For example 01:00 and 15:00. Empty = any time</small></label>
+      <label class="f"><span>Wake up by itself every day at (optional)</span><input type="time" id="pw_wake" value="${esc(S.sleep_wake_at)}" style="max-width:160px;color-scheme:light dark;color:inherit"><small>${p.rtc ? "Uses the computer's built-in alarm clock - no other device needed" : "This computer has no wake-up alarm, so this may not work"}</small></label>
+      <label class="toggle" style="align-self:center"><input type="checkbox" id="pw_ev" ${S.sleep_wake_events ? "checked" : ""}><span><b>Wake up before events</b><small>10 minutes before every scheduled event (Config → Events)</small></span></label>
+    </div>
+    ${status ? `<p class="small" style="margin:4px 0">${status}</p>` : ""}
+    ${p.next_wake ? `<p class="small muted" style="margin:4px 0">Next wake-up by itself: ${esc(fmtTime(p.next_wake))}.</p>` : ""}
+    ${p.woke_at ? `<p class="small muted" style="margin:4px 0">Last woke up: ${esc(ago(p.woke_at))}.</p>` : ""}
+    <div class="row"><button class="btn primary" id="pw_save">Save</button><button class="btn" id="pw_sleep" ${p.can_sleep ? "" : "disabled"}>Sleep now</button><button class="btn" id="pw_ref">Refresh</button></div>
+
+    <h3 style="margin:16px 0 4px">3. How to wake it up</h3>
+    <p class="small muted">The address to wake: MAC <span class="mono">${m}</span>${p.brd && p.brd.length ? `, network <span class="mono">${blurIPs(esc(p.brd[0]))}</span>` : ""}. Pick what you have:</p>
+    <label class="f"><span>Your router</span><select id="pw_router" style="max-width:320px"><option value="">- pick your router -</option>${ROUTERS.map(r => `<option value="${r[0]}">${esc(r[1])}</option>`).join("")}</select></label>
+    <div id="pw_rguide"></div>
+    <div class="card tight" style="padding:12px 14px;margin-top:10px"><b>Wake helper</b> ${p.helper.paired ? (p.helper.last_seen ? `<span class="badge good">Answered ${esc(ago(p.helper.last_seen))}</span>` : `<span class="badge warn">Set up - not tested yet</span>`) : `<span class="badge">Not set up</span>`}
+      <p class="small muted" style="margin:4px 0">A tiny program for any device at home that's always on - a Raspberry Pi, a NAS, another PC. While this computer sleeps it answers <b>/start</b> in Discord${p.helper.bot ? "" : " (needs the Discord bot)"} and the <b>Wake up</b> button in the phone app or on this page - from anywhere, without port forwarding. It can only send wake-up signals; it gets no access to this computer.</p>
+      ${p.helper.paired ? `<div id="pw_code"></div>
+        <details style="margin:6px 0"><summary class="small"><b>Install it</b></summary><div class="small">
+        <p><b>Raspberry Pi / Linux</b> - in a terminal on that device:</p>
+        <pre class="mono small" style="white-space:pre-wrap;word-break:break-all">curl -fsSLO https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/main/wake/install-wake-helper.sh
+sudo bash install-wake-helper.sh</pre>
+        <p><b>Windows</b> - download <b>BeamMP-EasyServer-WakeHelper.zip</b> from the <a href="https://github.com/Csabika-dev/beammp-easyserver/releases/latest" target="_blank" rel="noopener noreferrer">latest release</a>, unzip it and double-click <b>Install-Wake-Helper.bat</b>.</p>
+        <p>Paste the pairing code when it asks. For <b>/start</b> in Discord it also asks for your bot token (Developer Portal → Bot → Reset Token - then paste the new token here in Settings → Discord bot too). The device must stay on and be in your home network, ideally with a cable.</p></div></details>
+        <div class="row"><button class="btn" id="pw_show">Show pairing code</button><button class="btn" id="pw_test">Test the helper</button><button class="btn" id="pw_new">New code</button><button class="btn danger" id="pw_forget">Remove</button></div>`
+      : `<button class="btn" id="pw_pair" ${p.mac ? "" : "disabled"}>Set up a wake helper</button>`}
+    </div>
+    <p class="small muted" style="margin-top:10px"><b>Phone:</b> the Android app shows a <b>Wake up</b> button when the server doesn't answer - scan the QR code under Phone app again after setting up the helper. At home it wakes the computer even without the helper. The home-screen app on iPhone shows the same button (with the helper).</p>`;
+  const save = async quiet => { await api("/api/power", { json: { sleep_on: $("#pw_on").checked, sleep_idle: +$("#pw_idle").value, sleep_from: $("#pw_from").value, sleep_to: $("#pw_to").value, sleep_wake_at: $("#pw_wake").value, sleep_wake_events: $("#pw_ev").checked } }); if (!quiet) toast("Saved"); };
+  $("#pw_save").onclick = async () => { try { await save(); loadPower(); } catch (e) { toast(e.message, 6000); } };
+  $("#pw_ref").onclick = () => { el.querySelector("h2").insertAdjacentHTML("beforeend", ` <span class="small muted">checking…</span>`); loadPower(true); };
+  $("#pw_sleep").onclick = async () => {
+    if (!confirm((wolOk ? "" : "Wake-on-LAN isn't ready yet - you may have to press the power button to wake it up.\n\n") + "Put the server computer to sleep now? The game servers pause and players are disconnected.")) return;
+    try { await api("/api/power/sleep", { json: {} }); } catch (e) {
+      if (e.status !== 409 || !confirm(e.message + "\n\nSleep anyway?")) return toast(e.message, 6000);
+      try { await api("/api/power/sleep", { json: { force: true } }); } catch (e2) { return toast(e2.message, 6000); }
+    }
+    el.innerHTML = `<h2>Sleep &amp; wake-up</h2><p>💤 Going to sleep in a few seconds…</p>`;
+  };
+  el.querySelectorAll("[data-wol]").forEach(b => b.onclick = async () => { b.disabled = true; b.textContent = "Working…"; try { const r = await api("/api/power/wol", { json: { adapter: b.dataset.wol } }); toast(r.msg, 7000); loadPower(true); } catch (e) { toast(e.message, 8000); b.disabled = false; b.textContent = "Turn on"; } });
+  $("#pw_router").onchange = () => { const r = ROUTERS.find(x => x[0] === $("#pw_router").value); $("#pw_rguide").innerHTML = r ? `<div class="card tight" style="padding:10px 14px">${r[2](m)}</div>` : ""; store.set("es-router", $("#pw_router").value); };
+  if (store.get("es-router", "")) { $("#pw_router").value = store.get("es-router", ""); $("#pw_router").onchange(); }
+  const showCode = async neu => { try { const r = await api("/api/power/helper", { json: { action: "pair", new: !!neu } }); if (!$("#pw_code")) return loadPower();
+    $("#pw_code").innerHTML = `<label class="f"><span>Pairing code</span><textarea readonly rows="3" class="mono" style="min-height:70px;word-break:break-all">${esc(r.code)}</textarea><small>Treat it like a password: anyone with it can wake this computer. "New code" makes the old one stop working.</small></label><button class="btn sm" id="pw_copy">Copy</button>`;
+    $("#pw_copy").onclick = () => navigator.clipboard && navigator.clipboard.writeText(r.code).then(() => toast("Copied")); } catch (e) { toast(e.message, 6000); } };
+  if ($("#pw_pair")) $("#pw_pair").onclick = async () => { try { await api("/api/power/helper", { json: { action: "pair" } }); } catch (e) { return toast(e.message, 6000); } await loadPower(); showCode(false); };
+  if ($("#pw_show")) $("#pw_show").onclick = () => showCode(false);
+  if ($("#pw_new")) $("#pw_new").onclick = () => { if (confirm("Make a new pairing code? The helper (and phones) set up with the old one stop working until you set them up again.")) showCode(true); };
+  if ($("#pw_forget")) $("#pw_forget").onclick = async () => { if (!confirm("Remove the wake helper? It stops answering right away.")) return; try { await api("/api/power/helper", { json: { action: "forget" } }); loadPower(); } catch (e) { toast(e.message); } };
+  if ($("#pw_test")) $("#pw_test").onclick = async () => { const b = $("#pw_test"); b.disabled = true; b.textContent = "Asking…"; try { const r = await api("/api/power/helper", { json: { action: "test" } }); toast(r.found ? "The helper answered (version " + r.version + ") - it's ready." : "No answer. Is the helper running and connected to the internet?", 7000); if (r.found) loadPower(); } catch (e) { toast(e.message, 6000); } b.disabled = false; b.textContent = "Test the helper"; };
+}
+
 /* ---------------- Discord bot (Settings) */
 async function loadBot(keepOpen) {
   const el = $("#botcard"); if (!el) return;
@@ -1302,6 +1408,7 @@ VIEWS.settings = async m => {
       ${tg("n_resources", "Computer overloaded", "Out of memory, processor maxed out, or upload almost used up", N.resources)}
       ${tg("n_backup", "Backup problems", "A nightly backup failed", N.backup)}
       ${tg("n_mod_update", "Mod updates", "A newer version of a repository mod is out", N.mod_update)}
+      ${tg("n_sleep", "Sleep and wake-up", "The server computer went to sleep or woke up", N.sleep)}
       ${s.platform === "windows" ? tg("auto_restart", "Restart after a crash", "Start the server again automatically", s.auto_restart) : ""}
       ${tg("update_check", "Check for updates", "Every 6 hours", s.update_check)}
       <p class="small muted" style="margin-top:12px">Notifications always appear on the Notifications page. Also send them to:</p>
@@ -1327,6 +1434,7 @@ VIEWS.settings = async m => {
 
   <div class="card" style="margin:0 0 16px" id="phonecard"><h2>Phone app</h2><p class="muted small">Loading…</p></div>
   <div class="card" style="margin:0 0 16px" id="botcard"><h2>Discord bot</h2><p class="muted small">Loading…</p></div>
+  <div class="card" style="margin:0 0 16px" id="powercard"><h2>Sleep &amp; wake-up</h2><p class="muted small">Loading…</p></div>
 
   <div class="grid g2">
     <div class="card"><h2>Mod virus check</h2><p class="small muted">Optional VirusTotal key (free account at virustotal.com → your name → API key). Stored encrypted.</p>
@@ -1385,7 +1493,7 @@ VIEWS.settings = async m => {
   m.querySelectorAll("[data-test]").forEach(b => b.onclick = async () => { b.disabled = true; try { await saveNotif(true); await api("/api/notifications/test", { json: { channel: b.dataset.test } }); toast("Test sent"); } catch (e) { toast(e.message); } b.disabled = false; });
   async function saveNotif(quiet) {
     const body = { notify: {} };
-    ["crash", "stopped", "update", "mod_blocked", "player_join", "player_denied", "moderation", "network", "restart", "rotation", "resources", "backup", "mod_update"].forEach(k => body.notify[k] = $("#n_" + k).checked);
+    ["crash", "stopped", "update", "mod_blocked", "player_join", "player_denied", "moderation", "network", "restart", "rotation", "resources", "backup", "mod_update", "sleep"].forEach(k => body.notify[k] = $("#n_" + k).checked);
     ["discord_enabled", "email_enabled", "update_check", "security_alerts", "security_reminders"].forEach(k => body[k] = $("#" + k).checked);
     if ($("#auto_restart")) body.auto_restart = $("#auto_restart").checked;
     ["smtp_host", "smtp_port", "smtp_user", "smtp_to", "smtp_security"].forEach(k => body[k] = $("#" + k).value);
@@ -1399,6 +1507,7 @@ VIEWS.settings = async m => {
   $("#savenotif").onclick = () => saveNotif(false).catch(e => toast(e.message));
   loadBot();
   loadPhone();
+  loadPower();
   loadSet17();
   ["security_alerts", "security_reminders"].forEach(k => $("#" + k).onchange = () => saveNotif(false).catch(e => toast(e.message)));
   const popNote = () => { $("#popupnote").textContent = !window.Notification ? (window.isSecureContext ? "This browser has no pop-ups" : "Pop-ups need HTTPS (turn it on below) or http://localhost") : Notification.permission === "granted" ? "On for this browser" : Notification.permission === "denied" ? "Blocked - allow notifications for this site in the browser settings" : ""; };
