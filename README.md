@@ -92,6 +92,16 @@ The **Map** card on Overview switches the map and restarts the server. With **Co
 - **DuckDNS**: a free fixed name like `myserver.duckdns.org` that keeps working when your home IP changes.
 - **Low-resource warnings** when the computer runs out of memory, the processor is maxed out or the upload is almost used up, with a suggested player limit.
 
+### Phone app and phone notifications
+
+- **Android:** download `BeamMP-EasyServer.apk` from the [latest release](https://github.com/Csabika-dev/beammp-easyserver/releases/latest), open it, and scan the QR code under **Settings → Phone app** with the camera. The app only connects to your dashboard's own certificate.
+- **iPhone:** open the dashboard in Safari → Share → **Add to Home Screen**. It opens full screen like an app (Apple doesn't allow apps from outside the App Store).
+- **Push notifications** on both through the free **ntfy** app - scan the QR code under Settings → Phone app.
+
+### Mod updates (Mods page)
+
+Mods from the BeamNG repository are checked once a day. When there's a new version you get a notification and an **Update** button that downloads it, runs the virus check and swaps it in.
+
 ### Events (Config page)
 
 Weekly events like "Friday 20:00 drift night": announced in Discord and the game chat, then the server switches to the event's map and mods, and back when it's over.
