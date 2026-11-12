@@ -196,6 +196,7 @@ const blurIPs = html => String(html).replace(/(?<!\d)(?<!\d\.)(?:\d{1,3}\.){3}\d
 document.addEventListener("click", e => { const t = e.target.closest && e.target.closest(".ipb"); if (t) { t.classList.toggle("shown"); t.title = t.classList.contains("shown") ? "Click to hide" : "Hidden - click to show"; } });
 const h = (strings, ...vals) => strings.reduce((a, s, i) => a + s + (i < vals.length ? (vals[i] && vals[i].__raw !== undefined ? vals[i].__raw : esc(vals[i])) : ""), "");
 const raw = s => ({__raw: s});
+const IN_APP = /EasyServerApp/.test(navigator.userAgent);
 const store = { get(k, d) { try { return localStorage.getItem(k) ?? d; } catch (e) { return d; } }, set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} } };
 let CSRF = null, SESSION = null, TAB = "overview", TIMER = null;
 
@@ -309,12 +310,20 @@ function renderLogin(needCode) {
     <label class="f"><span>Name <span class="muted">(leave empty if you're the owner)</span></span><input type="text" id="un" autocomplete="username" spellcheck="false" maxlength="24"></label>
     <label class="f"><span>Password</span><input type="password" id="pw" autocomplete="current-password" autofocus></label>
     <label class="f ${needCode ? "" : "hidden"}" id="codebox"><span>Two-step code</span><input type="text" id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="123456"><small>From your authenticator app</small></label>
+    <label class="toggle" style="border:0;padding:4px 0 12px"><input type="checkbox" id="remember" ${store.get("es-remember", IN_APP ? "1" : "0") === "1" ? "checked" : ""}><span><b>Stay logged in on this device</b><small>For 30 days. Only turn this on on your own phone or computer. Log out (or Settings → Remembered devices) to forget it</small></span></label>
     <button class="btn primary" id="go" type="submit">Log in</button>
     <p class="small muted" id="err"></p></form>`);
   $("#lf").onsubmit = async ev => {
     ev.preventDefault();
     $("#go").disabled = true;
-    try { await api("/api/login", { json: { user: $("#un").value.trim(), password: $("#pw").value, code: $("#code").value } }); boot(); }
+    const remember = $("#remember").checked;
+    store.set("es-remember", remember ? "1" : "0");
+    try {
+      await api("/api/login", { json: { user: $("#un").value.trim(), password: $("#pw").value, code: $("#code").value, remember } });
+      // Lets the browser's password manager offer to save the password (Chrome / Edge / Android; others save on submit)
+      try { if (window.PasswordCredential) await navigator.credentials.store(new PasswordCredential({ id: $("#un").value.trim() || "owner", password: $("#pw").value, name: "BeamMP Dashboard" })); } catch (e) {}
+      boot();
+    }
     catch (e) { $("#err").textContent = e.message; if (e.data && e.data.need_code) $("#codebox").classList.remove("hidden"); $("#go").disabled = false; }
   };
 }
@@ -1504,6 +1513,21 @@ async function loadStatusPage() {
   };
 }
 
+async function loadDevices() {
+  const el = $("#devcard"); if (!el) return;
+  let d; try { d = await api("/api/devices"); } catch (e) { el.innerHTML = `<h2>Remembered devices</h2><p class="small muted">${esc(e.message)}</p>`; return; }
+  const owner = SESSION.role === "owner";
+  const rows = d.devices.map(x => `<tr><td>${esc(x.name || "Browser")}${x.this ? ' <span class="pill good">this device</span>' : ""}${owner && x.user !== "owner" ? ` <span class="muted small">· ${esc(x.user)}</span>` : ""}</td>
+    <td class="small muted">${ago(x.last)}<br>${esc(x.ip)}</td><td class="small muted">since ${fmtTime(x.created)}</td>
+    <td class="num"><button class="btn sm" data-forget="${esc(x.id)}">Forget</button></td></tr>`).join("");
+  el.innerHTML = `<h2>Remembered devices</h2>
+    <p class="small muted">Phones and browsers where "Stay logged in" was turned on. They log in by themselves for ${d.days} days after the last visit. Forget a device you lost or don't recognise - changing the password forgets all of them.</p>
+    ${d.devices.length ? `<table><tbody>${rows}</tbody></table><div class="row" style="margin-top:10px"><button class="btn sm danger" id="forgetall">Forget all</button></div>` : '<p class="small muted">None yet.</p>'}`;
+  const call = async body => { try { await api("/api/devices", { json: body }); toast("Forgotten"); loadDevices(); } catch (e) { toast(e.message); } };
+  el.querySelectorAll("[data-forget]").forEach(b => b.onclick = () => call({ action: "forget", id: b.dataset.forget }));
+  const fa = $("#forgetall"); if (fa) fa.onclick = () => { if (confirm("Forget every remembered device? They'll have to log in again.")) call({ action: "forget_all" }); };
+}
+
 async function loadUsers() {
   const el = $("#userscard"); if (!el) return;
   let d; try { d = await api("/api/users"); } catch (e) { el.innerHTML = `<h2>Users &amp; roles</h2><p class="small muted">${esc(e.message)}</p>`; return; }
@@ -1749,6 +1773,8 @@ VIEWS.settings = async m => {
       <button class="btn" id="savepw">Change password</button></div>
   </div>
 
+  <div class="card" style="margin-top:16px" id="devcard"><h2>Remembered devices</h2><p class="muted small">Loading…</p></div>
+
   <div class="card" style="margin-top:16px"><h2>Two-step login</h2>
     <p class="small muted">Ask for a 6-digit code from an app like Google Authenticator, Microsoft Authenticator or Aegis on every login. Required for access from the internet.</p>
     <div id="twofa">${s.totp ? `<span class="pill good"><span class="dot"></span>On</span> <button class="btn sm danger" id="tfaoff" style="margin-left:8px">Turn off</button>` : `<button class="btn" id="tfaon">Set up two-step login</button>`}</div></div>
@@ -1813,6 +1839,7 @@ VIEWS.settings = async m => {
   loadPhone();
   loadPower();
   loadUsers();
+  loadDevices();
   loadInteg();
   loadStatusPage();
   loadSet17();
@@ -1844,7 +1871,7 @@ VIEWS.settings = async m => {
     fst();
   }
   $("#savevt").onclick = async () => { const v = $("#vt").value.trim(); try { await api("/api/settings", { json: { vt_key: v === "off" ? "" : v } }); toast(v === "off" ? "VirusTotal turned off" : "Saved"); show("settings"); } catch (e) { toast(e.message); } };
-  $("#savepw").onclick = async () => { try { await api("/api/password", { json: { current: $("#pw_cur").value, new: $("#pw_new").value } }); toast("Password changed"); $("#pw_cur").value = $("#pw_new").value = ""; } catch (e) { toast(e.message); } };
+  $("#savepw").onclick = async () => { try { await api("/api/password", { json: { current: $("#pw_cur").value, new: $("#pw_new").value } }); toast("Password changed - remembered devices have to log in again"); $("#pw_cur").value = $("#pw_new").value = ""; loadDevices(); } catch (e) { toast(e.message); } };
   const on = $("#tfaon");
   if (on) on.onclick = async () => {
     const r = await api("/api/2fa/begin", { method: "POST" });
