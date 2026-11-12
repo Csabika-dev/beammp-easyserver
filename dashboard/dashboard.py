@@ -38,7 +38,7 @@ import zipfile
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-EASY_VERSION = "1.5.0"
+EASY_VERSION = "1.6.0"
 REPO = "Csabika-dev/beammp-easyserver"
 BEAMMP_REPO = "BeamMP/BeamMP-Server"
 IS_WIN = os.name == "nt"
@@ -74,7 +74,7 @@ BUILTIN_MAPS = ["gridmap_v2", "west_coast_usa", "east_coast_usa", "utah", "italy
                 "hirochi_raceway", "johnson_valley", "derby", "driver_training"]
 
 SECRET_NAMES = ("MODS_PASSWORD", "VT_API_KEY", "DISCORD_WEBHOOK", "SMTP_PASSWORD", "TOTP_SECRET",
-                "BEAMMP_AUTH_KEY")
+                "BEAMMP_AUTH_KEY", "DISCORD_BOT_TOKEN")
 
 DEFAULT_SETTINGS = {
     "port": 30815,
@@ -99,6 +99,9 @@ DEFAULT_SETTINGS = {
     "relay_ports": {},             # server id -> port players use on the relay
     "flood_protect": False,        # Linux: per-address limits on the game ports (nftables)
     "auto_update": False,          # install BeamMP updates at a scheduled restart
+    "discord_bot": False,          # slash commands (/status, /start, /stop, /restart) - needs a bot token
+    "discord_bot_guild": "",       # the one Discord server the bot answers in
+    "discord_bot_users": [],       # Discord user IDs that may start/stop besides "Manage Server" people
 }
 SECURITY_FILE = os.path.join(DATA_DIR, "security.json")
 SECURITY_REPEAT = 15 * 60
@@ -2300,6 +2303,417 @@ def ip_is_loopback(ip):
 
 
 # ============================================================================= the app
+# ----------------------------------------------------------------------------- Discord bot (slash commands)
+# /status for everyone; /start, /stop and /restart for people with "Manage
+# Server" in your Discord (or the user IDs you list). The bot connects out to
+# Discord (no port forwarding needed) and only answers in the one Discord
+# server you pick in Settings, so a stranger who adds it elsewhere gets nothing.
+DISCORD_API = os.environ.get("ES_DISCORD_API") or "https://discord.com/api/v10"          # override: tests only
+DISCORD_GATEWAY = os.environ.get("ES_DISCORD_GATEWAY") or "wss://gateway.discord.gg/?v=10&encoding=json"
+DISCORD_TOKEN_RE = re.compile(r"[A-Za-z0-9_\-]{20,100}\.[A-Za-z0-9_\-]{4,20}\.[A-Za-z0-9_\-]{20,100}")
+PERM_ADMIN, PERM_MANAGE_GUILD = 0x8, 0x20
+STATE_EMOJI = {"running": "🟢", "stopped": "🔴", "failed": "🔴", "starting": "🟡", "restarting": "🟡", "stopping": "🟡"}
+
+
+def discord_api(method, path, token=None, body=None, timeout=20):
+    headers = {"User-Agent": "DiscordBot (https://github.com/Csabika-dev/beammp-easyserver, %s)" % EASY_VERSION}
+    if token:
+        headers["Authorization"] = "Bot " + token
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode()
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(DISCORD_API + path, data=data, method=method, headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        raw = r.read()
+    return json.loads(raw) if raw else None
+
+
+class WSClosed(Exception):
+    def __init__(self, code):
+        super().__init__("Discord closed the connection (%s)" % code)
+        self.code = code
+
+
+class MiniWebSocket:
+    """Just enough of a WebSocket client (RFC 6455) for the Discord gateway."""
+
+    def __init__(self, url, timeout=90):
+        u = urllib.parse.urlsplit(url)
+        raw = socket.create_connection((u.hostname, u.port or (80 if u.scheme == "ws" else 443)), timeout=30)
+        self.s = raw if u.scheme == "ws" else ssl.create_default_context().wrap_socket(raw, server_hostname=u.hostname)
+        key = base64.b64encode(os.urandom(16)).decode()
+        path = (u.path or "/") + ("?" + u.query if u.query else "")
+        self.s.sendall(("GET %s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                        "Sec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\nUser-Agent: BeamMP-EasyServer/%s\r\n\r\n"
+                        % (path, u.hostname, key, EASY_VERSION)).encode())
+        resp = b""
+        while b"\r\n\r\n" not in resp:
+            chunk = self.s.recv(4096)
+            if not chunk or len(resp) > 65536:
+                raise OSError("Discord didn't accept the connection")
+            resp += chunk
+        head, self.buf = resp.split(b"\r\n\r\n", 1)
+        accept = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest())
+        if b" 101 " not in head.split(b"\r\n", 1)[0] + b" " or accept not in head:
+            raise OSError("Discord didn't accept the connection")
+        self.s.settimeout(timeout)
+        self.lock = threading.Lock()
+
+    def _read(self, n):
+        while len(self.buf) < n:
+            chunk = self.s.recv(65536)
+            if not chunk:
+                raise WSClosed("connection lost")
+            self.buf += chunk
+        out, self.buf = self.buf[:n], self.buf[n:]
+        return out
+
+    def send(self, data, op=1):
+        data = data.encode() if isinstance(data, str) else data
+        n, mask = len(data), os.urandom(4)
+        head = bytes([0x80 | op])
+        if n < 126:
+            head += bytes([0x80 | n])
+        elif n < 65536:
+            head += bytes([0x80 | 126]) + struct.pack(">H", n)
+        else:
+            head += bytes([0x80 | 127]) + struct.pack(">Q", n)
+        body = bytes(b ^ mask[i & 3] for i, b in enumerate(data))
+        with self.lock:
+            self.s.sendall(head + mask + body)
+
+    def recv(self):
+        msg = b""
+        while True:
+            b1, b2 = self._read(2)
+            op, n = b1 & 0x0F, b2 & 0x7F
+            if n == 126:
+                n = struct.unpack(">H", self._read(2))[0]
+            elif n == 127:
+                n = struct.unpack(">Q", self._read(8))[0]
+            if n > 16 * 1048576:
+                raise WSClosed("message too big")
+            mask = self._read(4) if b2 & 0x80 else None
+            data = self._read(n)
+            if mask:
+                data = bytes(b ^ mask[i & 3] for i, b in enumerate(data))
+            if op == 8:
+                raise WSClosed(struct.unpack(">H", data[:2])[0] if len(data) >= 2 else 1000)
+            if op == 9:
+                self.send(data, 10)
+                continue
+            if op == 10:
+                continue
+            msg += data
+            if b1 & 0x80:
+                return msg.decode("utf-8", "replace")
+
+    def close(self):
+        try:
+            self.send(struct.pack(">H", 1000), 8)
+        except Exception:
+            pass
+        try:
+            self.s.shutdown(socket.SHUT_RDWR)     # wakes up a recv() waiting in the other thread
+        except Exception:
+            pass
+        try:
+            self.s.close()
+        except Exception:
+            pass
+
+
+def discord_server_status():
+    """One embed field per server: state, players, map, CPU and memory."""
+    with LOCK:
+        insts = sorted(INSTANCES.values(), key=lambda i: (i.id != "main", i.id))
+    cpus = os.cpu_count() or 1
+    fields = []
+    for inst in insts:
+        use_server(inst.id)
+        st = inst.server.status()["state"]
+        data, _, _ = toml_parse(APP.read_config_text())
+        g = data.get("General", {})
+        lines = []
+        if st == "running":
+            players = analytics_online()
+            u = inst.server.usage()
+            if u.get("cpu_cores") is None:
+                time.sleep(1)
+                u = inst.server.usage()
+            lines.append("👥 **%d/%s** players" % (len(players), APP.max_players()))
+            if players:
+                lines.append(", ".join(discord_escape(p) for p in players[:20]) + (" …" if len(players) > 20 else ""))
+            lines.append("🗺️ %s" % discord_escape(map_name(g.get("Map")) or "?"))
+            use = []
+            if u.get("cpu_cores") is not None:
+                use.append("CPU %d%%" % round(u["cpu_cores"] * 100 / cpus))
+            if u.get("mem_mb") is not None:
+                use.append("RAM %s MB" % u["mem_mb"])
+            if use:
+                lines.append("⚙️ " + " · ".join(use))
+            up = inst.server.status().get("uptime") or 0
+            if up:
+                lines.append("⏱️ up %s" % fmt_uptime(up))
+        else:
+            lines.append(st.capitalize())
+        fields.append({"name": "%s %s" % (STATE_EMOJI.get(st, "⚪"), discord_escape(inst.name))[:250],
+                       "value": "\n".join(lines)[:1000], "inline": False})
+    return fields
+
+
+def fmt_uptime(sec):
+    d, h, m = sec // 86400, sec % 86400 // 3600, sec % 3600 // 60
+    return ("%dd %dh" % (d, h)) if d else ("%dh %dm" % (h, m)) if h else "%d min" % max(m, 1)
+
+
+def discord_escape(s):
+    return re.sub(r"([\\*_~`|>@#<])", r"\\\1", str(s))
+
+
+class DiscordBot:
+    def __init__(self, app):
+        self.app = app
+        self.state, self.error = "off", ""
+        self.app_id = self.user = None
+        self.guilds = {}              # id -> name, the Discord servers the bot is in
+        self.ws = None
+        self.wake = threading.Event()
+        self.registered = {}          # guild id -> commands json we last sent
+        self.busy = set()
+
+    def info(self):
+        s = self.app.settings
+        with LOCK:
+            guilds = [{"id": k, "name": v} for k, v in sorted(self.guilds.items(), key=lambda x: x[1].lower())]
+        return {"enabled": bool(s.get("discord_bot")), "has_token": self.app.secrets.has("DISCORD_BOT_TOKEN"),
+                "state": self.state, "error": self.error, "bot_name": self.user, "app_id": self.app_id,
+                "guild": s.get("discord_bot_guild") or "", "guilds": guilds,
+                "users": s.get("discord_bot_users") or [],
+                "invite": ("https://discord.com/oauth2/authorize?client_id=%s&scope=bot%%20applications.commands&permissions=0"
+                           % self.app_id) if self.app_id else None}
+
+    def reconnect(self):
+        ws, self.ws = self.ws, None
+        if ws:
+            ws.close()
+        self.wake.set()
+
+    # ---------- connection loop
+    def run(self):
+        backoff = 5
+        while True:
+            token = self.app.secrets.get("DISCORD_BOT_TOKEN")
+            if not (self.app.settings.get("discord_bot") and token):
+                self.state, self.error, self.guilds = "off", "", {}
+                self.wake.wait(60)
+                self.wake.clear()
+                continue
+            self.state, self.error = "connecting", ""
+            try:
+                self.session(token)
+                backoff = 5
+            except WSClosed as e:
+                self.state = "error"
+                if e.code == 4004:
+                    self.error = "Discord rejected the bot token. Copy a new one (Developer Portal → Bot → Reset Token)."
+                    backoff = 3600
+                else:
+                    self.error = str(e)
+            except (OSError, ValueError) as e:
+                self.state = "error"
+                self.error = "Can't reach Discord right now (%s) - trying again in a moment." % short_err(e)
+            except Exception as e:
+                self.state, self.error = "error", short_err(e)
+            finally:
+                ws, self.ws = self.ws, None
+                if ws:
+                    ws.close()
+            if self.wake.wait(backoff):
+                backoff = 5
+            else:
+                backoff = min(backoff * 2, 300)
+            self.wake.clear()
+
+    def session(self, token):
+        ws = self.ws = MiniWebSocket(DISCORD_GATEWAY)
+        hello = json.loads(ws.recv())
+        interval = hello["d"]["heartbeat_interval"] / 1000.0
+        ws.s.settimeout(interval * 2 + 10)
+        st = {"seq": None, "acked": True}
+
+        def beat():
+            time.sleep(interval * 0.5)
+            while self.ws is ws:
+                if not st["acked"]:
+                    ws.close()
+                    return
+                st["acked"] = False
+                try:
+                    ws.send(json.dumps({"op": 1, "d": st["seq"]}))
+                    self.sync_commands(token)
+                except Exception:
+                    ws.close()
+                    return
+                time.sleep(interval)
+
+        threading.Thread(target=beat, daemon=True).start()
+        ws.send(json.dumps({"op": 2, "d": {"token": token, "intents": 1,      # GUILDS: names of the Discord servers
+                                           "properties": {"os": sys.platform, "browser": "beammp-easyserver",
+                                                          "device": "beammp-easyserver"}}}))
+        while True:
+            m = json.loads(ws.recv())
+            if m.get("s") is not None:
+                st["seq"] = m["s"]
+            op, t, d = m.get("op"), m.get("t"), m.get("d") or {}
+            if op == 11:
+                st["acked"] = True
+            elif op == 1:
+                ws.send(json.dumps({"op": 1, "d": st["seq"]}))
+            elif op in (7, 9):
+                raise WSClosed("Discord asked to reconnect")
+            elif op == 0 and t == "READY":
+                self.app_id = str(d.get("application", {}).get("id") or "")
+                u = d.get("user") or {}
+                self.user = u.get("username")
+                with LOCK:
+                    self.guilds = {str(g["id"]): self.guilds.get(str(g["id"]), "Discord server " + str(g["id"]))
+                                   for g in d.get("guilds", [])}
+                self.registered = {}
+                self.state = "online"
+                threading.Thread(target=self.sync_commands, args=(token,), daemon=True).start()
+            elif op == 0 and t in ("GUILD_CREATE", "GUILD_UPDATE") and d.get("id"):
+                with LOCK:
+                    self.guilds[str(d["id"])] = str(d.get("name") or d["id"])[:100]
+                self.pick_guild()
+            elif op == 0 and t == "GUILD_DELETE" and d.get("id") and not d.get("unavailable"):
+                with LOCK:
+                    self.guilds.pop(str(d["id"]), None)
+            elif op == 0 and t == "INTERACTION_CREATE":
+                threading.Thread(target=self.on_interaction, args=(d,), daemon=True).start()
+
+    def pick_guild(self):
+        """The first Discord server the bot joins becomes the one it answers in."""
+        s = self.app.settings
+        if s.get("discord_bot_guild"):
+            return
+        with LOCK:
+            if len(self.guilds) != 1:
+                return
+            gid, name = next(iter(self.guilds.items()))
+        s.update({"discord_bot_guild": gid})
+        self.app.notifier.add("network", "Discord bot connected",
+                              "The bot now answers commands in the Discord server \"%s\". You can change this under "
+                              "Settings → Discord bot." % name, "success", send=False)
+
+    # ---------- slash commands
+    def commands(self):
+        with LOCK:
+            insts = sorted(INSTANCES.values(), key=lambda i: (i.id != "main", i.id))
+        opts = []
+        if len(insts) > 1:
+            opts = [{"type": 3, "name": "server", "description": "Which server (default: the main one)", "required": False,
+                     "choices": [{"name": i.name[:100], "value": i.id} for i in insts[:25]]}]
+        admin = {"default_member_permissions": str(PERM_MANAGE_GUILD), "contexts": [0], "options": opts}
+        return [
+            {"name": "status", "description": "Show the BeamMP servers: online players, map, CPU and memory",
+             "type": 1, "contexts": [0]},
+            dict(admin, name="start", type=1, description="Start the BeamMP server"),
+            dict(admin, name="stop", type=1, description="Stop the BeamMP server (kicks everyone)"),
+            dict(admin, name="restart", type=1, description="Restart the BeamMP server"),
+        ]
+
+    def sync_commands(self, token):
+        if not self.app_id:
+            return
+        gid = self.app.settings.get("discord_bot_guild") or ""
+        want = {gid: json.dumps(self.commands(), sort_keys=True)} if gid else {}
+        for old in [g for g in self.registered if g not in want]:
+            try:
+                discord_api("PUT", "/applications/%s/guilds/%s/commands" % (self.app_id, old), token, [])
+            except Exception:
+                pass
+            self.registered.pop(old, None)
+        for g, body in want.items():
+            if self.registered.get(g) != body:
+                discord_api("PUT", "/applications/%s/guilds/%s/commands" % (self.app_id, g), token, json.loads(body))
+                self.registered[g] = body
+
+    def on_interaction(self, d):
+        if d.get("type") != 2:
+            return
+        iid, itok = d.get("id"), d.get("token")
+        name = (d.get("data") or {}).get("name")
+        cb = "/interactions/%s/%s/callback" % (iid, itok)
+        edit = "/webhooks/%s/%s/messages/@original" % (self.app_id, itok)
+        try:
+            if str(d.get("guild_id") or "") != (self.app.settings.get("discord_bot_guild") or "x"):
+                return discord_api("POST", cb, body={"type": 4, "data": {
+                    "content": "This bot isn't set up for this Discord server.", "flags": 64}})
+            member = d.get("member") or {}
+            uid = str((member.get("user") or {}).get("id") or "")
+            who = (member.get("user") or {}).get("global_name") or (member.get("user") or {}).get("username") or "someone"
+            if name == "status":
+                discord_api("POST", cb, body={"type": 5})
+                return discord_api("PATCH", edit, body={"embeds": [{
+                    "title": "BeamMP servers", "color": 0x3B82F6, "fields": discord_server_status(),
+                    "footer": {"text": "BeamMP EasyServer"}}], "allowed_mentions": {"parse": []}})
+            if name not in ("start", "stop", "restart"):
+                return
+            perms = int(member.get("permissions") or 0)
+            if not (perms & (PERM_ADMIN | PERM_MANAGE_GUILD)) and uid not in (self.app.settings.get("discord_bot_users") or []):
+                return discord_api("POST", cb, body={"type": 4, "data": {
+                    "content": "Only people with **Manage Server** (or who are allowed in the dashboard) can do that.",
+                    "flags": 64}})
+            opts = {o.get("name"): o.get("value") for o in (d.get("data") or {}).get("options") or []}
+            with LOCK:
+                inst = INSTANCES.get(str(opts.get("server") or "main"))
+            if not inst:
+                return discord_api("POST", cb, body={"type": 4, "data": {"content": "That server doesn't exist any more.", "flags": 64}})
+            discord_api("POST", cb, body={"type": 5})
+            discord_api("PATCH", edit, body={"content": self.do_action(inst, name, who), "allowed_mentions": {"parse": []}})
+        except Exception as e:
+            sys.stderr.write("discord command: %s\n" % short_err(e))
+
+    def do_action(self, inst, what, who):
+        use_server(inst.id)
+        label = "**%s**" % discord_escape(inst.name)
+        if inst.id in self.busy:
+            return "⏳ %s is already being started or stopped - try again in a minute." % label
+        st = inst.server.status()["state"]
+        if what == "start":
+            if not inst.meta.get("reviewed"):
+                return ("⚠️ %s has never been started. Open the dashboard once, check its settings and press Start there "
+                        "- after that you can start it from Discord." % label)
+            if st == "running":
+                return "🟢 %s is already running." % label
+        if what == "stop" and st in ("stopped", "failed"):
+            return "🔴 %s is already stopped." % label
+        self.busy.add(inst.id)
+        try:
+            if what in ("stop", "restart") and st == "running" and online_names():
+                chat_say("Server %s requested from Discord by %s" % ("stop" if what == "stop" else "restart", who[:40]))
+                time.sleep(3)
+            r = inst.server.action(what)
+        finally:
+            self.busy.discard(inst.id)
+        if not r.get("ok"):
+            return "❌ Couldn't %s %s: %s" % (what, label, discord_escape(r.get("msg") or "unknown error"))
+        self.app.notifier.add("restart", "Server %s from Discord" % {"start": "started", "stop": "stopped",
+                                                                      "restart": "restarted"}[what],
+                              "%s used /%s in Discord." % (who[:60], what), "info", send=False)
+        if what == "stop":
+            return "🔴 %s stopped (by %s)." % (label, discord_escape(who))
+        for _ in range(20):
+            time.sleep(1.5)
+            if inst.server.status()["state"] == "running":
+                where = (" - join at `%s`" % fmt_addr(*game_address(inst)[:2])) if relay_on() else ""
+                return "🟢 %s is %s (by %s)%s." % (label, "running" if what == "start" else "back up",
+                                                   discord_escape(who), where)
+        return "🟡 %s is starting (by %s) - it can take a minute. Check with /status." % (label, discord_escape(who))
+
+
 class App:
     def __init__(self):
         ensure_dirs()
@@ -2309,6 +2723,7 @@ class App:
             os.environ["VT_API_KEY"] = self.secrets.get("VT_API_KEY")   # used by modscan
         self.notifier = Notifier(self.settings, self.secrets)
         self.alerts = SecurityAlerts(self.settings, self.notifier)
+        self.bot = DiscordBot(self)
         self.sessions = {}
         self.fails = {}
         self.locked = {}
@@ -3975,6 +4390,62 @@ class Handler(BaseHTTPRequestHandler):
             return self.fail(400, short_err(e))
         self.send(200, {"ok": True})
 
+    # ---------- Discord bot
+    def get_discordbot(self, q):
+        self.send(200, APP.bot.info())
+
+    def post_discordbot(self, q):
+        app = APP
+        b = self.body_json()
+        upd = {}
+        if "token" in b and b["token"] is not None:
+            tok = str(b["token"]).strip()
+            if tok.lower().startswith("bot "):
+                tok = tok[4:].strip()
+            if tok and not DISCORD_TOKEN_RE.fullmatch(tok):
+                return self.fail(400, "That isn't a bot token. Developer Portal → your app → Bot → Reset Token → Copy.")
+            if tok:
+                try:
+                    discord_api("GET", "/users/@me", tok, timeout=15)
+                except urllib.error.HTTPError as e:
+                    if e.code == 401:
+                        return self.fail(400, "Discord says this token is wrong or was reset. Copy a new one.")
+                except Exception:
+                    pass            # offline right now - the bot keeps retrying
+            if tok != app.secrets.get("DISCORD_BOT_TOKEN"):
+                app.secrets.set("DISCORD_BOT_TOKEN", tok)
+                app.bot.app_id = None
+                upd["discord_bot_guild"] = ""
+        if "enabled" in b:
+            upd["discord_bot"] = bool(b["enabled"])
+            if upd["discord_bot"] and not app.secrets.has("DISCORD_BOT_TOKEN"):
+                return self.fail(400, "Paste the bot token first")
+        if "guild" in b:
+            g = str(b["guild"] or "").strip()
+            if g and not re.fullmatch(r"\d{15,22}", g):
+                return self.fail(400, "Pick a Discord server")
+            upd["discord_bot_guild"] = g
+        if "users" in b:
+            raw = b["users"] if isinstance(b["users"], list) else re.split(r"[\s,;]+", str(b["users"] or ""))
+            ids = []
+            for u in raw[:50]:
+                u = str(u).strip().strip("<@!>")
+                if not u:
+                    continue
+                if not re.fullmatch(r"\d{15,22}", u):
+                    return self.fail(400, "User IDs are long numbers (Discord: Developer Mode → right-click a person → Copy User ID)")
+                if u not in ids:
+                    ids.append(u)
+            upd["discord_bot_users"] = ids
+        if upd:
+            app.settings.update(upd)
+        if "token" in b or "enabled" in b:
+            app.bot.reconnect()
+        elif "guild" in b:
+            threading.Thread(target=lambda: app.bot.sync_commands(app.secrets.get("DISCORD_BOT_TOKEN")),
+                             daemon=True).start()
+        self.send(200, dict(app.bot.info(), ok=True))
+
     # ---------- settings
     def get_settings(self, q):
         app = APP
@@ -4454,6 +4925,7 @@ def main():
     if not httpd:
         sys.exit("Port %d is busy - is the dashboard already running?" % port)
     threading.Thread(target=APP.monitor, daemon=True).start()
+    threading.Thread(target=APP.bot.run, daemon=True).start()
     if not APP.updates:
         threading.Thread(target=APP.check_updates, kwargs={"notify": True}, daemon=True).start()
     print("BeamMP EasyServer dashboard %s on %s://0.0.0.0:%d" % (EASY_VERSION, "https" if ctx else "http", port), flush=True)
