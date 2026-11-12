@@ -28,7 +28,7 @@ SERVER_DIR = "/opt/beammp-server"
 INSTALL_ENV = "/etc/beammp-easyserver/install.env"
 SERVERS = SERVER_DIR + "/servers"              # extra servers: servers/<id>/
 LIMITS_DIR = "/etc/beammp-easyserver/limits"   # upload limits, re-applied when a server starts
-SECRET_NAMES = {"MODS_PASSWORD", "VT_API_KEY", "DISCORD_WEBHOOK", "SMTP_PASSWORD", "TOTP_SECRET", "BEAMMP_AUTH_KEY", "DISCORD_BOT_TOKEN", "DUCKDNS_TOKEN", "NTFY_TOPIC"}
+SECRET_NAMES = {"MODS_PASSWORD", "VT_API_KEY", "DISCORD_WEBHOOK", "SMTP_PASSWORD", "TOTP_SECRET", "BEAMMP_AUTH_KEY", "DISCORD_BOT_TOKEN", "DUCKDNS_TOKEN", "NTFY_TOPIC", "WAKE_TOPIC"}
 ID_RE = re.compile(r"[a-z0-9]{1,12}")
 RELEASE_BASE = "https://github.com/BeamMP/BeamMP-Server/releases/latest/download/"
 
@@ -466,6 +466,160 @@ def flood_status():
     return {"ok": True, "active": r.returncode == 0 and bool(m), "dropped": int(m.group(1)) if m else 0}
 
 
+# ----------------------------------------------------------------------------- sleep + Wake-on-LAN
+SYS_NET = "/sys/class/net"
+WOL_UNIT = "/etc/systemd/system/beammp-easyserver-wol.service"
+IFACE_RE = re.compile(r"[A-Za-z0-9_.:@-]{1,15}")
+
+
+def _sysread(path, default=""):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return default
+
+
+def _ipv4(name):
+    """IPv4 address, prefix and broadcast of an adapter (ioctl, no extra programs needed)."""
+    import fcntl
+    import ipaddress
+    import socket
+    import struct
+    sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        req = struct.pack("256s", name.encode()[:15])
+        ip = socket.inet_ntoa(fcntl.ioctl(sk.fileno(), 0x8915, req)[20:24])      # SIOCGIFADDR
+        mask = socket.inet_ntoa(fcntl.ioctl(sk.fileno(), 0x891b, req)[20:24])    # SIOCGIFNETMASK
+        net = ipaddress.ip_network("%s/%s" % (ip, mask), strict=False)
+        return {"ip": ip, "prefix": net.prefixlen, "brd": str(net.broadcast_address)}
+    except OSError:
+        return {}
+    finally:
+        sk.close()
+
+
+def adapters():
+    """Network adapters with their MAC, address and Wake-on-LAN state."""
+    out = []
+    eth = shutil.which("ethtool")
+    for name in sorted(os.listdir(SYS_NET)):
+        base = os.path.join(SYS_NET, name)
+        if name == "lo" or not IFACE_RE.fullmatch(name) or not os.path.exists(os.path.join(base, "device")):
+            continue                                   # loopback, bridges, VPNs, docker ...
+        wifi = os.path.exists(os.path.join(base, "wireless")) or os.path.exists(os.path.join(base, "phy80211"))
+        a = {"name": name, "mac": _sysread(os.path.join(base, "address")).lower(), "wifi": wifi,
+             "cable": _sysread(os.path.join(base, "carrier"), "0") == "1", "ip": "", "prefix": 0, "brd": "",
+             "wol": "unknown", "wol_modes": ""}
+        a.update(_ipv4(name))
+        if wifi:
+            a["wol"] = "wifi"
+        elif eth:
+            t = run([eth, name], timeout=10).stdout
+            sup = re.search(r"Supports Wake-on:\s*(\w+)", t)
+            cur = re.search(r"(?m)^\s*Wake-on:\s*(\w+)", t)
+            a["wol_modes"] = sup.group(1) if sup else ""
+            if not sup or "g" not in sup.group(1):
+                a["wol"] = "unsupported"
+            else:
+                a["wol"] = "on" if (cur and "g" in cur.group(1)) else "off"
+        else:
+            a["wol"] = "no-ethtool"
+        out.append(a)
+    return out
+
+
+def can_suspend():
+    return "mem" in _sysread("/sys/power/state").split() or "freeze" in _sysread("/sys/power/state").split()
+
+
+def power_status():
+    rtc = os.path.exists("/sys/class/rtc/rtc0/wakealarm") and bool(shutil.which("rtcwake"))
+    return {"ok": True, "adapters": adapters(), "can_sleep": can_suspend(), "rtc": rtc,
+            "persist": os.path.exists(WOL_UNIT)}
+
+
+def wol_enable(iface):
+    if not (isinstance(iface, str) and IFACE_RE.fullmatch(iface) and os.path.isdir(os.path.join(SYS_NET, iface))):
+        return {"ok": False, "msg": "unknown network adapter"}
+    if os.path.exists(os.path.join(SYS_NET, iface, "wireless")):
+        return {"ok": False, "msg": "Wake-on-LAN only works on a network cable adapter, not Wi-Fi"}
+    if not shutil.which("ethtool") and shutil.which("apt-get"):
+        run(["apt-get", "install", "-y", "-qq", "ethtool"], timeout=300,
+            env=dict(os.environ, DEBIAN_FRONTEND="noninteractive"))
+    eth = shutil.which("ethtool")
+    if not eth:
+        return {"ok": False, "msg": "The 'ethtool' program is missing and couldn't be installed"}
+    r = run([eth, "-s", iface, "wol", "g"], timeout=20)
+    if r.returncode != 0:
+        return {"ok": False, "msg": "The adapter refused: %s" % (r.stderr.strip()[-200:] or "unknown error")}
+    wake = os.path.join(SYS_NET, iface, "device", "power", "wakeup")
+    if os.path.exists(wake):
+        try:
+            with open(wake, "w") as f:
+                f.write("enabled")
+        except OSError:
+            pass
+    # keep it on after a reboot ...
+    with open(WOL_UNIT + ".tmp", "w") as f:
+        f.write("[Unit]\nDescription=Wake-on-LAN for BeamMP EasyServer\nAfter=network.target\n\n"
+                "[Service]\nType=oneshot\nExecStart=%s -s %s wol g\n\n[Install]\nWantedBy=multi-user.target\n" % (eth, iface))
+    os.chmod(WOL_UNIT + ".tmp", 0o644)
+    os.replace(WOL_UNIT + ".tmp", WOL_UNIT)
+    run(["systemctl", "daemon-reload"])
+    run(["systemctl", "enable", "beammp-easyserver-wol.service"])
+    # ... and stop NetworkManager from switching it off again
+    nm = shutil.which("nmcli")
+    if nm:
+        for line in run([nm, "-t", "-f", "UUID,DEVICE", "connection", "show", "--active"], timeout=20).stdout.splitlines():
+            uuid_, _, dev = line.partition(":")
+            if dev == iface and re.fullmatch(r"[0-9a-f-]{36}", uuid_):
+                run([nm, "connection", "modify", uuid_, "802-3-ethernet.wake-on-lan", "magic"], timeout=20)
+    st = next((a for a in adapters() if a["name"] == iface), {})
+    return {"ok": st.get("wol") == "on", "msg": "Wake-on-LAN is on" if st.get("wol") == "on"
+            else "The adapter didn't switch Wake-on-LAN on - it may need a BIOS setting first"}
+
+
+SLEEP_TARGETS = ("sleep.target", "suspend.target")
+
+
+def go_sleep():
+    if not can_suspend():
+        return {"ok": False, "msg": "This computer doesn't support sleep"}
+    masked = [t for t in SLEEP_TARGETS if run(["systemctl", "is-enabled", t]).stdout.strip() == "masked"]
+    eth, iface = shutil.which("ethtool"), ""
+    if os.path.exists(WOL_UNIT):
+        m = re.search(r"-s (\S+) wol g", _sysread(WOL_UNIT))
+        iface = m.group(1) if m and IFACE_RE.fullmatch(m.group(1)) else ""
+    # The installer blocks sleep so the desktop never sends the server to sleep by itself:
+    # unblock it just for this nap and block it again after waking up.
+    script = ""
+    if eth and iface:
+        script += "%s -s %s wol g; " % (eth, iface)
+    if masked:
+        script += "systemctl unmask %s; " % " ".join(masked)
+    script += "sleep 1; systemctl suspend -i; "
+    if masked:
+        script += "sleep 5; systemctl mask %s; " % " ".join(masked)
+    r = run(["systemd-run", "--no-block", "--collect", "--unit=beammp-easyserver-sleep-%d" % int(time.time()),
+             "/bin/sh", "-c", script])
+    return {"ok": r.returncode == 0, "msg": "going to sleep" if r.returncode == 0 else (r.stderr.strip()[-200:] or "failed")}
+
+
+def rtc_wake(at):
+    """Wake the computer up by itself at a time (seconds since 1970), or cancel it (at=0)."""
+    if not shutil.which("rtcwake"):
+        return {"ok": False, "msg": "rtcwake missing"}
+    try:
+        at = int(at or 0)
+    except (TypeError, ValueError):
+        return {"ok": False, "msg": "bad time"}
+    if at and not (time.time() + 60 < at < time.time() + 40 * 86400):
+        return {"ok": False, "msg": "time out of range"}
+    r = run(["rtcwake", "-m", "no", "-t", str(at)] if at else ["rtcwake", "-m", "disable"], timeout=20)
+    return {"ok": r.returncode == 0, "msg": "set" if r.returncode == 0 else (r.stderr.strip()[-200:] or "failed")}
+
+
 def handle(req):
     a = req.get("action")
     if a == "flood-protect":
@@ -496,6 +650,14 @@ def handle(req):
         return firewall_game(req.get("old"), req.get("new"))
     if a == "firewall-status":
         return firewall_status()
+    if a == "power-status":
+        return power_status()
+    if a == "wol-enable":
+        return wol_enable(req.get("iface"))
+    if a == "sleep":
+        return go_sleep()
+    if a == "rtc-wake":
+        return rtc_wake(req.get("at"))
     return {"ok": False, "msg": "unknown action"}
 
 
