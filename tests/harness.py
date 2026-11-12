@@ -115,11 +115,13 @@ class Client:
     def refresh(self):
         self.csrf = self.call("/api/session")[1].get("csrf", "")
 
-    def login(self, password=PASSWORD, user=None):
+    def login(self, password=PASSWORD, user=None, remember=False):
         self.refresh()
         body = {"password": password}
         if user:
             body["user"] = user
+        if remember:
+            body["remember"] = True
         st = self.call("/api/login", body)[0]
         self.refresh()
         return st
