@@ -18,7 +18,8 @@ jobs:
       - name: Check Linux scripts
         run: |
           bash -n linux/install.sh
-          python3 -m py_compile dashboard/*.py linux/control.py
+          bash -n wake/install-wake-helper.sh
+          python3 -m py_compile dashboard/*.py linux/control.py wake/easyserver_wake.py
 
       - name: Build ZIPs
         run: |
@@ -30,6 +31,9 @@ jobs:
           cp -r dashboard linux/dashboard
           (cd windows && zip -r ../dist/BeamMP-EasyServer-Windows.zip . -x '__pycache__/*')
           (cd linux && zip -r ../dist/BeamMP-EasyServer-Linux.zip . -x '__pycache__/*')
+          chmod +x wake/install-wake-helper.sh
+          cp LICENSE wake/
+          (cd wake && zip -r ../dist/BeamMP-EasyServer-WakeHelper.zip . -x '__pycache__/*')
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
