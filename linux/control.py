@@ -28,7 +28,7 @@ SERVER_DIR = "/opt/beammp-server"
 INSTALL_ENV = "/etc/beammp-easyserver/install.env"
 SERVERS = SERVER_DIR + "/servers"              # extra servers: servers/<id>/
 LIMITS_DIR = "/etc/beammp-easyserver/limits"   # upload limits, re-applied when a server starts
-SECRET_NAMES = {"MODS_PASSWORD", "VT_API_KEY", "DISCORD_WEBHOOK", "SMTP_PASSWORD", "TOTP_SECRET", "BEAMMP_AUTH_KEY"}
+SECRET_NAMES = {"MODS_PASSWORD", "VT_API_KEY", "DISCORD_WEBHOOK", "SMTP_PASSWORD", "TOTP_SECRET", "BEAMMP_AUTH_KEY", "DISCORD_BOT_TOKEN"}
 ID_RE = re.compile(r"[a-z0-9]{1,12}")
 RELEASE_BASE = "https://github.com/BeamMP/BeamMP-Server/releases/latest/download/"
 
