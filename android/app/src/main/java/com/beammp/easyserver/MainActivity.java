@@ -65,6 +65,13 @@ public class MainActivity extends Activity {
     private Runnable countdown;
 
     @Override
+    protected void onPause() {
+        super.onPause();
+        // write the login cookie to disk now, so "Stay logged in" survives the app being closed
+        CookieManager.getInstance().flush();
+    }
+
+    @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
         prefs = getSharedPreferences("server", MODE_PRIVATE);
@@ -218,6 +225,8 @@ public class MainActivity extends Activity {
         s.setAllowContentAccess(false);
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         CookieManager.getInstance().setAcceptCookie(true);
+        // lets the dashboard know it runs in the app: "Stay logged in" is ticked by default here
+        s.setUserAgentString(s.getUserAgentString() + " EasyServerApp/Android");
 
         web.setWebViewClient(new WebViewClient() {
             @Override
