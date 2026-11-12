@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.10.0 - Sleep & wake-up
+
+- **Auto-sleep** (Settings -> Sleep & wake-up, off by default): the server computer goes to sleep when nobody has played for 5 minutes to 24 hours, optionally only between certain hours. It never sleeps while someone is online, an event runs or starts within 30 minutes, the dashboard is being used or a server is being started from Discord. **Sleep now** button and `/sleep` in Discord (Manage Server only).
+- **Wakes up by itself** 10 minutes before every scheduled event and optionally every day at a set time (Linux: the computer's alarm clock; Windows: a wake timer).
+- **Wake-on-LAN**: the dashboard finds the network cable adapter, shows its MAC address and turns Wake-on-LAN on (Linux: ethtool, kept on after reboots and by NetworkManager; Windows: adapter power settings, asks for permission). Warns on Wi-Fi, with BIOS tips.
+- **Router guide** with the steps for FRITZ!Box, ASUS, TP-Link, Ubiquiti, MikroTik, OpenWrt, Netgear and others.
+- **Wake helper** (new, optional): a small program for a Raspberry Pi or any always-on PC at home. While the server computer sleeps it answers `/start` and `/status` in Discord and the **Wake up** button in the phone app, from anywhere and without port forwarding. Paired with a code from the dashboard; "Test the helper" checks it. `BeamMP-EasyServer-WakeHelper.zip` is attached to every release.
+- **Android app**: when the server doesn't answer it shows a **Wake up** button (Wake-on-LAN on the home Wi-Fi, the wake helper from anywhere). Scan the QR code again to get it.
+- The installed web app (iPhone home screen) shows a "server is asleep" page with a Wake up button instead of a broken dashboard.
+- After waking up the dashboard reconnects the Discord bot, updates DuckDNS and the live status message (which says "asleep" while the computer sleeps). New notification type "Sleep and wake-up" (off by default).
+- Linux: the installer now installs `ethtool`. A laptop set to "never sleep" still never sleeps by itself - only auto-sleep and Sleep now can put it to sleep.
+
 ## 1.9.0 - Phone app and mod updates
 
 - **Android app**: `BeamMP-EasyServer.apk` is attached to every release (built by GitHub from `android/`). Scan the QR code under Settings -> Phone app with the phone's camera and the app connects to your dashboard. It remembers the dashboard's certificate fingerprint, so it only ever talks to your server - no "unsafe certificate" warnings, and nobody can pretend to be your server.
