@@ -38,7 +38,7 @@ import zipfile
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-EASY_VERSION = "1.6.0"
+EASY_VERSION = "1.7.0"
 REPO = "Csabika-dev/beammp-easyserver"
 BEAMMP_REPO = "BeamMP/BeamMP-Server"
 IS_WIN = os.name == "nt"
@@ -74,7 +74,7 @@ BUILTIN_MAPS = ["gridmap_v2", "west_coast_usa", "east_coast_usa", "utah", "italy
                 "hirochi_raceway", "johnson_valley", "derby", "driver_training"]
 
 SECRET_NAMES = ("MODS_PASSWORD", "VT_API_KEY", "DISCORD_WEBHOOK", "SMTP_PASSWORD", "TOTP_SECRET",
-                "BEAMMP_AUTH_KEY", "DISCORD_BOT_TOKEN")
+                "BEAMMP_AUTH_KEY", "DISCORD_BOT_TOKEN", "DUCKDNS_TOKEN")
 
 DEFAULT_SETTINGS = {
     "port": 30815,
@@ -82,7 +82,8 @@ DEFAULT_SETTINGS = {
     "remote_enabled": False,
     "notify": {"crash": True, "stopped": True, "update": True, "mod_blocked": True,
                "login_failed": True, "player_join": False, "player_denied": True,
-               "moderation": True, "network": True, "restart": False},
+               "moderation": True, "network": True, "restart": False,
+               "resources": True, "backup": True, "rotation": False},
     "discord_enabled": False,
     "email_enabled": False,
     "smtp_host": "", "smtp_port": 587, "smtp_security": "starttls",
@@ -102,6 +103,11 @@ DEFAULT_SETTINGS = {
     "discord_bot": False,          # slash commands (/status, /start, /stop, /restart) - needs a bot token
     "discord_bot_guild": "",       # the one Discord server the bot answers in
     "discord_bot_users": [],       # Discord user IDs that may start/stop besides "Manage Server" people
+    "backup_on": True,             # nightly backup of every server's settings (keeps the last 7)
+    "backup_at": "03:30",
+    "backup_mods": False,          # ...including the mods (can be big)
+    "duckdns_domain": "",          # name.duckdns.org - a fixed address even when the home IP changes
+    "upload_mbit": 0,              # the user's upload speed from a speed test (0 = unknown)
 }
 SECURITY_FILE = os.path.join(DATA_DIR, "security.json")
 SECURITY_REPEAT = 15 * 60
@@ -140,6 +146,7 @@ class Instance:
         self.BANS_FILE = os.path.join(self.STATS_DIR, "bans.txt")
         self.ACTIONS_FILE = os.path.join(self.STATS_DIR, "actions.txt")
         self.VERIFIED_FILE = os.path.join(self.STATS_DIR, "verified.txt")
+        self.MSG_FILE = os.path.join(self.STATS_DIR, "messages.txt")
         self.CONFIG = os.path.join(self.SERVER_DIR, "ServerConfig.toml")
         self.SERVER_LOG = os.path.join(self.SERVER_DIR, "Server.log")
         self.authkey_name = "BEAMMP_AUTH_KEY" if iid == "main" else "BEAMMP_AUTH_KEY_" + iid.upper()
@@ -1598,6 +1605,95 @@ def queue_action(action, name="", num="", text=""):
         shared_write(I().ACTIONS_FILE, "\n".join(lines) + "\n")
 
 
+# ----------------------------------------------------------------------------- welcome message + announcements
+MSG_DEFAULTS = {"welcome": False, "welcome_text": ["Welcome {name}! Type /help to see the commands. Have fun!"],
+                "announce": False, "every": 15, "messages": []}
+MSG_EVERY = (5, 10, 15, 20, 30, 45, 60, 90, 120)
+
+
+def clean_msg(t):
+    return re.sub(r"[\x00-\x1f\x7f]", " ", str(t)).strip()[:200]
+
+
+def read_messages():
+    d = json.loads(json.dumps(MSG_DEFAULTS))
+    raw = shared_read(I().MSG_FILE, 128 * 1024)
+    if not raw:
+        return d
+    d["welcome_text"], d["messages"] = [], []
+    for line in raw.splitlines():
+        m = re.fullmatch(r"\s*(\w+)\s*=\s*(.*?)\s*", line)
+        if not m:
+            continue
+        k, v = m.groups()
+        if k in ("welcome", "announce"):
+            d[k] = v.lower() == "on"
+        elif k == "every" and v.isdigit() and int(v) in MSG_EVERY:
+            d["every"] = int(v)
+        elif k == "welcome_text" and v and len(d["welcome_text"]) < 5:
+            d["welcome_text"].append(clean_msg(v))
+        elif k == "msg" and v and len(d["messages"]) < 30:
+            d["messages"].append(clean_msg(v))
+    return d
+
+
+def write_messages(d):
+    onoff = lambda b: "on" if b else "off"
+    lines = ["# Managed by the BeamMP EasyServer dashboard (Config -> Welcome & announcements).",
+             "welcome=%s" % onoff(d["welcome"]), "announce=%s" % onoff(d["announce"]), "every=%d" % d["every"]]
+    lines += ["welcome_text=%s" % clean_msg(t) for t in d["welcome_text"][:5] if clean_msg(t)]
+    lines += ["msg=%s" % clean_msg(t) for t in d["messages"][:30] if clean_msg(t)]
+    shared_write(I().MSG_FILE, "\n".join(lines) + "\n")
+
+
+# ----------------------------------------------------------------------------- map rotation
+ROTATION_DEFAULTS = {"on": False, "maps": [], "every": 4, "at": "00:00", "warn": 5, "empty_only": False}
+
+
+def rotation_cfg(inst):
+    r = json.loads(json.dumps(ROTATION_DEFAULTS))
+    m = inst.meta.get("rotation")
+    if isinstance(m, dict):
+        r.update({k: m[k] for k in ROTATION_DEFAULTS if k in m})
+    return r
+
+
+def current_map():
+    data, _, _ = toml_parse(APP.read_config_text())
+    return map_name(data.get("General", {}).get("Map"))
+
+
+# ----------------------------------------------------------------------------- server templates
+TEMPLATES = {
+    "drift": {"label": "Drift", "map": "johnson_valley", "max_players": 12,
+              "about": "Open map, short car cleanup, drift tags and countdowns for tandem runs",
+              "extras": {"clear": True, "every": 4, "afk": True, "afk_minutes": 10, "countdown": True, "tag": True, "top": True,
+                         "tags": ["DRIFT", "TANDEM", "LEAD", "CHASE", "CHILL", "AFK"]},
+              "welcome": "Welcome {name}! Drift server - use /tag DRIFT and /countdown 3 for tandems. Be nice in the chat.",
+              "messages": ["Want to tandem? Pick a lead driver and use /countdown 3.", "Type /top to see the best drifters' speeds and distances."]},
+    "racing": {"label": "Racing", "map": "hirochi_raceway", "max_players": 10,
+               "about": "Race track, countdowns, records, strict anti-spam and no AFK cars on track",
+               "extras": {"clear": True, "every": 2, "afk": True, "afk_minutes": 3, "countdown": True, "tag": True, "top": True,
+                          "tags": ["RACE", "QUALI", "PIT", "SPECTATE"]},
+               "spam": True,
+               "welcome": "Welcome {name}! Racing server - start races with /countdown 5. No ramming, please.",
+               "messages": ["Race starts: line up and type /countdown 5.", "Records: /top. Cars that stand still for 3 minutes are removed."]},
+    "roleplay": {"label": "Roleplay", "map": "west_coast_usa", "max_players": 20,
+                 "about": "Big city map, role tags, long AFK time, chat filter and anti-spam",
+                 "extras": {"clear": True, "every": 24, "afk": True, "afk_minutes": 20, "countdown": False, "tag": True, "top": False,
+                            "tags": ["COP", "EMS", "FIRE", "TOW", "TAXI", "CIV", "ROB"]},
+                 "spam": True, "filter": True,
+                 "welcome": "Welcome {name}! Roleplay server - pick your role with /tag (COP, EMS, TOW, TAXI, CIV...). Stay in character.",
+                 "messages": ["Pick your role with /tag - type /tag to see them all.", "Respect other players' roleplay. Admins can mute and kick."]},
+    "chill": {"label": "Chill", "map": "italy", "max_players": 8,
+              "about": "Scenic map for cruising with friends, relaxed rules",
+              "extras": {"clear": True, "every": 24, "afk": False, "afk_minutes": 5, "countdown": True, "tag": True, "top": True,
+                         "tags": ["CRUISE", "CHILL", "PHOTO", "AFK"]},
+              "welcome": "Welcome {name}! Chill cruising server - enjoy the drive.",
+              "messages": ["Type /help to see the chat commands."]},
+}
+
+
 RESTART_DEFAULTS = {"on": False, "every": 24, "at": "05:00", "warn": 10, "when": "countdown"}
 
 
@@ -1804,7 +1900,7 @@ def game_address(inst=None):
     if relay_on():
         rp = relay_ports().get(inst.id)
         return APP.settings.get("relay_host"), (rp if isinstance(rp, int) else port), True
-    return public_ip() or lan_ip(), port, False
+    return duck_host() or public_ip() or lan_ip(), port, False
 
 
 def fmt_addr(host, port):
@@ -2329,6 +2425,185 @@ def discord_api(method, path, token=None, body=None, timeout=20):
     return json.loads(raw) if raw else None
 
 
+# ----------------------------------------------------------------------------- backups
+BACKUP_DIR = os.path.join(DATA_DIR, "backups")
+BACKUP_KEEP = 7
+STATS_EXPORT = ("allowlist.txt", "extras.txt", "moderation.txt", "bans.txt", "messages.txt")
+
+
+def build_export(path, include_mods):
+    """A settings (and optionally mods) zip of the current server - used by Export and nightly backups."""
+    app = APP
+    text = app.read_config_text()
+    text = toml_set(text, "General", "AuthKey", "") if "AuthKey" in text else text
+    mods = list_mods()
+    meta = {"format": "beammp-easyserver-export", "version": 1, "easy_version": EASY_VERSION,
+            "exported_at": now(), "server_name": server_name(),
+            "settings": {k: v for k, v in app.settings.public().items()
+                         if k in ("notify", "smtp_host", "smtp_port", "smtp_security", "smtp_user",
+                                  "smtp_from", "smtp_to", "auto_restart", "update_check",
+                                  "discord_enabled", "email_enabled")},
+            "server_meta": {k: v for k, v in I().meta.items() if k in ("restart", "rotation")},
+            "mods": [{"name": m["name"], "enabled": m["enabled"], "size": m["size"]} for m in mods],
+            "includes_mods": include_mods}
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("ServerConfig.toml", text)
+        z.writestr("easyserver-export.json", json.dumps(meta, indent=1))
+        # files from the server's folders are opened without following
+        # links, so a hacked game server can't slip the dashboard's own
+        # files (like its HTTPS key) into your backup
+        for name in STATS_EXPORT:
+            try:
+                with open_shared(os.path.join(I().STATS_DIR, name)) as f:
+                    z.writestr(name, f.read(256 * 1024))
+            except OSError:
+                pass
+        if include_mods:
+            for m in mods:
+                src = os.path.join(I().CLIENT_DIR if m["enabled"] else I().DISABLED_DIR, m["name"])
+                try:
+                    with open_shared(src, "rb") as f, z.open(
+                            zipfile.ZipInfo(("mods/" if m["enabled"] else "mods-disabled/") + m["name"],
+                                            time.localtime()[:6]), "w", force_zip64=True) as dst:
+                        shutil.copyfileobj(f, dst)
+                except OSError:
+                    continue
+
+
+def list_backups(iid=None):
+    out = []
+    try:
+        names = os.listdir(BACKUP_DIR)
+    except OSError:
+        return out
+    for n in names:
+        m = re.fullmatch(r"([a-z0-9]{1,12})-(\d{8}-\d{4})(-mods)?\.zip", n)
+        if not m or (iid and m.group(1) != iid):
+            continue
+        try:
+            st = os.stat(os.path.join(BACKUP_DIR, n))
+        except OSError:
+            continue
+        out.append({"file": n, "server": m.group(1), "size": st.st_size, "t": int(st.st_mtime), "mods": bool(m.group(3))})
+    return sorted(out, key=lambda b: -b["t"])
+
+
+def make_backup(inst, include_mods):
+    use_server(inst.id)
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    if not IS_WIN:
+        os.chmod(BACKUP_DIR, 0o700)
+    name = "%s-%s%s.zip" % (inst.id, time.strftime("%Y%m%d-%H%M"), "-mods" if include_mods else "")
+    tmp = os.path.join(BACKUP_DIR, name + ".tmp")
+    build_export(tmp, include_mods)
+    os.replace(tmp, os.path.join(BACKUP_DIR, name))
+    for old in list_backups(inst.id)[BACKUP_KEEP:]:
+        try:
+            os.remove(os.path.join(BACKUP_DIR, old["file"]))
+        except OSError:
+            pass
+    return name
+
+
+# ----------------------------------------------------------------------------- DuckDNS
+DUCK_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+
+
+def duck_host():
+    d = (APP.settings.get("duckdns_domain") or "") if APP else ""
+    return (d + ".duckdns.org") if d and APP.secrets.has("DUCKDNS_TOKEN") else ""
+
+
+def duckdns_update(domain, token, ip=""):
+    url = "https://www.duckdns.org/update?" + urllib.parse.urlencode({"domains": domain, "token": token, "ip": ip})
+    req = urllib.request.Request(url, headers={"User-Agent": "BeamMP-EasyServer/" + EASY_VERSION})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return r.read(64).decode("ascii", "replace").strip() == "OK"
+
+
+# ----------------------------------------------------------------------------- computer load (low-resource warnings)
+_cpu_prev = None
+
+
+def sys_cpu_percent():
+    """Whole-computer CPU use since the last call (None on the first call)."""
+    global _cpu_prev
+    try:
+        if IS_WIN:
+            import ctypes
+            idle, kern, user = (ctypes.c_ulonglong(), ctypes.c_ulonglong(), ctypes.c_ulonglong())
+            if not ctypes.windll.kernel32.GetSystemTimes(ctypes.byref(idle), ctypes.byref(kern), ctypes.byref(user)):
+                return None
+            cur = (idle.value, kern.value + user.value)        # kernel time includes idle time
+        else:
+            with open("/proc/stat") as f:
+                v = [int(x) for x in f.readline().split()[1:]]
+            cur = (v[3] + (v[4] if len(v) > 4 else 0), sum(v[:8]))
+    except Exception:
+        return None
+    prev, _cpu_prev = _cpu_prev, cur
+    if not prev or cur[1] <= prev[1]:
+        return None
+    return round(100.0 * (1 - (cur[0] - prev[0]) / float(cur[1] - prev[1])), 1)
+
+
+def sys_mem():
+    """(total MB, available MB) or (None, None)."""
+    try:
+        if IS_WIN:
+            import ctypes
+
+            class MS(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                            ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+            m = MS()
+            m.dwLength = ctypes.sizeof(MS)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m)):
+                return m.ullTotalPhys // 1048576, m.ullAvailPhys // 1048576
+            return None, None
+        with open("/proc/meminfo") as f:
+            t = f.read()
+        tot = re.search(r"MemTotal:\s+(\d+)", t)
+        av = re.search(r"MemAvailable:\s+(\d+)", t)
+        return (int(tot.group(1)) // 1024 if tot else None), (int(av.group(1)) // 1024 if av else None)
+    except Exception:
+        return None, None
+
+
+_net_prev = None
+
+
+def sys_upload_kbps():
+    """Bytes this computer sent per second (all network cards) since the last call, in kbit/s."""
+    global _net_prev
+    sent = None
+    try:
+        if IS_WIN:
+            out = subprocess.run(["netstat", "-e"], capture_output=True, text=True, timeout=10,
+                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+            for line in out.splitlines():
+                nums = re.findall(r"\d+", line)
+                if len(nums) == 2 and re.match(r"\s*Bytes", line):
+                    sent = int(nums[1])
+                    break
+        else:
+            with open("/proc/net/dev") as f:
+                rows = f.read().splitlines()[2:]
+            sent = sum(int(r.split(":", 1)[1].split()[8]) for r in rows if ":" in r and r.split(":")[0].strip() != "lo")
+    except Exception:
+        return None
+    if sent is None:
+        return None
+    t = time.time()
+    prev, _net_prev = _net_prev, (t, sent)
+    if not prev or t <= prev[0] or sent < prev[1]:
+        return None
+    return round((sent - prev[1]) * 8 / 1000.0 / (t - prev[0]), 1)
+
+
 class WSClosed(Exception):
     def __init__(self, code):
         super().__init__("Discord closed the connection (%s)" % code)
@@ -2851,10 +3126,13 @@ class App:
                 self.flood_tick()
             except Exception as e:
                 sys.stderr.write("flood protection: %s\n" % short_err(e))
-            try:
-                self.addr_tick()
-            except Exception as e:
-                sys.stderr.write("address check: %s\n" % short_err(e))
+            for name, fn in (("address check", self.addr_tick), ("backup", self.backup_tick),
+                             ("duckdns", self.duck_tick), ("resources", self.resource_tick)):
+                try:
+                    fn()
+                except Exception as e:
+                    sys.stderr.write("%s: %s\n" % (name, short_err(e)))
+                use_server("main")
             try:
                 if self.settings.get("update_check") and now() >= next_update:
                     next_update = now() + 6 * 3600
@@ -2990,6 +3268,152 @@ class App:
         rs["at"] = next_clear(r, t + 61)
         rs["last_left"] = rs["at"] - t
 
+    def _rotation_tick(self, inst, S):
+        """Map rotation (Config -> Map rotation): the next map from the list every few hours,
+        with a countdown in the chat."""
+        r = rotation_cfg(inst)
+        maps = [m for m in r["maps"] if m in BUILTIN_MAPS or m in enabled_mod_maps()]
+        if not r["on"] or len(maps) < 2:
+            S.pop("rot", None)
+            return
+        t = now()
+        key = json.dumps(r, sort_keys=True)
+        rot = S.get("rot")
+        if not rot or rot["key"] != key:
+            nxt = next_clear(r, t)
+            rot = S["rot"] = {"key": key, "at": nxt, "last_left": nxt - t}
+        left = rot["at"] - t
+        running = inst.server.status()["state"] == "running"
+        online = online_names() if running else []
+        cur = current_map()
+        nxt_map = maps[(maps.index(cur) + 1) % len(maps)] if cur in maps else maps[0]
+        if online and left > 0 and not r["empty_only"]:
+            warn = r["warn"] * 60
+            for p in sorted({600, 300, 120, 60, 30, 10, warn}, reverse=True):
+                if 0 < p <= warn and rot["last_left"] > p >= left:
+                    chat_say("Map rotation: switching to %s in %s." % (nxt_map, fmt_secs(p)))
+                    break
+        rot["last_left"] = left
+        if left > 0:
+            return
+        if r["empty_only"] and online:
+            if t - rot["at"] < 7200:
+                return                              # wait for an empty server (up to 2 hours)
+        else:
+            if online:
+                chat_say("Map rotation: switching to %s now - rejoin in a moment." % nxt_map)
+                time.sleep(2)
+            ok, note = self.switch_map(nxt_map)
+            self.notifier.add("rotation", "Map rotation: %s" % nxt_map, note, "info" if ok else "warning")
+        rot["at"] = next_clear(r, t + 61)
+        rot["last_left"] = rot["at"] - t
+
+    def backup_tick(self):
+        """Nightly backup of every server's settings (Settings -> Backups)."""
+        s = self.settings
+        if not s.get("backup_on"):
+            return
+        t = time.localtime()
+        today = time.strftime("%Y-%m-%d", t)
+        h, m = (int(x) for x in (s.get("backup_at") or "03:30").split(":"))
+        if self.state.get("backup_day") == today or (t.tm_hour, t.tm_min) < (h, m):
+            return
+        self.state["backup_day"] = today
+        self.save_state()
+        self.run_backups(bool(s.get("backup_mods")))
+
+    def run_backups(self, include_mods):
+        with LOCK:
+            insts = list(INSTANCES.values())
+        made, errors = [], []
+        for inst in insts:
+            try:
+                made.append(make_backup(inst, include_mods))
+            except Exception as e:
+                errors.append("%s: %s" % (inst.name, short_err(e)))
+        if errors:
+            use_server("main")
+            self.notifier.add("backup", "Backup failed", "Couldn't back up " + "; ".join(errors) +
+                              ". Check that the disk isn't full.", "warning")
+        return made, errors
+
+    def duck_tick(self, force=False):
+        """Keep name.duckdns.org pointing at this home's current public IP."""
+        dom, tok = self.settings.get("duckdns_domain"), self.secrets.get("DUCKDNS_TOKEN")
+        if not (dom and tok):
+            return
+        t = now()
+        if not force and t < self.state.get("duck_next", 0):
+            return
+        pip = public_ip()
+        if not force and pip and pip == self.state.get("duck_ip") and t - self.state.get("duck_t", 0) < 86400:
+            self.state["duck_next"] = t + 300
+            return
+        try:
+            ok = duckdns_update(dom, tok)
+        except Exception as e:
+            ok, err = False, short_err(e)
+        else:
+            err = "DuckDNS said no - check the domain and the token"
+        if ok:
+            self.state.update({"duck_ip": pip, "duck_t": t, "duck_next": t + 300, "duck_err": ""})
+        else:
+            if not self.state.get("duck_err"):
+                self.notifier.add("network", "DuckDNS update failed",
+                                  "%s.duckdns.org couldn't be updated (%s). Friends using that name may not "
+                                  "reach the server until this works again." % (dom, err), "warning")
+            self.state.update({"duck_next": t + 600, "duck_err": err})
+        self.save_state()
+        return ok
+
+    def resource_tick(self):
+        """Once a minute: computer CPU, memory and upload. Warns when the computer
+        can't keep up, with a suggestion for the player limit."""
+        t = now()
+        if t < getattr(self, "res_next", 0):
+            return
+        self.res_next = t + 60
+        cpu, (tot, avail), up = sys_cpu_percent(), sys_mem(), sys_upload_kbps()
+        with LOCK:
+            insts = list(INSTANCES.values())
+        players = 0
+        for inst in insts:
+            use_server(inst.id)
+            if inst.server.status()["state"] == "running":
+                players += len(online_names())
+        use_server("main")
+        sample = {"t": t, "cpu": cpu, "mem_total": tot, "mem_free": avail, "up_kbps": up, "players": players}
+        hist = self.__dict__.setdefault("res_hist", [])
+        hist.append(sample)
+        del hist[:-1440]                    # 24 hours, one sample a minute
+        self.res = sample
+        last = lambda n: hist[-n:] if len(hist) >= n else []
+        warned = self.__dict__.setdefault("res_warned", {})
+        def warn(key, title, msg):
+            if t - warned.get(key, 0) > 6 * 3600:
+                warned[key] = t
+                self.notifier.add("resources", title, msg, "warning")
+        low = [x for x in last(3) if x["mem_total"] and x["mem_free"] is not None
+               and (x["mem_free"] < 300 or x["mem_free"] < x["mem_total"] * 0.08)]
+        if last(3) and len(low) == 3:
+            warn("mem", "This computer is running out of memory",
+                 "Only %s MB of %s MB is free. The game server can start lagging or crash. Close programs you don't "
+                 "need, use fewer or smaller mods, or lower the player limit (Config -> Max players)."
+                 % (sample["mem_free"], sample["mem_total"]))
+        busy = [x for x in last(5) if x["cpu"] is not None and x["cpu"] >= 90]
+        if last(5) and len(busy) == 5:
+            warn("cpu", "This computer's processor is at its limit",
+                 "The CPU has been above 90%% for 5 minutes (%d players online). Players will notice lag. Lower the "
+                 "player limit, run fewer servers at once, or close other programs." % players)
+        cap = float(self.settings.get("upload_mbit") or 0) * 1000
+        full = [x for x in last(3) if cap and x["up_kbps"] and x["players"] and x["up_kbps"] >= cap * 0.85]
+        if cap and last(3) and len(full) == 3:
+            per = max(1.0, sum(x["up_kbps"] / x["players"] for x in full) / 3)
+            warn("up", "Your upload speed is almost used up",
+                 "The server is sending %.1f of your %.0f Mbit/s upload (%d players, about %.0f kbit/s each). Players "
+                 "will lag or time out. A safe player limit for your connection is about %d."
+                 % (sample["up_kbps"] / 1000, cap / 1000, players, per, max(1, int(cap * 0.8 / per))))
+
     def addr_tick(self):
         """Warn when this computer's address on the home network or the public
         IP changes - links, bookmarks and port forwards stop working then."""
@@ -3013,7 +3437,12 @@ class App:
                 self.state["addr_lan"], changed = lan_ip(), True
         pip = public_ip()
         if pip and pip != old_p:
-            if old_p and not relay_on():
+            if old_p and not relay_on() and duck_host():
+                self.notifier.add("network", "Your public IP address changed",
+                                  "It was %s, now it's %s. Friends using %s don't need to change anything - DuckDNS "
+                                  "is updated automatically." % (old_p, pip, duck_host()), "info", send=False)
+                threading.Thread(target=self.duck_tick, kwargs={"force": True}, daemon=True).start()
+            elif old_p and not relay_on():
                 self.notifier.add("network", "Your public IP address changed",
                                   "It was %s, now it's %s. Friends who join from outside your home need the new "
                                   "address: %s:%s. Most home internet gets a new IP now and then." %
@@ -3024,6 +3453,10 @@ class App:
 
     def _monitor_one(self, inst, S):
         self._check_tampering(inst, S)
+        try:
+            self._rotation_tick(inst, S)
+        except Exception as e:
+            sys.stderr.write("map rotation %s: %s\n" % (inst.id, short_err(e)))
         try:
             self._restart_tick(inst, S)
         except Exception as e:
@@ -4390,6 +4823,196 @@ class Handler(BaseHTTPRequestHandler):
             return self.fail(400, short_err(e))
         self.send(200, {"ok": True})
 
+    # ---------- welcome message + announcements
+    def get_messages(self, q):
+        self.send(200, dict(read_messages(), every_choices=list(MSG_EVERY),
+                            plugin=os.path.exists(os.path.join(I().STATS_DIR, "main.lua"))))
+
+    def post_messages(self, q):
+        b = self.body_json()
+        d = read_messages()
+        for k in ("welcome", "announce"):
+            if k in b:
+                d[k] = bool(b[k])
+        if "every" in b:
+            if int(b["every"]) not in MSG_EVERY:
+                return self.fail(400, "Pick how often from the list")
+            d["every"] = int(b["every"])
+        for k, n in (("welcome_text", 5), ("messages", 30)):
+            if k in b:
+                v = b[k] if isinstance(b[k], list) else str(b[k] or "").split("\n")
+                d[k] = [clean_msg(x) for x in v if clean_msg(x)][:n]
+        if d["welcome"] and not d["welcome_text"]:
+            return self.fail(400, "Write the welcome message first")
+        if d["announce"] and not d["messages"]:
+            return self.fail(400, "Add at least one announcement")
+        write_messages(d)
+        self.send(200, {"ok": True, "note": "Saved - it works right away, no restart needed."})
+
+    # ---------- map rotation
+    def get_rotation(self, q):
+        r = rotation_cfg(I())
+        avail = BUILTIN_MAPS + [m for m in enabled_mod_maps() if m not in BUILTIN_MAPS]
+        self.send(200, dict(r, available=avail, current=current_map(),
+                            next=next_clear(r) if r["on"] else None, every_choices=list(CLEAR_EVERY),
+                            warn_choices=[0, 1, 2, 5, 10]))
+
+    def post_rotation(self, q):
+        b = self.body_json()
+        r = rotation_cfg(I())
+        avail = set(BUILTIN_MAPS) | set(enabled_mod_maps())
+        if "maps" in b:
+            maps = []
+            for m in (b["maps"] if isinstance(b["maps"], list) else [])[:50]:
+                m = str(m).strip()
+                if m in avail and m not in maps:
+                    maps.append(m)
+            r["maps"] = maps
+        if "on" in b:
+            r["on"] = bool(b["on"])
+        if "empty_only" in b:
+            r["empty_only"] = bool(b["empty_only"])
+        if "every" in b:
+            if int(b["every"]) not in CLEAR_EVERY:
+                return self.fail(400, "Pick how often from the list")
+            r["every"] = int(b["every"])
+        if "at" in b:
+            at = str(b["at"]).strip()
+            if not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", at):
+                return self.fail(400, "Enter the time like 20:00")
+            r["at"] = "%02d:%s" % (int(at.split(":")[0]), at.split(":")[1])
+        if "warn" in b:
+            if int(b["warn"]) not in (0, 1, 2, 5, 10):
+                return self.fail(400, "Pick the countdown length from the list")
+            r["warn"] = int(b["warn"])
+        if r["on"] and len(r["maps"]) < 2:
+            return self.fail(400, "Pick at least two maps")
+        if r["warn"] * 60 >= r["every"] * 3600:
+            return self.fail(400, "The countdown must be shorter than the time between map changes")
+        set_server_meta(I().id, rotation=r)
+        self.send(200, {"ok": True, "note": "Saved." + (" Next map change: %s." % time.strftime("%a %H:%M", time.localtime(next_clear(r)))
+                                                         if r["on"] else "")})
+
+    # ---------- server templates
+    def get_templates(self, q):
+        self.send(200, {"templates": [{"id": k, "label": v["label"], "about": v["about"], "map": v["map"],
+                                       "max_players": v["max_players"], "tags": v["extras"]["tags"]}
+                                      for k, v in TEMPLATES.items()]})
+
+    def post_template(self, q):
+        b = self.body_json()
+        tp = TEMPLATES.get(str(b.get("id")))
+        if not tp:
+            return self.fail(400, "Pick a template")
+        app = APP
+        ex = read_extras()
+        ex.update(tp["extras"])
+        write_extras(ex)
+        md = read_mod()
+        md["spam"] = bool(tp.get("spam", md["spam"]))
+        md["filter"] = bool(tp.get("filter", md["filter"]))
+        write_mod(md)
+        msg = read_messages()
+        msg.update({"welcome": True, "welcome_text": [tp["welcome"]], "announce": True, "messages": tp["messages"],
+                    "every": max(msg["every"], 15)})
+        write_messages(msg)
+        text = toml_set(app.read_config_text(), "General", "MaxPlayers", tp["max_players"])
+        note = "Applied the %s template." % tp["label"]
+        if b.get("map") and (tp["map"] in BUILTIN_MAPS or tp["map"] in enabled_mod_maps()):
+            app.write_config_text(text)
+            ok, n2 = app.switch_map(tp["map"])
+            note += " " + n2
+        else:
+            app.write_config_text(text)
+            note += " " + app.applied_note()
+        self.send(200, {"ok": True, "note": note})
+
+    # ---------- backups
+    def get_backups(self, q):
+        s = APP.settings
+        self.send(200, {"on": bool(s.get("backup_on")), "at": s.get("backup_at"), "mods": bool(s.get("backup_mods")),
+                        "keep": BACKUP_KEEP, "items": list_backups(I().id), "folder": BACKUP_DIR})
+
+    def post_backups(self, q):
+        b = self.body_json()
+        upd = {}
+        if "on" in b:
+            upd["backup_on"] = bool(b["on"])
+        if "mods" in b:
+            upd["backup_mods"] = bool(b["mods"])
+        if "at" in b:
+            at = str(b["at"]).strip()
+            if not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", at):
+                return self.fail(400, "Enter the time like 03:30")
+            upd["backup_at"] = "%02d:%s" % (int(at.split(":")[0]), at.split(":")[1])
+        APP.settings.update(upd)
+        self.send(200, {"ok": True, "note": "Saved."})
+
+    def post_backups_now(self, q):
+        made, errors = APP.run_backups(bool(self.body_json().get("mods")))
+        if errors:
+            return self.fail(500, "; ".join(errors))
+        self.send(200, {"ok": True, "note": "Backed up %d server%s." % (len(made), "" if len(made) == 1 else "s")})
+
+    def get_backups_download(self, q):
+        name = str(q.get("file") or "")
+        if not any(x["file"] == name for x in list_backups(I().id)):
+            return self.fail(404, "No such backup")
+        path = os.path.join(BACKUP_DIR, name)
+        size = os.path.getsize(path)
+        self.send_response(200)
+        self.headers_common("application/zip", size, {"Content-Disposition": 'attachment; filename="%s"' % name})
+        with open(path, "rb") as f:
+            shutil.copyfileobj(f, self.wfile)
+
+    # ---------- DuckDNS
+    def post_duckdns(self, q):
+        app = APP
+        b = self.body_json()
+        dom = str(b.get("domain") or "").strip().lower()
+        dom = re.sub(r"^https?://", "", dom).split("/")[0]
+        dom = dom[:-len(".duckdns.org")] if dom.endswith(".duckdns.org") else dom
+        tok = str(b.get("token") or "").strip()
+        if not dom:
+            app.settings.update({"duckdns_domain": ""})
+            app.secrets.set("DUCKDNS_TOKEN", "")
+            return self.send(200, {"ok": True, "note": "DuckDNS is off."})
+        if not DUCK_RE.fullmatch(dom):
+            return self.fail(400, "Enter just your DuckDNS name, like myserver (from myserver.duckdns.org)")
+        if tok and not re.fullmatch(r"[0-9a-fA-F-]{36}", tok):
+            return self.fail(400, "The token is the long code at the top of duckdns.org after you sign in")
+        tok = tok or app.secrets.get("DUCKDNS_TOKEN")
+        if not tok:
+            return self.fail(400, "Paste your DuckDNS token")
+        try:
+            ok = duckdns_update(dom, tok)
+        except Exception as e:
+            return self.fail(400, "Couldn't reach duckdns.org (%s)" % short_err(e))
+        if not ok:
+            return self.fail(400, "DuckDNS refused it - check that the name is yours and the token is right")
+        app.settings.update({"duckdns_domain": dom})
+        if tok != app.secrets.get("DUCKDNS_TOKEN"):
+            app.secrets.set("DUCKDNS_TOKEN", tok)
+        app.state.update({"duck_ip": public_ip(), "duck_t": now(), "duck_next": now() + 300, "duck_err": ""})
+        app.save_state()
+        self.send(200, {"ok": True, "note": "Done - friends can now join at %s.duckdns.org:%s" % (dom, I().port() or 30814)})
+
+    # ---------- computer load
+    def get_resources(self, q):
+        app = APP
+        hist = getattr(app, "res_hist", [])
+        self.send(200, {"now": getattr(app, "res", None), "history": hist[-int(q.get("n") or 60):],
+                        "upload_mbit": app.settings.get("upload_mbit") or 0, "cpus": os.cpu_count() or 1})
+
+    def post_resources(self, q):
+        try:
+            v = float(self.body_json().get("upload_mbit") or 0)
+            assert 0 <= v <= 100000
+        except (TypeError, ValueError, AssertionError):
+            return self.fail(400, "Enter your upload speed in Mbit/s, like 20")
+        APP.settings.update({"upload_mbit": round(v, 1)})
+        self.send(200, {"ok": True, "note": "Saved."})
+
     # ---------- Discord bot
     def get_discordbot(self, q):
         self.send(200, APP.bot.info())
@@ -4456,6 +5079,8 @@ class Handler(BaseHTTPRequestHandler):
             "platform": "windows" if IS_WIN else "linux", "lan_ip": lan_ip(),
             "cert_fingerprint": cert_fingerprint(), "https_now": self.https,
             "relay_servers": relay_servers(),
+            "has_duck": app.secrets.has("DUCKDNS_TOKEN"), "duck_err": app.state.get("duck_err") or "",
+            "port_main": INSTANCES["main"].port() if "main" in INSTANCES else None,
         })
         self.send(200, s)
 
@@ -4574,43 +5199,11 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---------- import / export
     def get_export(self, q):
-        app = APP
         include_mods = q.get("mods") == "1"
         fd, tmp = tempfile.mkstemp(suffix=".zip", dir=DATA_DIR)
         os.close(fd)
         try:
-            text = app.read_config_text()
-            text = toml_set(text, "General", "AuthKey", "") if "AuthKey" in text else text
-            mods = list_mods()
-            meta = {"format": "beammp-easyserver-export", "version": 1, "easy_version": EASY_VERSION,
-                    "exported_at": now(), "server_name": server_name(),
-                    "settings": {k: v for k, v in app.settings.public().items()
-                                 if k in ("notify", "smtp_host", "smtp_port", "smtp_security", "smtp_user",
-                                          "smtp_from", "smtp_to", "auto_restart", "update_check",
-                                          "discord_enabled", "email_enabled")},
-                    "mods": [{"name": m["name"], "enabled": m["enabled"], "size": m["size"]} for m in mods],
-                    "includes_mods": include_mods}
-            with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
-                z.writestr("ServerConfig.toml", text)
-                z.writestr("easyserver-export.json", json.dumps(meta, indent=1))
-                # files from the server's folders are opened without following
-                # links, so a hacked game server can't slip the dashboard's own
-                # files (like its HTTPS key) into your backup
-                try:
-                    with open_shared(I().ALLOW_FILE) as f:
-                        z.writestr("allowlist.txt", f.read(256 * 1024))
-                except OSError:
-                    pass
-                if include_mods:
-                    for m in mods:
-                        src = os.path.join(I().CLIENT_DIR if m["enabled"] else I().DISABLED_DIR, m["name"])
-                        try:
-                            with open_shared(src, "rb") as f, z.open(
-                                    zipfile.ZipInfo(("mods/" if m["enabled"] else "mods-disabled/") + m["name"],
-                                                    time.localtime()[:6]), "w", force_zip64=True) as dst:
-                                shutil.copyfileobj(f, dst)
-                        except OSError:
-                            continue
+            build_export(tmp, include_mods)
             size = os.path.getsize(tmp)
             fname = "beammp-server-%s.zip" % time.strftime("%Y%m%d-%H%M")
             self.send_response(200)
@@ -4672,12 +5265,22 @@ class Handler(BaseHTTPRequestHandler):
                         report["allowlist"] = len(listed)
                     except ValueError:
                         report["skipped"].append("allowlist.txt")
+                for extra, rd, wr in (("extras.txt", read_extras, write_extras), ("moderation.txt", read_mod, write_mod),
+                                      ("messages.txt", read_messages, write_messages)):
+                    if extra in names and z.getinfo(extra).file_size < 256 * 1024:
+                        shared_write(os.path.join(I().STATS_DIR, extra), z.read(extra).decode("utf-8", "replace"))
+                        wr(rd())                     # re-written through the checks
+                        report.setdefault("restored", []).append(extra)
+                if "bans.txt" in names and z.getinfo("bans.txt").file_size < 256 * 1024:
+                    shared_write(I().BANS_FILE, z.read("bans.txt").decode("utf-8", "replace"))
+                    write_bans(read_bans())
+                    report.setdefault("restored", []).append("bans.txt")
                 if q.get("mods", "1") == "1":
                     total = 0
                     for n in names:
                         m = re.fullmatch(r"(mods|mods-disabled)/([^/]+)", n)
                         if not m:
-                            if n not in ("ServerConfig.toml", "easyserver-export.json", "allowlist.txt") and not n.endswith("/"):
+                            if n not in ("ServerConfig.toml", "easyserver-export.json") + STATS_EXPORT and not n.endswith("/"):
                                 report["skipped"].append(n[:120])
                             continue
                         name = safe_zip_name(m.group(2))
