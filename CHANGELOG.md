@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.12.1 - Stay logged in
+
+- **Stay logged in on this device** (login page): your own phone or computer logs in by itself for 30 days after the last visit - also after the dashboard or the computer restarts. On by default in the Android app, off in browsers. Only a fingerprint of each device is stored, never the login itself.
+- **Remembered devices** (Settings): see every phone and browser that stays logged in, with when and from where it was last used; forget one you lost, or all of them. Logging out, changing the password, or deleting an account forgets its devices. Extra accounts' devices only work on your home network, like their passwords.
+- **Password managers**: the browser now offers to save the dashboard password (Chrome, Edge, Firefox, Safari, and Google / Samsung autofill on Android).
+- **Android app**: keeps you logged in when the app is closed.
+- **HTTPS fix**: with HTTPS on, opening `http://` (for example the desktop shortcut or an old bookmark) showed "connection reset". It now goes to the `https://` address instead.
+
 ## 1.12.0 - Teleport, repair, light mode
 
 - **In-game tools** (Config, off by default): `/tp name` with `/tpaccept` / `/tpdeny` and a wait between teleports; repairing set to Normal, Realism (reset keys off, `/repair` every few minutes) or Hardcore (no resets, no repairs). Uses a 2 KB helper mod that EasyServer adds and removes by itself and players download automatically.
