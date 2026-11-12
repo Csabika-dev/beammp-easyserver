@@ -366,6 +366,7 @@ All alert channels use the same **Notify me about** switches (Settings). Securit
 <summary><b>Phone app</b></summary>
 
 - **Android:** download `BeamMP-EasyServer.apk` from the [latest release](https://github.com/Csabika-dev/beammp-easyserver/releases/latest), install it, then scan the QR code under **Settings → Phone app**. The app remembers your dashboard's certificate, so it only ever talks to your server. It also has a **Wake up** button when the server computer sleeps.
+- **Stay logged in:** turn on **Stay logged in on this device** on the login page (on by default in the Android app). Your phone or PC then logs in by itself for 30 days after the last visit. **Settings → Remembered devices** lists them; forget one you lost there. Logging out or changing the password forgets them too.
 - **iPhone:** open the dashboard in Safari → Share → **Add to Home Screen**.
 </details>
 
@@ -538,6 +539,7 @@ Suggestions are welcome; open an issue.
 - The dashboard uses only Python's standard library: no third-party packages to keep updated.
 - Root (and the installer) never opens files inside the server folder by name: they are read and written as the `beammp` user, so a hacked game server or a bad Lua plugin can't use links to reach system files.
 - Dashboard login: wrong passwords lock an address for 15 minutes (IPv6 counts per /64), plus a limit for the whole network and for the internet. With two-step login on, a failed login never tells whether the password part was right.
+- Remembered devices ("Stay logged in"): only a SHA-256 fingerprint of each device token is stored, in a signed file; a token stops working 30 days after its last use (90 days at most), on logout, on a password change and when its account is deleted. Extra accounts' devices only work from the home network.
 - The dashboard only answers when it is opened by its IP address or a local name (`mypc`, `mypc.local`, `*.lan`, `*.fritz.box` ...), which blocks "DNS rebinding" tricks from other websites. The first password can only be set from the server computer itself via `http://localhost:30815`.
 - Imports are checked like normal uploads: zip bombs are skipped, settings are validated, and an import can never send your saved email password to a different mail server. Changing the mail server in Settings also needs the password typed again.
 - Windows: the install folder is locked down so only you, administrators and SYSTEM can change it (folders in `C:\` can otherwise be changed by every user of the PC).
