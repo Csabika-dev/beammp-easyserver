@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.5.0 - Moderation, anti-bot, scheduled restarts
+
+- **Moderation (Players page):** see who's online and kick, mute or ban them. Bans for 1 hour to forever, with a reason players see. Ban list with unban. Send a message to the game chat.
+- **Admins** (Config -> Moderation) can `/kick`, `/ban`, `/mute`, `/unmute` and `/unban` from the game chat; their bans are saved in the dashboard.
+- **Chat filter** and **anti-spam** (off by default).
+- **Anti-bot** (off by default): a one-time join check (`/verify 1234` in chat), blocking guests, a limit on players from one internet connection, and a limit on new players per minute (with a security alert). Cloudflare can't protect game servers, so this works inside the game.
+- **Scheduled restarts** (off by default): daily or every 1-12 hours, with a countdown in chat or only when nobody is online. Optionally **install BeamMP updates automatically** at that restart.
+- **Address change warning:** a notification when this computer's home network address or your public IP changes, with the new address and how to keep it fixed (DHCP reservation).
+- New notification switches: moderation, address changes, scheduled restarts.
+- **Check the settings before the first start:** the first time you start a server, the dashboard shows its key settings (name, map, public/private, AuthKey, two-step login, internet access, anti-bot, car cleanup...) and you confirm them once.
+- **IP addresses are blurred** everywhere in the dashboard (overview, network page, logs, notifications) until you click them - handy when you share your screen or a screenshot.
+
 ## 1.4.0 - Cars & chat
 
 New card **Config → Cars & chat**. Everything runs in the server plugin: players don't need to install anything, and changes work without a restart.
