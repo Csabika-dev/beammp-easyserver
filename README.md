@@ -16,9 +16,9 @@ Open `http://<server-ip>:30815` from any PC or phone at home, or use the **BeamM
 |---|---|
 | **Overview** | Server status, who's online, uptime, start / stop / restart, **switch the map in one click** |
 | **Servers** | Run **several BeamMP servers on one computer**, each with its own port, mods, config and allow-list, and set **CPU, RAM and mod download limits** per server |
-| **Config** | Edit every server setting (max players, cars per player, map, port, private…) in a simple form, or as text, **without touching files**. Every change is checked first (wrong types, bad ports, unknown maps, duplicate lines…) and you get plain-English errors with line numbers. Also **Who can join** (an allow-list that makes the server invite-only), **Map vote** (players type `/vote` in chat), **Join alerts** (Discord ping when your friends join) and **Cars & chat** (scheduled car cleanup, abandoned-car removal, chat commands - see below) |
+| **Config** | Edit every server setting (max players, cars per player, map, port, private…) in a simple form, or as text, **without touching files**. Every change is checked first (wrong types, bad ports, unknown maps, duplicate lines…) and you get plain-English errors with line numbers. Also **Who can join** (an allow-list that makes the server invite-only), **Map vote** (players type `/vote` in chat), **Join alerts** (Discord ping when your friends join), **Cars & chat** (scheduled car cleanup, abandoned-car removal, chat commands), **Restarts & updates** and **Moderation & anti-bot** - see below |
 | **Mods** | Drag & drop mods, turn them on/off, pick map mods, see the virus check result for each. Shows how much players have to **download before joining**, and can put it in the server description ("\| Mods: 1.2 GB") |
-| **Players** | Player analytics: players per day, busiest hours, a week heatmap, top players, sessions, peak and usage, plus **server records** (top speed, distance, longest drive without a reset) |
+| **Players** | Player analytics: players per day, busiest hours, a week heatmap, top players, sessions, peak and usage, plus **server records** (top speed, distance, longest drive without a reset). **Kick, mute and ban** players, send chat messages, and manage the ban list |
 | **Network** | Port checker: is the server listening, reachable at home, reachable from the internet, listed in the BeamMP server list? Tells you what to fix |
 | **Updates** | Checks for new BeamMP server and EasyServer versions, installs server updates in one click |
 | **Logs** | Live server log, with hints that explain common errors in plain English |
@@ -46,6 +46,31 @@ All of this runs in the small EasyServerStats plugin on the server, so players d
   - `/tag drift` - shows `[DRIFT]` in front of your chat messages (you choose which tags exist); `/tag off` removes it
   - `/top` - server records: top speed, distance driven and the longest drive without a reset; `/top me` for your own
   - `/help` lists the commands that are on
+
+### Moderation & anti-bot (Config and Players pages)
+
+- **Kick, mute and ban** from the Players page: bans can be for an hour, a day, 7 or 30 days, or forever, with a reason players see. Send a message to everyone in the game chat.
+- **Admins** you name can use `/kick`, `/ban name 1d reason`, `/mute name 10`, `/unmute` and `/unban` in the game chat. Their bans are saved in the dashboard too.
+- **Chat filter** (off by default): hides blocked words, @everyone and Discord invite links, and refuses player names with links. Repeat offenders are muted for 5 minutes.
+- **Anti-spam** (off by default): too many messages in 10 seconds = a 2 minute mute.
+- **Anti-bot** (off by default) stops bots from filling your server. Cloudflare can only protect websites, not a game server, so this works inside the game:
+  - **Join check:** new players type a code shown in chat (`/verify 4821`) within 2 minutes or are kicked; each player only does this once
+  - **Block guests** (players without a BeamMP account)
+  - **Max players from one internet connection** (your own network is never limited)
+  - **Max new players per minute:** above it, new joins pause for 2 minutes and you get a security alert
+
+### Restarts & updates (Config page)
+
+Restart the server on a schedule (off by default): once a day or every 1-12 hours, with a countdown in the chat - or wait until nobody is online. Optionally **install BeamMP updates automatically** at that restart.
+
+### Privacy and first start
+
+- **IP addresses are blurred** in the dashboard until you click them (like a password), so screenshots and screen-sharing don't leak your address.
+- **Before a server's first start** the dashboard shows its key settings once (name, map, public/private, AuthKey, two-step login, internet access, anti-bot, car cleanup…) so nothing goes live by accident.
+
+### Address change warning
+
+If this computer's address on your home network changes (your phone's dashboard link stops working) or your public IP changes (friends can't join), you get a notification with the new address and how to stop it happening (a DHCP reservation in your router).
 
 ### Map: one-click switch and voting
 
