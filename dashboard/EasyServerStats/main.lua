@@ -15,6 +15,9 @@
 --   verified.txt   players who passed the anti-bot check (one name per line)
 --   messages.txt   written by the dashboard: welcome message + timed announcements
 --   bridge.txt     written by the dashboard: "bridge=on" sends the game chat to Discord (via events.log)
+--   maintenance.txt written by the dashboard: "on|off", "message=...", then names that may still join
+--   tools.txt      written by the dashboard: /tp and /repair settings (key=value); needs the client mod
+--                  easyserver_tools.zip that the dashboard puts into Resources/Client
 
 local DIR = "Resources/Server/EasyServerStats/"
 local EVENTS = DIR .. "events.log"
@@ -29,6 +32,8 @@ local ACTIONS = DIR .. "actions.txt"
 local VERIFIED = DIR .. "verified.txt"
 local MSGFILE = DIR .. "messages.txt"
 local BRIDGEFILE = DIR .. "bridge.txt"
+local MAINTFILE = DIR .. "maintenance.txt"
+local TOOLSFILE = DIR .. "tools.txt"
 local MAX_LOG = 20 * 1024 * 1024   -- roll the log over at 20 MB
 
 local function jsonEscape(s)
@@ -588,9 +593,35 @@ local function badName(lname)
   return false
 end
 
+local maint = { at = -1, on = false, msg = "", allow = {} }
+local function readMaint(t)
+  if t - maint.at < 5 then return end
+  maint.at = t
+  maint.on, maint.msg, maint.allow = false, "", {}
+  local f = io.open(MAINTFILE, "r")
+  if not f then return end
+  local first = true
+  for line in f:lines() do
+    line = trim(line)
+    if first then maint.on = line:lower() == "on"; first = false
+    elseif line:sub(1, 8) == "message=" then maint.msg = line:sub(9)
+    elseif line ~= "" then maint.allow[line:lower()] = true end
+  end
+  f:close()
+end
+
+local guestName = {}                   -- lower-case name -> true while a guest uses it
+local function isAdmin(lname) return mod.admins[lname] and not guestName[lname] end
+
 function esModAuth(name, isGuest, identifiers)
   readMod(now_())
   local lname = name:lower()
+  guestName[lname] = isGuest and true or nil
+  readMaint(now_())
+  if maint.on and (isGuest or (not mod.admins[lname] and not maint.allow[lname])) then
+    event("refused", string.format(',"name":"%s","why":"maintenance"', jsonEscape(name)))
+    return (maint.msg ~= "" and maint.msg or "The server is in maintenance - back soon!")
+  end
   local b = banFor(lname)
   if b then
     event("refused", string.format(',"name":"%s","why":"banned"', jsonEscape(name)))
@@ -637,7 +668,7 @@ function esModJoin(id)
   local lname = name:lower()
   idIp[id] = authIp[lname]
   readMod(now_())
-  if mod.antibot and mod.verify and not isVerified(lname) and not mod.admins[lname] then
+  if mod.antibot and mod.verify and not isVerified(lname) and not isAdmin(lname) then
     pendingV[id] = { code = tostring(math.random(1000, 9999)), deadline = now_() + 120, nextMsg = now_() }
   end
 end
@@ -738,11 +769,11 @@ function esModChat(id, name, message)
   local cmd, arg = message:match("^%s*/(%a+)%s*(.-)%s*$")
   cmd = cmd and cmd:lower()
   if cmd == "kick" or cmd == "ban" or cmd == "unban" or cmd == "mute" or cmd == "unmute" then
-    if not mod.admins[lname] then say(id, "Only admins can use /" .. cmd .. ".") return true end
+    if not isAdmin(lname) then say(id, "Only admins can use /" .. cmd .. ".") return true end
     adminCommand(id, name, cmd, arg)
     return true
   end
-  if mod.spam and mod.spam_limit > 0 and not mod.admins[lname] then
+  if mod.spam and mod.spam_limit > 0 and not isAdmin(lname) then
     local keep = {}
     for _, x in ipairs(spamTimes[id] or {}) do if x > t - 10 then keep[#keep + 1] = x end end
     keep[#keep + 1] = t
@@ -836,7 +867,8 @@ end
 math.randomseed(os.time())
 
 local ticks = 0
-function esTick()
+function esTick(fromPlayer)
+  if fromPlayer ~= nil then return end   -- sent by a player, not by the server's timer
   local now = os.time()
   ticks = ticks + 1
   readExtras(now)
@@ -941,12 +973,174 @@ function esMsgTick(now)
   end
 end
 
-function esMinute()
+function esMinute(fromPlayer)
+  if fromPlayer ~= nil then return end
   event("count", string.format(',"n":%d', MP.GetPlayerCount() or 0))
 end
 
-function esHalfMinute()
+function esHalfMinute(fromPlayer)
+  if fromPlayer ~= nil then return end
   writeOnline()
+end
+
+-- ---------------------------------------------------------------------------
+-- Teleport and repair (Config -> Cars & chat -> In-game tools). The server
+-- decides (who may teleport where, cooldowns), the small client mod
+-- easyserver_tools.zip moves or repairs the player's own car.
+local tools = { at = -100, tp = false, tp_cd = 60, repair = "free", repair_cd = 5 }
+local tpReq = {}         -- target id -> { from = id, t = time }
+local tpLast, repLast, tpAsked, helloAt = {}, {}, {}, {}
+
+local function readTools(t)
+  if t - tools.at < 10 then return end
+  local c = { at = t, tp = false, tp_cd = 60, repair = "free", repair_cd = 5 }
+  local f = io.open(TOOLSFILE, "r")
+  if f then
+    for line in f:lines() do
+      local k, v = trim(line):match("^([%w_]+)%s*=%s*(.-)$")
+      if k == "tp" then c.tp = v:lower() == "on"
+      elseif k == "repair" and (v == "free" or v == "cooldown" or v == "off") then c.repair = v
+      elseif k == "tp_cd" then local n = tonumber(v); if n and n >= 0 and n <= 3600 then c.tp_cd = math.floor(n) end
+      elseif k == "repair_cd" then local n = tonumber(v); if n and n >= 1 and n <= 120 then c.repair_cd = math.floor(n) end end
+    end
+    f:close()
+  end
+  tools = c
+end
+
+local function toolsCfgFor(pid)
+  return string.format('{"tp":%s,"repair":"%s","repair_cd":%d}', tools.tp and "true" or "false", tools.repair, tools.repair_cd)
+end
+
+local function sendToolsCfg(pid)
+  if MP.TriggerClientEvent then MP.TriggerClientEvent(pid, "esToolsCfg", toolsCfgFor(pid)) end
+end
+
+local function findPlayer(arg)
+  arg = trim(arg or ""):lower()
+  if arg == "" then return nil end
+  local exact, part, many = nil, nil, false
+  for pid, n in pairs(players()) do
+    local ln = tostring(n):lower()
+    if ln == arg then exact = pid
+    elseif ln:find(arg, 1, true) then if part then many = true end part = pid end
+  end
+  if exact then return exact end
+  if many then return nil, "more than one player matches \"" .. arg .. "\" - type more of the name" end
+  return part
+end
+
+local function firstVehicle(pid)
+  local vs = MP.GetPlayerVehicles(pid)
+  if type(vs) ~= "table" then return nil end
+  local best
+  for vid, _ in pairs(vs) do if not best or vid < best then best = vid end end
+  return best
+end
+
+local function toolsCmd(id, name, cmd, arg)
+  readTools(os.time())
+  local t = os.time()
+  if cmd == "tp" then
+    if not tools.tp then say(id, "Teleporting is turned off on this server.") return 1 end
+    local target, err = findPlayer(arg)
+    if err then say(id, "Can't teleport: " .. err .. ".") return 1 end
+    if not target then say(id, "Type /tp and a player's name, e.g. /tp " .. tostring(name)) return 1 end
+    if target == id then say(id, "You're already here!") return 1 end
+    if not firstVehicle(id) then say(id, "Spawn a car first.") return 1 end
+    local wait = tools.tp_cd - (t - (tpLast[id] or 0))
+    if wait > 0 then say(id, "You can teleport again in " .. wait .. " seconds.") return 1 end
+    if t - (tpAsked[id] or 0) < 15 then say(id, "Wait a few seconds before asking again.") return 1 end
+    local cur = tpReq[target]
+    if cur and cur.from ~= id and t - cur.t <= 60 then say(id, tostring(MP.GetPlayerName(target)) .. " already has a teleport request - try again in a minute.") return 1 end
+    tpAsked[id] = t
+    tpReq[target] = { from = id, t = t }
+    say(target, tostring(name) .. " wants to teleport to you. Type /tpaccept to allow or /tpdeny to refuse (60 s).")
+    say(id, "Asked " .. tostring(MP.GetPlayerName(target)) .. " - waiting for them to accept.")
+    return 1
+  elseif cmd == "tpaccept" or cmd == "tpdeny" then
+    local r = tpReq[id]
+    tpReq[id] = nil
+    if not r or t - r.t > 60 or not MP.GetPlayerName(r.from) or MP.GetPlayerName(r.from) == "" then
+      say(id, "Nobody is waiting to teleport to you.") return 1
+    end
+    if cmd == "tpdeny" then
+      say(r.from, tostring(name) .. " said no to your teleport.") say(id, "Refused.") return 1
+    end
+    local vid = firstVehicle(id)
+    if not vid then say(id, "Spawn a car first, then type /tp... again.") say(r.from, tostring(name) .. " has no car right now.") return 1 end
+    tpLast[r.from] = t
+    MP.TriggerClientEvent(r.from, "esTpTo", tostring(id) .. "-" .. tostring(vid))
+    say(r.from, "Teleporting to " .. tostring(name) .. "...")
+    say(id, tostring(MP.GetPlayerName(r.from)) .. " is on the way.")
+    event("tp", string.format(',"name":"%s","to":"%s"', jsonEscape(MP.GetPlayerName(r.from)), jsonEscape(name)))
+    return 1
+  elseif cmd == "repair" or cmd == "fix" then
+    if tools.repair == "off" then say(id, "Repairing is turned off on this server - drive carefully!") return 1 end
+    if not firstVehicle(id) then say(id, "Spawn a car first.") return 1 end
+    if tools.repair == "cooldown" then
+      local wait = tools.repair_cd * 60 - (t - (repLast[id] or 0))
+      if wait > 0 then say(id, string.format("Next repair in %d:%02d.", math.floor(wait / 60), wait % 60)) return 1 end
+    end
+    repLast[id] = t
+    MP.TriggerClientEvent(id, "esRepair", "1")
+    say(id, "Repaired." .. (tools.repair == "cooldown" and (" Next repair in " .. tools.repair_cd .. " min.") or ""))
+    return 1
+  end
+end
+
+local extraOrig = esExtraChat
+function esExtraChat(id, name, message, cmd, arg)
+  if cmd then
+    local c = cmd:lower()
+    if c == "tp" or c == "tpaccept" or c == "tpdeny" or c == "repair" or c == "fix" then
+      return toolsCmd(id, name, c, arg)
+    end
+  end
+  local r = extraOrig(id, name, message, cmd, arg)
+  if cmd and cmd:lower() == "help" then
+    readTools(os.time())
+    local list = {}
+    if tools.tp then list[#list + 1] = "/tp name (then they type /tpaccept)" end
+    if tools.repair == "cooldown" then list[#list + 1] = "/repair (every " .. tools.repair_cd .. " min - resetting is off)"
+    elseif tools.repair == "free" and tools.tp then list[#list + 1] = "/repair" end
+    if #list > 0 then say(id, "Car tools: " .. table.concat(list, "   ")) return 1 end
+  end
+  return r
+end
+
+local joinedOrig = esOnJoined
+function esOnJoined(id)
+  joinedOrig(id)
+  readTools(os.time())
+  sendToolsCfg(id)
+end
+
+local leftOrig = esMsgLeft
+function esMsgLeft(id)
+  leftOrig(id)
+  tpReq[id], tpLast[id], repLast[id], tpAsked[id], helloAt[id] = nil, nil, nil, nil, nil
+  for k, r in pairs(tpReq) do if r.from == id then tpReq[k] = nil end end
+end
+
+-- a player's client mod asks for the settings when it loads (covers dashboard changes too)
+function esToolsHello(id)
+  if type(id) ~= "number" or not MP.GetPlayerName(id) then return end
+  local t = os.time()
+  if t - (helloAt[id] or 0) < 5 then return end   -- at most every 5 s per player
+  helloAt[id] = t
+  readTools(t)
+  sendToolsCfg(id)
+end
+local toolsSent = ""
+function esToolsTick(fromPlayer)
+  if fromPlayer ~= nil then return end
+  readTools(os.time())
+  local now = toolsCfgFor(-1)
+  if now ~= toolsSent then
+    toolsSent = now
+    for pid, _ in pairs(players()) do sendToolsCfg(pid) end
+  end
 end
 
 MP.RegisterEvent("onPlayerAuth", "esOnAuth")
@@ -962,6 +1156,9 @@ MP.RegisterEvent("esTick", "esTick")
 MP.RegisterEvent("onVehicleReset", "esOnReset")
 MP.RegisterEvent("onVehicleDeleted", "esOnDeleted")
 MP.CreateEventTimer("esTick", 1000)
+MP.RegisterEvent("esToolsHello", "esToolsHello")
+MP.RegisterEvent("esToolsTick", "esToolsTick")
+MP.CreateEventTimer("esToolsTick", 15000)
 
 event("start")
 writeOnline()
