@@ -1277,6 +1277,15 @@ async function loadPower(refresh) {
     ${p.error ? `<div class="issue warning"><span class="ic">⚠</span><span>${esc(p.error)}</span></div>` : ""}
     <h3 style="margin:14px 0 4px">1. Wake-on-LAN ${wolOk ? `<span class="badge good">Ready</span>` : `<span class="badge warn">Not ready</span>`}</h3>
     <p class="small muted">Lets another device wake this computer with a "magic packet". Needs a <b>network cable</b> - it doesn't work over Wi-Fi - and laptops must stay plugged in.</p>
+    ${(() => { const W = p.wol_score; if (!W) return ""; const col = W.blocking ? "var(--crit-ink)" : W.score >= 90 ? "var(--good-ink)" : "var(--warn-ink)";
+      const ic = { pass: ["✓", "var(--good-ink)"], warn: ["!", "var(--warn-ink)"], fail: ["✕", "var(--crit-ink)"], unknown: ["?", "var(--text-2)"] };
+      const order = { fail: 0, warn: 1, unknown: 2, pass: 3 };
+      return `<div class="card tight" style="padding:12px 14px;margin:8px 0"><div class="row" style="gap:14px;align-items:center">
+        <div style="font-size:30px;font-weight:700;color:${col};min-width:64px">${W.score}<span class="small muted" style="font-weight:400">/100</span></div>
+        <div><b>Compatibility: ${esc(W.verdict)}</b><div class="small muted">${W.blocking ? W.blocking + " thing" + (W.blocking > 1 ? "s" : "") + " must be changed before it can wake up." : "Nothing is blocking it."}</div></div></div>
+        <div style="margin-top:8px">${W.checks.slice().sort((x, y) => order[x.state] - order[y.state]).map(c => `<div class="row small" style="align-items:flex-start;gap:8px;padding:4px 0;border-top:1px solid var(--line)">
+          <b style="color:${ic[c.state][1]};width:14px;flex:none;text-align:center">${ic[c.state][0]}</b>
+          <div style="flex:1"><b>${esc(c.title)}</b> - ${esc(c.why)}${c.fix && c.state !== "pass" ? `<div style="margin-top:2px"><b>What to change:</b> ${esc(c.fix)}</div>` : ""}</div></div>`).join("")}</div></div>`; })()}
     ${p.on_wifi ? `<div class="issue warning"><span class="ic">⚠</span><span>This computer is on <b>Wi-Fi</b>. Connect it to the router with a network cable, then press Refresh.</span></div>` : ""}
     ${!wired.length ? `<div class="issue warning"><span class="ic">⚠</span><span>No network cable adapter found. Wake-on-LAN needs one (a USB network adapter usually can't wake a computer).</span></div>` : ""}
     <div style="margin:6px 0">${p.adapters.map(a => `<div class="row small" style="padding:4px 0;gap:8px;flex-wrap:wrap"><b>${esc(a.name)}</b>${a.desc ? `<span class="muted">${esc(a.desc)}</span>` : ""}<span class="mono">${esc(a.mac)}</span>${a.ip ? `<span class="mono">${blurIPs(esc(a.ip))}</span>` : ""}<span class="muted">${a.wifi ? "Wi-Fi" : a.cable ? "cable plugged in" : "no cable"}</span><span class="badge ${(WB[a.wol] || WB.unknown)[0]}">${(WB[a.wol] || WB.unknown)[1]}</span><span class="spacer"></span>${!a.wifi && a.wol !== "on" && a.wol !== "unsupported" ? `<button class="btn sm" data-wol="${esc(a.name)}">Turn on</button>` : ""}</div>`).join("") || `<p class="small muted">No network adapters found.</p>`}</div>
