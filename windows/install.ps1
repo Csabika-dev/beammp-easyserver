@@ -16,7 +16,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'   # makes downloads much faster
-$EasyVersion  = '1.10.0'
+$EasyVersion  = '1.12.0'
 $DefaultDir   = 'C:\BeamMP-Server'
 $StateFile    = Join-Path $env:ProgramData 'BeamMP-EasyServer\install-dir.txt'
 $ServerUrl    = 'https://github.com/BeamMP/BeamMP-Server/releases/latest/download/BeamMP-Server.exe'
@@ -147,6 +147,17 @@ function Test-Dashboard([string]$esDir) {
     return $false
 }
 
+# Downloaded programs must carry a valid digital signature from the expected company before they run.
+# Stops a tampered download (or a file swapped in the temp folder) from running with admin rights.
+function Assert-Signed([string]$Path, [string]$Company) {
+    $sig = Get-AuthenticodeSignature -LiteralPath $Path
+    $subject = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { '' }
+    if ($sig.Status -ne 'Valid' -or $subject -notmatch [regex]::Escape("O=$Company")) {
+        Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+        throw "$(Split-Path $Path -Leaf) is not correctly signed by $Company (status: $($sig.Status)). The download was deleted - check your internet connection and try again."
+    }
+}
+
 function Install-Dashboard($dir) {
     Step 'Installing the web dashboard'
     $esDir = Join-Path $dir 'EasyServer'
@@ -154,12 +165,18 @@ function Install-Dashboard($dir) {
     $pyw = Join-Path $pyDir 'pythonw.exe'
     if (-not (Test-Path $pyw)) {
         Write-Host '  Downloading portable Python (about 10 MB)...'
-        $zip = Join-Path $env:TEMP 'easyserver-python.zip'
+        $zip = Join-Path $env:TEMP ('easyserver-python-' + [guid]::NewGuid().ToString('N') + '.zip')
         Invoke-WebRequest -Uri $PythonUrl -OutFile $zip -UseBasicParsing
         New-Item -ItemType Directory -Force -Path $pyDir | Out-Null
         Expand-Archive -Path $zip -DestinationPath $pyDir -Force
         Remove-Item $zip -ErrorAction SilentlyContinue
         if (-not (Test-Path $pyw)) { throw 'Portable Python could not be unpacked' }
+        try {
+            foreach ($exe in 'python.exe', 'pythonw.exe') { Assert-Signed (Join-Path $pyDir $exe) 'Python Software Foundation' }
+        } catch {
+            Remove-Item -LiteralPath $pyDir -Recurse -Force -ErrorAction SilentlyContinue
+            throw
+        }
     }
     Ok 'Portable Python ready'
     Stop-Dashboard
@@ -454,8 +471,9 @@ try {
         Ok 'Already installed'
     } else {
         Write-Host '  Installing it (takes a minute)...'
-        $vcTmp = Join-Path $env:TEMP 'vc_redist.x64.exe'
+        $vcTmp = Join-Path $env:TEMP ('vc_redist-' + [guid]::NewGuid().ToString('N') + '.exe')
         Invoke-WebRequest -Uri $VcRedistUrl -OutFile $vcTmp -UseBasicParsing
+        Assert-Signed $vcTmp 'Microsoft Corporation'
         $p = Start-Process -FilePath $vcTmp -ArgumentList '/install', '/quiet', '/norestart' -Wait -PassThru
         Remove-Item $vcTmp -ErrorAction SilentlyContinue
         if ($p.ExitCode -in 0, 1638, 3010) { Ok 'Installed' } else { Warn "Installer returned code $($p.ExitCode) - the server may still work." }
