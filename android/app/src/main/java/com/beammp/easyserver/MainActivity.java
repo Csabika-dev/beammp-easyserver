@@ -10,6 +10,8 @@ import android.net.Uri;
 import android.net.http.SslCertificate;
 import android.net.http.SslError;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.InputType;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -21,6 +23,7 @@ import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -31,6 +34,12 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.OutputStream;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.HttpURLConnection;
+import java.net.InetAddress;
+import java.net.URL;
 import java.security.MessageDigest;
 import java.security.cert.X509Certificate;
 import java.util.Locale;
@@ -42,12 +51,18 @@ import java.util.Locale;
  * any certificate, the app remembers the certificate's SHA-256 fingerprint from
  * the QR code shown in the dashboard (Settings -> Phone app) and only connects
  * when the server shows exactly that certificate.
+ *
+ * When the server computer is asleep the app offers a "Wake up" button: it sends
+ * a Wake-on-LAN packet itself (works on the home Wi-Fi) and asks the wake helper
+ * through the private ntfy topic from the QR code (works from anywhere).
  */
 public class MainActivity extends Activity {
     private static final int PICK_FILE = 1;
     private SharedPreferences prefs;
     private WebView web;
     private ValueCallback<Uri[]> fileCallback;
+    private final Handler ui = new Handler(Looper.getMainLooper());
+    private Runnable countdown;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -72,7 +87,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** easyserver://connect?url=https://192.168.1.20:30815/&fp=<sha256 hex> */
+    /** easyserver://connect?url=https://192.168.1.20:30815/&fp=<sha256 hex>[&mac=..&bc=..][&wt=<topic>&ns=<ntfy server>] */
     private boolean readLink(Intent intent) {
         Uri data = intent == null ? null : intent.getData();
         if (data == null || !"easyserver".equals(data.getScheme()) || !"connect".equals(data.getHost())) return false;
@@ -83,6 +98,15 @@ public class MainActivity extends Activity {
             return false;
         }
         save(url, fp);
+        // how to wake the server computer up (optional)
+        String mac = data.getQueryParameter("mac"), bc = data.getQueryParameter("bc");
+        String wt = data.getQueryParameter("wt"), ns = data.getQueryParameter("ns");
+        SharedPreferences.Editor e = prefs.edit();
+        e.putString("mac", mac != null && mac.matches("([0-9a-f]{2}:){5}[0-9a-f]{2}") ? mac : "");
+        e.putString("bc", bc != null && bc.matches("(\\d{1,3}\\.){3}\\d{1,3}(,(\\d{1,3}\\.){3}\\d{1,3})*") ? bc : "");
+        boolean helper = wt != null && wt.matches("beammp-wake-[A-Za-z0-9]{20,40}")
+                && ns != null && ns.matches("https://[A-Za-z0-9.\\-]{1,253}(:\\d{1,5})?");
+        e.putString("wt", helper ? wt : "").putString("ns", helper ? ns : "").apply();
         return true;
     }
 
@@ -224,10 +248,13 @@ public class MainActivity extends Activity {
 
             @Override
             public void onReceivedError(WebView view, WebResourceRequest req, WebResourceError err) {
-                if (req.isForMainFrame()) {
-                    showSetup("Can't reach " + url + " (" + err.getDescription() + "). Is the computer on and the phone on the same "
-                            + "Wi-Fi? If the computer's address changed, scan the QR code again.");
-                }
+                if (req.isForMainFrame()) showAsleep(String.valueOf(err.getDescription()));
+            }
+
+            @Override
+            public void onReceivedHttpError(WebView view, WebResourceRequest req, WebResourceResponse resp) {
+                // 503 = the page the dashboard leaves behind for when the server doesn't answer
+                if (req.isForMainFrame() && resp.getStatusCode() == 503) showAsleep("no answer");
             }
         });
 
@@ -265,6 +292,150 @@ public class MainActivity extends Activity {
         });
         setContentView(web);
         web.loadUrl(url);
+    }
+
+    // ------------------------------------------------------------------ server asleep / wake up
+    private void showAsleep(String why) {
+        final String url = prefs.getString("url", "");
+        if (web != null) {
+            web.destroy();
+            web = null;
+        }
+        stopCountdown();
+        boolean lan = !prefs.getString("mac", "").isEmpty(), helper = !prefs.getString("wt", "").isEmpty();
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int pad = dp(22);
+        box.setPadding(pad, dp(48), pad, pad);
+        box.setBackgroundColor(Color.rgb(21, 21, 20));
+        box.addView(text("The server isn't answering", 24, true));
+        box.addView(text("\nThe server computer is probably asleep to save power - or it's off, or this phone isn't "
+                + "connected to the internet.\n\n(" + why + ")", 15, false));
+        TextView status = text("", 15, false);
+        status.setTextColor(Color.rgb(170, 205, 255));
+        status.setPadding(0, dp(14), 0, 0);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(14);
+        if (lan || helper) {
+            Button wake = new Button(this);
+            wake.setText("Wake it up");
+            wake.setOnClickListener(v -> {
+                wake.setEnabled(false);
+                status.setText("Sending the wake-up…");
+                new Thread(() -> {
+                    String res = sendWake();
+                    ui.post(() -> {
+                        status.setText(res);
+                        startCountdown(status, 45);
+                    });
+                }).start();
+            });
+            box.addView(wake, lp);
+            if (!helper) box.addView(text("\nAway from home this only works with the wake helper (dashboard: Settings → "
+                    + "Sleep & wake-up) - then scan the QR code again.", 13, false));
+        } else {
+            box.addView(text("\nTo wake it from here, set up Sleep & wake-up in the dashboard (Settings) and scan the "
+                    + "Phone app QR code again.", 13, false));
+        }
+        Button retry = new Button(this);
+        retry.setText("Try again");
+        retry.setOnClickListener(v -> {
+            stopCountdown();
+            showDashboard();
+        });
+        box.addView(retry, lp);
+        Button change = new Button(this);
+        change.setText("Change server");
+        change.setOnClickListener(v -> {
+            stopCountdown();
+            showSetup(null);
+        });
+        box.addView(change, lp);
+        box.addView(status);
+        box.addView(text("\n" + url, 12, false));
+        ScrollView scroll = new ScrollView(this);
+        scroll.setBackgroundColor(Color.rgb(21, 21, 20));
+        scroll.addView(box);
+        setContentView(scroll);
+    }
+
+    /** Wake-on-LAN packet from the phone (home Wi-Fi) + a request to the wake helper (anywhere). Runs off the UI thread. */
+    private String sendWake() {
+        boolean lanOk = false, helperOk = false;
+        String mac = prefs.getString("mac", "");
+        if (!mac.isEmpty()) {
+            try {
+                byte[] m = new byte[6];
+                String[] parts = mac.split(":");
+                for (int i = 0; i < 6; i++) m[i] = (byte) Integer.parseInt(parts[i], 16);
+                byte[] pkt = new byte[102];
+                for (int i = 0; i < 6; i++) pkt[i] = (byte) 0xff;
+                for (int i = 6; i < 102; i++) pkt[i] = m[(i - 6) % 6];
+                StringBuilder targets = new StringBuilder(prefs.getString("bc", ""));
+                if (targets.length() > 0) targets.append(',');
+                targets.append("255.255.255.255");
+                try (DatagramSocket sock = new DatagramSocket()) {
+                    sock.setBroadcast(true);
+                    for (int round = 0; round < 3; round++) {
+                        for (String t : targets.toString().split(",")) {
+                            for (int port : new int[]{9, 7}) {
+                                try {
+                                    sock.send(new DatagramPacket(pkt, pkt.length, InetAddress.getByName(t), port));
+                                    lanOk = true;
+                                } catch (Exception ignored) {
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        String wt = prefs.getString("wt", ""), ns = prefs.getString("ns", "");
+        if (!wt.isEmpty()) {
+            HttpURLConnection c = null;
+            try {
+                c = (HttpURLConnection) new URL(ns + "/" + wt).openConnection();
+                c.setRequestMethod("POST");
+                c.setDoOutput(true);
+                c.setConnectTimeout(10000);
+                c.setReadTimeout(10000);
+                try (OutputStream o = c.getOutputStream()) {
+                    o.write("wake".getBytes("UTF-8"));
+                }
+                helperOk = c.getResponseCode() == 200;
+            } catch (Exception ignored) {
+            } finally {
+                if (c != null) c.disconnect();
+            }
+        }
+        if (helperOk) return "Wake-up sent (through the wake helper).";
+        if (lanOk) return wt.isEmpty() ? "Wake-up sent on this Wi-Fi." : "Wake-up sent on this Wi-Fi (the wake helper couldn't be reached).";
+        return "Couldn't send the wake-up - check this phone's internet connection.";
+    }
+
+    private void startCountdown(TextView status, int seconds) {
+        final String base = status.getText().toString();
+        final int[] left = {seconds};
+        countdown = new Runnable() {
+            @Override
+            public void run() {
+                if (left[0] <= 0) {
+                    countdown = null;
+                    showDashboard();
+                    return;
+                }
+                status.setText(base + "\nTrying again in " + left[0] + " s…");
+                left[0]--;
+                ui.postDelayed(this, 1000);
+            }
+        };
+        ui.post(countdown);
+    }
+
+    private void stopCountdown() {
+        if (countdown != null) ui.removeCallbacks(countdown);
+        countdown = null;
     }
 
     private static String fingerprint(SslCertificate cert) {
