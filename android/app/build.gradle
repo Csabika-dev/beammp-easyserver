@@ -1,0 +1,45 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Built by GitHub Actions (.github/workflows/android.yml) and attached to every release.
+// Signing: with the repository secrets ANDROID_KEYSTORE_B64 + ANDROID_KEYSTORE_PASSWORD the
+// app keeps the same signature, so new versions install over old ones. Without them it is
+// signed with a throw-away key - uninstall the old app before installing a new version.
+def ks = System.getenv("KEYSTORE_FILE")
+
+android {
+    namespace 'com.beammp.easyserver'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.beammp.easyserver"
+        minSdk 29
+        targetSdk 34
+        versionCode((System.getenv("VERSION_CODE") ?: "1") as int)
+        versionName System.getenv("VERSION_NAME") ?: "dev"
+    }
+
+    signingConfigs {
+        release {
+            if (ks) {
+                storeFile file(ks)
+                storePassword System.getenv("KEYSTORE_PASSWORD")
+                keyAlias System.getenv("KEY_ALIAS") ?: "easyserver"
+                keyPassword System.getenv("KEYSTORE_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig ks ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
