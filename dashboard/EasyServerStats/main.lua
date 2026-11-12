@@ -13,6 +13,7 @@
 --   bans.txt       written by the dashboard: name<TAB>until (0 = forever)<TAB>reason
 --   actions.txt    written by the dashboard: kick / mute / chat messages to run now
 --   verified.txt   players who passed the anti-bot check (one name per line)
+--   messages.txt   written by the dashboard: welcome message + timed announcements
 
 local DIR = "Resources/Server/EasyServerStats/"
 local EVENTS = DIR .. "events.log"
@@ -25,6 +26,7 @@ local MODFILE = DIR .. "moderation.txt"
 local BANS = DIR .. "bans.txt"
 local ACTIONS = DIR .. "actions.txt"
 local VERIFIED = DIR .. "verified.txt"
+local MSGFILE = DIR .. "messages.txt"
 local MAX_LOG = 20 * 1024 * 1024   -- roll the log over at 20 MB
 
 local function jsonEscape(s)
@@ -84,6 +86,7 @@ local COOLDOWN = 300      -- at most one map change per 5 minutes
 
 function esOnLeave(id)
   votes[id] = nil
+  if esMsgLeft then esMsgLeft(id) end
   if esPlayerLeft then esPlayerLeft(id) end
   if esModLeft then esModLeft(id) end
   event("leave", string.format(',"id":%d,"name":"%s"', id, jsonEscape(MP.GetPlayerName(id))))
@@ -842,10 +845,74 @@ function esTick()
     else say(-1, "GO!") countdownLeft = nil end
   end
   if ticks % 2 == 0 then sampleTick(now) end
+  if esMsgTick then esMsgTick(now) end
   if ticks % 60 == 0 then saveRecords() end
 end
 
 loadRecords()
+
+-- Welcome message (sent to a player a few seconds after they've loaded in) and
+-- announcements (one message to everyone every few minutes, in turn).
+-- {name} = the player's name, {players} = how many are online.
+local msgs = { welcome = false, welcome_text = {}, announce = false, every = 15, list = {} }
+local msgRead, welcomeQ, annNext, annIdx = -1000, {}, nil, 0
+local VALID_MSG_EVERY = { [5] = true, [10] = true, [15] = true, [20] = true, [30] = true, [45] = true, [60] = true, [90] = true, [120] = true }
+
+local function readMsgs(now)
+  if now - msgRead < 10 then return end
+  msgRead = now
+  local f = io.open(MSGFILE, "r")
+  if not f then msgs = { welcome = false, welcome_text = {}, announce = false, every = 15, list = {} } return end
+  local c = { welcome = false, welcome_text = {}, announce = false, every = 15, list = {} }
+  for line in f:lines() do
+    local k, v = trim(line):match("^([%w_]+)%s*=%s*(.-)$")
+    if k == "welcome" or k == "announce" then c[k] = v:lower() == "on"
+    elseif k == "every" then local n = tonumber(v); if n and VALID_MSG_EVERY[n] then c.every = n end
+    elseif k == "welcome_text" and v ~= "" and #c.welcome_text < 5 then c.welcome_text[#c.welcome_text + 1] = v:sub(1, 200)
+    elseif k == "msg" and v ~= "" and #c.list < 30 then c.list[#c.list + 1] = v:sub(1, 200) end
+  end
+  f:close()
+  if c.every ~= msgs.every or c.announce ~= msgs.announce then annNext = nil end
+  msgs = c
+end
+
+local function fill(text, pid)
+  local count = 0
+  for _ in pairs(players()) do count = count + 1 end
+  local name = pid and tostring(MP.GetPlayerName(pid) or "") or ""
+  return (text:gsub("{name}", function() return name end):gsub("{players}", tostring(count)))
+end
+
+function esMsgLeft(id) welcomeQ[id] = nil end
+
+function esOnJoined(id)
+  readMsgs(os.time())
+  if msgs.welcome and #msgs.welcome_text > 0 then welcomeQ[id] = os.time() + 3 end
+end
+
+function esMsgTick(now)
+  readMsgs(now)
+  for pid, at in pairs(welcomeQ) do
+    if now >= at then
+      welcomeQ[pid] = nil
+      if MP.GetPlayerName(pid) and MP.GetPlayerName(pid) ~= "" then
+        for _, line in ipairs(msgs.welcome_text) do say(pid, fill(line, pid)) end
+      end
+    end
+  end
+  if msgs.announce and #msgs.list > 0 then
+    if not annNext then annNext = now + msgs.every * 60 end
+    if now >= annNext then
+      annNext = now + msgs.every * 60
+      if anyoneOnline() then
+        annIdx = annIdx % #msgs.list + 1
+        say(-1, fill(msgs.list[annIdx]))
+      end
+    end
+  else
+    annNext = nil
+  end
+end
 
 function esMinute()
   event("count", string.format(',"n":%d', MP.GetPlayerCount() or 0))
@@ -857,6 +924,7 @@ end
 
 MP.RegisterEvent("onPlayerAuth", "esOnAuth")
 MP.RegisterEvent("onPlayerJoining", "esOnJoin")
+MP.RegisterEvent("onPlayerJoin", "esOnJoined")
 MP.RegisterEvent("onChatMessage", "esOnChat")
 MP.RegisterEvent("onPlayerDisconnect", "esOnLeave")
 MP.RegisterEvent("esMinute", "esMinute")
