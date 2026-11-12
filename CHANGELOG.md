@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.6.0 - Discord commands
+
+- **Discord bot** (Settings -> Discord bot, off by default): control your servers from Discord with slash commands.
+  - `/status` shows every server with its state, online players, map, CPU, memory and uptime. Anyone in your Discord can use it.
+  - `/start`, `/stop` and `/restart` (with a server picker if you run several) only work for people with **Manage Server** in your Discord, or the Discord users you allow in the dashboard. Players in the game get a chat message before a stop or restart.
+  - The bot only answers in the one Discord server you pick, so nobody else can use it by adding your bot to their Discord. A server has to be started from the dashboard once (to check its settings) before Discord can start it.
+  - It connects out to Discord, so no port forwarding is needed. The bot token is stored encrypted like your other keys.
+
 ## 1.5.0 - Moderation, anti-bot, scheduled restarts
 
 - **Moderation (Players page):** see who's online and kick, mute or ban them. Bans for 1 hour to forever, with a reason players see. Ban list with unban. Send a message to the game chat.
