@@ -15,7 +15,7 @@
 # =============================================================================
 set -euo pipefail
 
-EASY_VERSION="1.8.0"
+EASY_VERSION="1.9.0"
 INSTALL_DIR="/opt/beammp-server"
 SERVICE_USER="beammp"
 DASH_USER="beammp-dash"
@@ -380,7 +380,7 @@ case "${1:-}" in
     cd "$DIR"
     exec "${AS_SERVER[@]}" /opt/beammp-server/BeamMP-Server --config="$RUN/ServerConfig.toml" ;;
   dashboard|mods)
-    for n in MODS_PASSWORD VT_API_KEY DISCORD_WEBHOOK SMTP_PASSWORD TOTP_SECRET DISCORD_BOT_TOKEN DUCKDNS_TOKEN; do
+    for n in MODS_PASSWORD VT_API_KEY DISCORD_WEBHOOK SMTP_PASSWORD TOTP_SECRET DISCORD_BOT_TOKEN DUCKDNS_TOKEN NTFY_TOPIC; do
       v=$(SEC "$n"); [[ -n "$v" ]] && export "$n=$v"
     done
     unset v
