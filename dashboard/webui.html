@@ -135,7 +135,7 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 .bar{height:6px;background:var(--surface-2);border-radius:3px;overflow:hidden;margin-top:6px}.bar i{display:block;height:100%;width:0;background:var(--accent)}
 /* logs */
 .log{font-family:var(--mono);font-size:12.5px;line-height:1.55;background:var(--surface-2);border-radius:10px;padding:12px 14px;height:520px;overflow:auto;white-space:pre-wrap;word-break:break-word}
-.log .e{color:var(--crit-ink)}.log .w{color:var(--warn-ink)}
+.log .e{color:var(--crit-ink)}.log .w{color:var(--warn-ink)}.log .e,.log .w{cursor:pointer}.log .e:hover,.log .w:hover{text-decoration:underline dotted}
 /* checks */
 .check{display:flex;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line)}
 .check:last-child{border-bottom:0}
@@ -244,7 +244,7 @@ const I = {
   logout: '<path d="M10 17l1.4-1.4-2.6-2.6H20v-2H8.8l2.6-2.6L10 7l-5 5 5 5zM4 5h8V3H4a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/>',
 };
 const icon = n => `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">${I[n]}</svg>`;
-const TABS = [["overview","Overview"],["servers","Servers"],["config","Config"],["mods","Mods"],["players","Players"],["network","Network"],["updates","Updates"],["logs","Logs"],["notifications","Notifications"],["settings","Settings"]];
+const TABS = [["overview","Overview"],["servers","Servers"],["config","Config"],["mods","Mods"],["players","Players"],["network","Health"],["updates","Updates"],["logs","Logs"],["notifications","Notifications"],["settings","Settings"]];
 
 /* ------------------------------------------------------------------ boot / auth */
 async function boot() {
@@ -260,7 +260,7 @@ async function boot() {
   const hash = location.hash.slice(1);
   if (/^ack=[a-f0-9]{16}$/.test(hash)) { history.replaceState(null, "", location.pathname + "#overview"); await stopAlerts(hash.slice(4)); return show("overview"); }
   if (hash.startsWith("approve=")) { let n = ""; try { n = decodeURIComponent(hash.slice(8)).slice(0, 40); } catch (e) {} return approveFromLink(n); }
-  show(TABS.some(t => t[0] === hash) ? hash : "overview");
+  show(myTabs().some(t => t[0] === hash) ? hash : "overview");
 }
 
 async function approveFromLink(name) {
@@ -306,6 +306,7 @@ function renderLogin(needCode) {
   needCode = needCode || SESSION.totp;
   authShell(`<h1>BeamMP Dashboard</h1><p class="sub">Log in to manage your server.</p>
     <form id="lf" autocomplete="on">
+    <label class="f"><span>Name <span class="muted">(leave empty if you're the owner)</span></span><input type="text" id="un" autocomplete="username" spellcheck="false" maxlength="24"></label>
     <label class="f"><span>Password</span><input type="password" id="pw" autocomplete="current-password" autofocus></label>
     <label class="f ${needCode ? "" : "hidden"}" id="codebox"><span>Two-step code</span><input type="text" id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="123456"><small>From your authenticator app</small></label>
     <button class="btn primary" id="go" type="submit">Log in</button>
@@ -313,18 +314,20 @@ function renderLogin(needCode) {
   $("#lf").onsubmit = async ev => {
     ev.preventDefault();
     $("#go").disabled = true;
-    try { await api("/api/login", { json: { password: $("#pw").value, code: $("#code").value } }); boot(); }
+    try { await api("/api/login", { json: { user: $("#un").value.trim(), password: $("#pw").value, code: $("#code").value } }); boot(); }
     catch (e) { $("#err").textContent = e.message; if (e.data && e.data.need_code) $("#codebox").classList.remove("hidden"); $("#go").disabled = false; }
   };
 }
 
+const ROLE_TABS = { viewer: ["overview", "players", "network", "logs", "notifications"], moderator: ["overview", "players", "network", "logs", "notifications"] };
+const myTabs = () => ROLE_TABS[SESSION.role] ? TABS.filter(t => ROLE_TABS[SESSION.role].includes(t[0])) : TABS;
 function renderShell() {
-  const navs = TABS.map(([k, label]) => `<button class="nav" data-tab="${k}">${icon(k)}<span>${label}</span>${k === "notifications" ? '<span class="count hidden" data-unread></span>' : ""}</button>`).join("");
+  const navs = myTabs().map(([k, label]) => `<button class="nav" data-tab="${k}">${icon(k)}<span>${label}</span>${k === "notifications" ? '<span class="count hidden" data-unread></span>' : ""}</button>`).join("");
   const picker = SERVERS.length > 1 ? `<label class="srvpick"><span class="small muted">Server</span><select data-srv>${SERVERS.map(x => `<option value="${esc(x.id)}" ${x.id === SERVER ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></label>` : "";
   $("#root").innerHTML = `<div class="app">
     <aside class="side"><div class="brand"><div class="logo">B</div><div>BeamMP EasyServer<small>Dashboard ${esc(SESSION.version)}</small></div></div>
       ${picker}${navs}<div class="grow"></div>
-      <div class="foot"><button class="iconbtn" id="theme" title="Light / dark mode">${icon("moon")}</button><span class="spacer"></span><button class="iconbtn" id="logout" title="Log out">${icon("logout")}</button></div>
+      <div class="foot"><button class="iconbtn" id="theme" title="Light / dark mode">${icon("moon")}</button><span class="small muted" title="Logged in as">${esc(SESSION.user || "owner")}${SESSION.role && SESSION.role !== "owner" ? " · " + esc(SESSION.role) : ""}</span><span class="spacer"></span><button class="iconbtn" id="logout" title="Log out">${icon("logout")}</button></div>
     </aside>
     <div><nav class="mobilebar">${picker}${navs}<button class="nav" id="theme2">Theme</button></nav><div id="secbar"></div><main id="main"></main></div></div>`;
   document.querySelectorAll("[data-srv]").forEach(el => el.onchange = () => switchServer(el.value));
@@ -514,6 +517,7 @@ VIEWS.servers = async m => {
     <div class="card" style="margin-top:16px"><h2>Add a server</h2>
       <p class="small muted">The new server starts with your main server's settings and its own empty mods folder. Each server that should be public needs its own AuthKey from <span class="mono">keymaster.beammp.com</span>.</p>
       <div class="grid g2">
+        <label class="f"><span>Start from</span><select id="ns_clone"><option value="">A fresh server (main server's basics)</option>${d.servers.map(x => `<option value="${esc(x.id)}">A copy of ${esc(x.name)}</option>`).join("")}</select><small>A copy takes over the config, who can join, moderation, bans, chat messages, events and restart times. Mods aren't copied - use Mods → Modpack</small></label>
         <label class="f"><span>Name</span><input id="ns_name" type="text" maxlength="60" placeholder="e.g. Racing server"></label>
         <label class="f"><span>Port</span><input id="ns_port" type="number" min="1024" max="65535" value="${nextPort}"><small>Forward it (TCP + UDP) on your router for internet play</small></label>
         <label class="f"><span>Max players</span><input id="ns_max" type="number" min="1" max="100" value="8"></label>
@@ -550,7 +554,7 @@ VIEWS.servers = async m => {
   });
   $("#ns_go").onclick = async () => {
     const body = { name: $("#ns_name").value, port: $("#ns_port").value, max_players: $("#ns_max").value, map: $("#ns_map").value,
-                   authkey: $("#ns_key").value, private: $("#ns_private").checked, start: $("#ns_start").checked };
+                   authkey: $("#ns_key").value, private: $("#ns_private").checked, start: $("#ns_start").checked, clone_from: $("#ns_clone").value };
     if (!confirm("Create \"" + body.name + "\" on port " + body.port + "?\n\nThis changes your network settings:\n• This computer's firewall opens port " + body.port + " (TCP + UDP)\n• Your router is NOT changed - forward port " + body.port + " there yourself for internet play")) return;
     $("#ns_go").disabled = true;
     try { const r = await api("/api/servers/create", { json: body }); toast(r.note, 9000); SERVERS = (await api("/api/servers")).servers; renderShell(); show("servers"); }
@@ -625,6 +629,7 @@ VIEWS.config = async m => {
       ${SERVER === "main" ? `<label class="toggle"><input type="checkbox" id="rs_auto" ${rs.auto_update ? "checked" : ""}><span><b>Install BeamMP updates automatically</b><small>At the scheduled restart, if a new BeamMP server version is out. All servers use the same BeamMP program, so the others restart too.${rs.update_available ? " <b>An update is available now.</b>" : ""}</small></span></label>` : ""}
       <div class="row" style="margin-top:12px"><button class="btn primary" id="rs_save">Save restarts</button></div>
     </div>
+    <div id="cfg111"></div>
     <div id="cfg17"></div>
     <div id="evcard"></div>
     <div class="card" style="margin-top:16px" id="mdcard"><div class="row"><h2 style="margin:0">Moderation &amp; anti-bot</h2><span class="spacer"></span>
@@ -720,6 +725,7 @@ VIEWS.config = async m => {
     try { const r = await api("/api/joinalerts", { json: body }); toast(r.note); if (!test) show("config"); } catch (e) { toast(e.message); }
   };
   loadCfg17();
+  loadCfg111();
   loadEvents();
   $("#rs_save").onclick = async () => {
     const body = { on: $("#rs_on").checked, every: Number($("#rs_every").value), at: $("#rs_at").value, warn: Number($("#rs_warn").value), when: $("#rs_when").value };
@@ -770,15 +776,20 @@ VIEWS.mods = async m => {
     <div id="uploads"></div>
     <p class="small muted" style="margin:10px 0 16px">🛡 Active checks: ${esc(d.checks.join(" + "))}. ${d.auto_apply ? "The server restarts by itself ~15 s after a change." : "Restart the server after changes."}</p>
     <div class="card" style="margin-bottom:16px"><div class="row"><div><div class="small muted">Players download before they can join</div><div style="font-size:22px;font-weight:650">${d.download ? fmtSize(d.download) : "Nothing - vanilla"}</div>
-      ${d.maps_size ? `<div class="small muted">${fmtSize(d.maps_size)} of that is map mods. Turn off maps you're not playing on to make joining faster.</div>` : ""}</div></div>
+      ${d.maps_size && !d.light ? `<div class="small muted">${fmtSize(d.maps_size)} of that is map mods. Light mode (below) sends only the map being played.</div>` : ""}
+      ${d.light && d.all_maps_size > d.maps_size ? `<div class="small" style="color:var(--good-ink)">Light mode saves players ${fmtSize(d.all_maps_size - d.maps_size)} of map downloads.</div>` : ""}</div></div>
+      <label class="toggle" style="margin-top:10px"><input type="checkbox" id="lightmode" ${d.light ? "checked" : ""}><span><b>Light mode: only send the map being played</b><small>Map mods for other maps wait and come back by themselves when you switch to their map (Config, map vote, rotation or events). Mods that aren't maps are always sent. Players join much faster on servers with several map mods</small></span></label>
       <label class="toggle" style="margin-top:10px"><input type="checkbox" id="descsize" ${d.desc_modsize ? "checked" : ""}><span><b>Show the download size in the server description</b><small>Adds "| Mods: ${esc(d.download ? fmtSize(d.download) : "0")}" to the end of the description in the BeamMP server list and keeps it up to date. Takes effect after the server restarts</small></span></label></div>
     <div class="card tight"><table><thead><tr><th>Mod</th><th class="num">Size</th><th></th></tr></thead><tbody>
-      ${d.mods.length ? d.mods.map(x => `<tr><td><b class="${x.enabled ? "" : "muted"}">${esc(x.name)}</b><span class="badge ${B[x.safety][0]}">${B[x.safety][1]}</span>${x.enabled ? "" : '<span class="badge">off</span>'}${x.maps.map(mp => `<span class="badge">map: ${esc(mp)}</span>`).join("")}${U[x.name] ? (U[x.name].update ? `<span class="badge warn">update ${esc(U[x.name].have || "?")} → ${esc(U[x.name].latest || "new")}</span>` : `<span class="badge good">up to date${U[x.name].have ? " (" + esc(U[x.name].have) + ")" : ""}</span>`) : ""}
+      ${d.mods.length ? d.mods.map(x => `<tr><td><b class="${x.enabled ? "" : "muted"}">${esc(x.name)}</b>${x.builtin ? '<span class="badge good">EasyServer tools</span>' : `<span class="badge ${B[x.safety][0]}">${B[x.safety][1]}</span>`}${x.enabled ? "" : x.parked ? '<span class="badge">waiting - light mode</span>' : '<span class="badge">off</span>'}${x.maps.map(mp => `<span class="badge">map: ${esc(mp)}</span>`).join("")}${U[x.name] ? (U[x.name].update ? `<span class="badge warn">update ${esc(U[x.name].have || "?")} → ${esc(U[x.name].latest || "new")}</span>` : `<span class="badge good">up to date${U[x.name].have ? " (" + esc(U[x.name].have) + ")" : ""}</span>`) : ""}
         ${x.reasons.length ? `<div class="small" style="color:var(--warn-ink);margin-top:4px">${x.reasons.map(esc).join("<br>")}</div>` : ""}</td>
         <td class="num muted">${fmtSize(x.size)}</td>
-        <td class="num"><div class="row" style="justify-content:flex-end">${U[x.name] && U[x.name].update ? `<button class="btn sm primary" data-upd="${esc(x.name)}">Update</button><a class="btn sm" href="${esc(U[x.name].page)}" target="_blank" rel="noopener noreferrer">Page</a>` : ""}${x.maps.length && x.enabled ? `<button class="btn sm" data-map="${esc(x.maps[0])}">Use map</button>` : ""}<button class="btn sm" data-a="toggle" data-n="${esc(x.name)}">${x.enabled ? "Turn off" : "Turn on"}</button><button class="btn sm danger" data-a="delete" data-n="${esc(x.name)}">Delete</button></div></td></tr>`).join("")
+        <td class="num"><div class="row" style="justify-content:flex-end">${U[x.name] && U[x.name].update ? `<button class="btn sm primary" data-upd="${esc(x.name)}">Update</button><a class="btn sm" href="${esc(U[x.name].page)}" target="_blank" rel="noopener noreferrer">Page</a>` : ""}${x.maps.length && (x.enabled || x.parked) ? `<button class="btn sm" data-map="${esc(x.maps[0])}">Use map</button>` : ""}${x.builtin ? `<span class="small muted">Config → In-game tools</span>` : `${x.parked ? "" : `<button class="btn sm" data-a="toggle" data-n="${esc(x.name)}">${x.enabled ? "Turn off" : "Turn on"}</button>`}<button class="btn sm danger" data-a="delete" data-n="${esc(x.name)}">Delete</button>`}</div></td></tr>`).join("")
         : `<tr><td colspan="3" class="muted">No mods yet.</td></tr>`}
     </tbody></table></div>
+    <div class="card" style="margin-top:16px"><h2>Modpack</h2><p class="small muted">One .zip with every mod that's turned on, plus a list with checksums. Share it with another server owner, move mods to another server, or give it to players with slow internet so they can copy the mods before joining.</p>
+      <div class="row" style="flex-wrap:wrap"><a class="btn sm" href="/api/modpack?srv=${encodeURIComponent(SERVER)}" download ${d.mods.some(x => x.enabled) ? "" : 'aria-disabled="true" style="pointer-events:none;opacity:.5"'}>Download modpack</a>
+        ${SESSION.role === "owner" || !SESSION.role ? `<button class="btn sm" id="mpimp">Import a modpack…</button><input type="file" id="mpfile" accept=".zip" hidden>` : ""}<span class="small muted" id="mpres"></span></div></div>
     <div class="row" style="margin-top:12px;flex-wrap:wrap"><button class="btn sm" id="rescan">Re-check all mods</button><button class="btn sm" id="modupd">Check for updates</button>
       <label class="toggle" style="margin:0 0 0 8px"><input type="checkbox" id="modupd_on" ${mu.on !== false ? "checked" : ""}><span><b>Check every day</b><small>Mods from the BeamNG repository${mu.checked ? " · last check " + esc(ago(mu.checked)) : ""}</small></span></label></div>
     ${d.quarantine.length ? `<h2 style="margin-top:26px">⛔ Blocked mods (quarantine)</h2><div class="card tight"><table><tbody>${d.quarantine.map(q => `<tr><td><b>${esc(q.name)}</b><div class="small" style="color:var(--crit-ink);white-space:pre-wrap">${esc(q.why)}</div></td><td class="num"><button class="btn sm danger" data-a="qdelete" data-n="${esc(q.name)}">Delete</button></td></tr>`).join("")}</tbody></table></div>` : ""}`;
@@ -807,6 +818,21 @@ VIEWS.mods = async m => {
     catch (e) { toast(e.data && e.data.blocked ? "The update failed the virus check - the old version stays." : e.message, 9000); b.disabled = false; }
   });
   $("#rescan").onclick = async () => { $("#rescan").disabled = true; toast("Checking all mods…"); try { const r = await api("/api/mods/rescan", { method: "POST" }); const bad = r.results.filter(x => x.verdict === "blocked").length; toast(bad ? bad + " mod(s) blocked" : "All mods passed"); } catch (e) { toast(e.message); } show("mods"); };
+  $("#lightmode").onchange = async e => {
+    try { const r = await api("/api/mods/light", { json: { on: e.target.checked } }); toast(r.note, 8000); show("mods"); } catch (x) { toast(x.message, 6000); e.target.checked = !e.target.checked; }
+  };
+  if ($("#mpimp")) {
+    $("#mpimp").onclick = () => $("#mpfile").click();
+    $("#mpfile").onchange = async e => {
+      const f = e.target.files[0]; if (!f) return;
+      $("#mpres").textContent = "Importing and virus-checking…";
+      const r = await fetch("/api/import?settings=0", { method: "PUT", headers: { "X-ES-CSRF": CSRF, "X-ES-Server": SERVER }, body: f });
+      let j = {}; try { j = await r.json(); } catch (x) {}
+      if (!r.ok) { $("#mpres").textContent = j.error || "Import failed"; return; }
+      if (!j.report.modpack) { $("#mpres").textContent = "That was a full server export - it was imported as one."; return; }
+      toast(j.note + (j.report.mods_blocked.length ? " " + j.report.mods_blocked.length + " blocked by the virus check." : ""), 8000); show("mods");
+    };
+  }
   async function upload(files) {
     for (const f of files) await one(f);
     show("mods");
@@ -879,6 +905,7 @@ VIEWS.players = async m => {
   m.innerHTML = `
     <div class="row"><div><h1>Players</h1><p class="sub">Activity over the last 30 days. Recorded by the EasyServerStats plugin on your server.</p></div><span class="spacer"></span><button class="btn sm" id="clear">Clear statistics</button></div>
     ${d.has_data ? "" : `<div class="banner info">No player data yet. Statistics start once the server runs with the stats plugin and someone plays.</div>`}
+    <div id="maintcard"></div>
     <div class="card" style="margin-bottom:16px" id="modcard"><div class="row"><h2 style="margin:0">Online now &amp; moderation</h2><span class="spacer"></span><span class="small muted">Takes a second to reach the game</span></div>
       ${bn.online.length ? `<table style="margin-top:8px"><tbody>${bn.online.map(n => `<tr><td><b>${esc(n)}</b></td><td class="num"><div class="row" style="justify-content:flex-end;gap:6px">
           <button class="btn sm" data-act="mute" data-n="${esc(n)}">Mute 10 min</button><button class="btn sm" data-act="unmute" data-n="${esc(n)}">Unmute</button>
@@ -922,7 +949,8 @@ VIEWS.players = async m => {
       const col = (title, list, val) => `<div class="card tight"><table><thead><tr><th>${title}</th><th class="num"></th></tr></thead><tbody>${(list || []).length ? list.map((r, i) => `<tr><td>${i + 1}. <b>${esc(r.name)}</b></td><td class="num">${val(r)}</td></tr>`).join("") : `<tr><td colspan="2" class="muted">Nobody yet</td></tr>`}</tbody></table></div>`;
       return `<h2 style="margin:22px 0 10px">Server records</h2>${d.records_on ? "" : `<p class="small muted">Records are paused - turn on "/top server records" under Config → Cars &amp; chat.</p>`}
         <div class="grid g3">${col("Top speed", R.speed, r => esc(Math.round(r.speed)) + " km/h")}${col("Distance driven", R.dist, r => esc(r.dist.toFixed(1)) + " km")}${col("Longest drive without a reset", R.streak, r => fmtDur(r.streak))}</div>`;
-    })()}`;
+    })()}
+    <div id="mapstats"></div>`;
   const dl = d.days.map(x => x.date.slice(5).replace("-", "/"));
   barChart($("#daily"), d.days.map(x => x.players), dl, i => `<b>${esc(d.days[i].date)}</b><br>${d.days[i].players} players · peak ${d.days[i].peak} · ${d.days[i].hours} h played`, { title: "Players per day", labelsMax: 10 });
   barChart($("#hourly"), d.hourly, d.hourly.map((_, i) => String(i).padStart(2, "0")), i => `<b>${String(i).padStart(2, "0")}:00</b><br>${d.hourly[i]} players on average`, { title: "Average players by hour", labelsMax: 8, h: 170 });
@@ -930,6 +958,8 @@ VIEWS.players = async m => {
   m.querySelectorAll("[data-heat]").forEach(i => i.style.background = `var(--heat-${i.dataset.heat})`);
   const act = async (body) => { try { const r = await api("/api/players/act", { json: body }); toast(r.note); } catch (e) { toast(e.message); } };
   m.querySelectorAll("[data-act]").forEach(b => b.onclick = () => act({ action: b.dataset.act, name: b.dataset.n, minutes: 10 }));
+  loadMaint();
+  loadMapStats();
   m.querySelectorAll("[data-banopen]").forEach(b => b.onclick = () => { $("#ban_name").value = b.dataset.banopen; $("#ban_reason").focus(); });
   $("#ban_go").onclick = async () => {
     const name = $("#ban_name").value.trim(); if (!name) return toast("Type the player's name");
@@ -942,11 +972,44 @@ VIEWS.players = async m => {
 
 /* ---------------- network */
 VIEWS.network = async m => {
-  m.innerHTML = `<h1>Network check</h1><p class="sub">Finds out whether players can reach your server.</p><p class="muted">Checking…</p>`;
+  m.innerHTML = `<div class="row"><div><h1>Health</h1><p class="sub">Is everything working? What's wrong, and what to do about it.</p></div></div>
+    <div class="card" id="healthbox"><p class="muted">Checking…</p></div>
+    <div class="card" id="doctorbox" style="margin-top:16px"></div>
+    <div id="netbox" style="margin-top:24px"><p class="muted">Checking the network…</p></div>`;
+  const HS = { pass: ["ok", "✓"], fail: ["bad", "✕"], warn: ["warn", "!"], info: ["info", "i"] };
+  const health = async deep => {
+    const hb = $("#healthbox"); if (!hb) return;
+    let h, reps;
+    try { [h, reps] = await Promise.all([api("/api/health" + (deep ? "?deep=1" : "")), api("/api/health/reports")]); } catch (e) { hb.innerHTML = `<p class="small muted">${esc(e.message)}</p>`; return; }
+    const pill = h.overall === "fail" ? `<span class="badge bad">${h.failed} problem${h.failed > 1 ? "s" : ""}</span>` : h.overall === "warn" ? `<span class="badge warn">${h.warned} warning${h.warned > 1 ? "s" : ""}</span>` : `<span class="badge good">All good</span>`;
+    hb.innerHTML = `<div class="row"><h2 style="margin:0">Server health report ${pill}</h2><span class="spacer"></span><button class="btn sm" id="h_again">Check again</button><button class="btn sm" id="h_deep">Full check</button><a class="btn sm ${h.failed ? "primary" : ""}" href="/api/health/report?srv=${encodeURIComponent(SERVER)}" download>Download diagnostic report</a></div>
+      <div style="margin-top:8px">${h.checks.map(c => `<div class="check"><span class="mark ${HS[c.state][0]}">${HS[c.state][1]}</span><div><b>${esc(c.title)}</b> <span class="small muted">${c.state === "pass" ? "Passed" : c.state === "fail" ? "Failed" : c.state === "warn" ? "Warning" : ""}</span><div class="small muted">${blurIPs(esc(c.detail))}</div>${c.fix ? `<div class="small"><b>What to do:</b> ${blurIPs(esc(c.fix))}</div>` : ""}</div></div>`).join("")}</div>
+      <p class="small muted" style="margin:8px 0 0">${h.failed ? "Something failed - the <b>diagnostic report</b> has everything needed to get help (versions, checks, settings, the end of the log). Keys, tokens and your public IP are removed from it." : "The diagnostic report collects versions, these checks, settings and the end of the log for when you need help - keys, tokens and your public IP are removed."} The dashboard re-checks every 30 minutes and saves a report by itself when something breaks.</p>
+      ${reps.reports.length ? `<details style="margin-top:6px"><summary class="small"><b>Saved reports (${reps.reports.length})</b></summary>${reps.reports.map(r => `<div class="row small" style="padding:3px 0"><span>${esc(fmtTime(r.t))}</span><span class="spacer"></span><a href="/api/health/saved?file=${encodeURIComponent(r.file)}&srv=${encodeURIComponent(SERVER)}" download>Download</a></div>`).join("")}</details>` : ""}`;
+    $("#h_again").onclick = () => health(false);
+    $("#h_deep").onclick = () => { $("#h_deep").disabled = true; $("#h_deep").textContent = "Checking…"; health(true); };
+  };
+  const doctor = () => {
+    const db = $("#doctorbox"); if (!db) return;
+    db.innerHTML = `<h2>Someone can't join?</h2><p class="small muted">Type their BeamMP name - the dashboard looks at what the server recorded for them (refused, banned, not on the list, server full…) and the usual network problems.</p>
+      <div class="row"><input type="text" id="dr_name" placeholder="Player name (optional)" maxlength="40" style="max-width:260px" autocomplete="off" spellcheck="false"><button class="btn primary" id="dr_go">Find out why</button></div><div id="dr_out"></div>`;
+    const go = async () => {
+      $("#dr_go").disabled = true;
+      try {
+        const r = await api("/api/health/join?player=" + encodeURIComponent($("#dr_name").value.trim()));
+        const DS = { fail: ["bad", "✕"], warn: ["warn", "!"], info: ["info", "i"] };
+        $("#dr_out").innerHTML = `<div style="margin-top:10px">${r.findings.map(f => `<div class="check"><span class="mark ${DS[f.state][0]}">${DS[f.state][1]}</span><div><b>${esc(f.title)}</b><div class="small muted" style="white-space:pre-wrap">${blurIPs(esc(f.text))}</div></div></div>`).join("")}</div>`;
+      } catch (e) { toast(e.message); }
+      $("#dr_go").disabled = false;
+    };
+    $("#dr_go").onclick = go; $("#dr_name").onkeydown = e => { if (e.key === "Enter") go(); };
+  };
+  health(false); doctor();
   const run = async deep => {
+    const m = $("#netbox"); if (!m) return;
     const d = await api("/api/network" + (deep ? "?deep=1" : ""));
     const mk = { ok: ["ok", "✓"], bad: ["bad", "✕"], warn: ["warn", "!"], info: ["info", "i"] };
-    m.innerHTML = `<div class="row"><div><h1>Network check</h1><p class="sub">Finds out whether players can reach your server on port ${esc(d.port)}.</p></div><span class="spacer"></span>
+    m.innerHTML = `<div class="row"><div><h2 style="font-size:20px">Network check</h2><p class="sub">Finds out whether players can reach your server on port ${esc(d.port)}.</p></div><span class="spacer"></span>
       <button class="btn" id="again">Check again</button><button class="btn primary" id="deep">Check server list</button></div>
       <div class="grid g3" style="margin-bottom:16px">
         <div class="card stat"><div class="label">Home network address</div><div class="value mono">${ipb(esc(d.lan_ip) + ":" + esc(d.port))}</div><div class="note">For friends on your Wi-Fi</div></div>
@@ -998,15 +1061,53 @@ VIEWS.logs = async m => {
   const draw = async () => {
     const d = await api("/api/logs?lines=" + lines);
     const box = $("#log");
-    if (!box) return;
+    if (!box || box.querySelector(".xpl")) return;     // an explanation is open - don't redraw under it
     const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
     box.innerHTML = d.lines.map(l => `<div class="${/\[ERROR\]/.test(l) ? "e" : /\[WARN\]/.test(l) ? "w" : ""}">${blurIPs(esc(l))}</div>`).join("") || `<span class="muted">The log is empty.</span>`;
     if (follow && atBottom) box.scrollTop = box.scrollHeight;
     $("#hints").innerHTML = d.hints.length ? `<div class="card" style="margin-bottom:16px"><h2>What the log is telling you</h2>${d.hints.map(x => `<div class="issue warning"><span class="ic">⚠</span><span><b>${esc(x.title)}.</b> ${esc(x.text)}<div class="mono muted" style="margin-top:4px">${esc(x.line)}</div></span></div>`).join("")}</div>` : "";
   };
-  m.innerHTML = `<div class="row"><div><h1>Server log</h1><p class="sub">Live view of Server.log. Refreshes every 5 seconds.</p></div><span class="spacer"></span>
+  const canAct = SESSION.role === "owner" || SESSION.role === "admin";
+  m.innerHTML = `<div class="row"><div><h1>Logs</h1><p class="sub">${canAct ? "<a href='#' id='tab_srv'><b>Server log</b></a> · <a href='#' id='tab_act'>Activity log</a>" : "Live view of Server.log. Refreshes every 5 seconds."}</p></div><span class="spacer"></span>
     <select id="n" style="width:auto"><option value="300">Last 300 lines</option><option value="1000">Last 1000 lines</option><option value="2000">Last 2000 lines</option></select></div>
-    <div id="hints"></div><div class="log" id="log"></div>`;
+    <div id="actbox" class="hidden"></div><div id="srvbox"><div id="hints"></div>
+      <div class="row" style="margin:0 0 10px;gap:8px"><button class="btn sm" id="explain">Explain the whole log</button><span class="small muted">or click a red or yellow line</span></div>
+      <div id="explained"></div><div class="log" id="log"></div></div>`;
+  if (canAct) {
+    const activityView = async () => {
+      const who = $("#act_who") ? $("#act_who").value : "", via = $("#act_via") ? $("#act_via").value : "";
+      const d = await api("/api/activity?limit=500&who=" + encodeURIComponent(who) + "&via=" + encodeURIComponent(via));
+      const VIA = { dashboard: "Dashboard", discord: "Discord", game: "In game" };
+      $("#actbox").innerHTML = `<div class="card tight" style="padding:12px 14px"><p class="small muted" style="margin:0 0 8px">Every change made by an admin: in the dashboard, with Discord commands and with in-game admin commands - who, what, when and from where.</p>
+        <div class="row" style="gap:8px;margin-bottom:8px"><input id="act_who" placeholder="Filter by name" value="${esc(who)}" style="max-width:200px"><select id="act_via" style="width:auto"><option value="">Everywhere</option>${Object.entries(VIA).map(([k, v]) => `<option value="${k}" ${via === k ? "selected" : ""}>${v}</option>`).join("")}</select><button class="btn sm" id="act_go">Filter</button></div>
+        ${d.rows.length ? `<table class="small" style="width:100%;border-collapse:collapse">${d.rows.map(r => `<tr style="border-top:1px solid var(--line)"><td style="padding:4px 6px;white-space:nowrap" class="muted">${esc(fmtTime(r.t))}</td><td style="padding:4px 6px"><b>${esc(r.who)}</b></td><td style="padding:4px 6px">${r.ok === false ? '<span style="color:var(--crit-ink)">✕</span> ' : ""}${esc(r.action)}${SERVERS.length > 1 && r.server ? ` <span class="muted">(${esc((SERVERS.find(x => x.id === r.server) || {}).name || r.server)})</span>` : ""}</td><td style="padding:4px 6px" class="muted">${esc(VIA[r.via] || r.via)}${r.ip ? " · " + ipb(esc(r.ip)) : ""}</td></tr>`).join("")}</table>` : `<p class="muted small">Nothing yet.</p>`}</div>`;
+      $("#act_go").onclick = activityView;
+    };
+    $("#tab_act").onclick = e => { e.preventDefault(); clearInterval(TIMER); $("#srvbox").classList.add("hidden"); $("#n").classList.add("hidden"); $("#actbox").classList.remove("hidden"); activityView(); };
+    $("#tab_srv").onclick = e => { e.preventDefault(); show("logs"); };
+  }
+  const LV = { error: ["bad", "!"], warning: ["warning", "⚠"], info: ["info", "i"] };
+  const card = x => `<div class="issue ${x.level === "error" ? "error" : x.level}"><span class="ic">${LV[x.level] ? LV[x.level][1] : "i"}</span><span><b>${esc(x.title)}</b>${x.count ? ` <span class="muted small">×${x.count}${x.last ? " · last " + esc(x.last) : ""}</span>` : ""}<br>${esc(x.what)}<br><b>What to do:</b> ${esc(x.fix)}${x.example ? `<div class="mono muted small" style="margin-top:4px">${blurIPs(esc(x.example))}</div>` : ""}</span></div>`;
+  $("#explain").onclick = async () => {
+    $("#explained").innerHTML = `<p class="small muted">Reading the log…</p>`;
+    try {
+      const d = await api("/api/logs/explain");
+      $("#explained").innerHTML = `<div class="card" style="margin-bottom:16px"><div class="row"><h2 style="margin:0">What happened</h2><span class="spacer"></span><button class="btn sm" id="explclose">Close</button></div>
+        <p class="small muted">${esc(d.note)} Grouped by problem, most important first.</p>${d.groups.length ? d.groups.map(card).join("") : `<div class="issue info"><span class="ic">✓</span><span>No errors or warnings found.</span></div>`}</div>`;
+      $("#explclose").onclick = () => $("#explained").innerHTML = "";
+    } catch (e) { $("#explained").innerHTML = ""; toast(e.message); }
+  };
+  $("#log").onclick = async e => {
+    const row = e.target.closest("#log > div"); if (!row || !(row.classList.contains("e") || row.classList.contains("w"))) return;
+    if (row.nextElementSibling && row.nextElementSibling.classList.contains("xpl")) { row.nextElementSibling.remove(); return; }
+    follow = false;
+    try {
+      const d = await api("/api/logs/explain", { json: { line: row.textContent } });
+      const x = document.createElement("div"); x.className = "xpl"; x.style.cssText = "white-space:normal;font-family:inherit;margin:4px 0 8px";
+      x.innerHTML = d.explain ? card(d.explain) : `<div class="issue info"><span class="ic">i</span><span>Nothing known about this line.</span></div>`;
+      row.after(x);
+    } catch (err) { toast(err.message); }
+  };
   $("#n").onchange = e => { lines = +e.target.value; draw(); };
   await draw();
   $("#log").scrollTop = $("#log").scrollHeight;
@@ -1023,6 +1124,121 @@ VIEWS.notifications = async m => {
   $("#clear").onclick = async () => { if (!confirm("Delete all notifications?")) return; await api("/api/notifications/clear", { method: "POST" }); setUnread(0); show("notifications"); };
   if (d.items.some(n => !n.read)) { api("/api/notifications/read", { method: "POST" }).then(() => setUnread(0)).catch(() => {}); }
 };
+
+/* ---------------- 1.12: per-map statistics (Players) */
+async function loadMapStats(days = 30) {
+  const el = $("#mapstats"); if (!el) return;
+  let d; try { d = await api("/api/players/maps?days=" + days); } catch (e) { return; }
+  const rows = d.maps, top = Math.max(0.01, ...rows.map(r => r.player_hours));
+  el.innerHTML = `<div class="row" style="margin:22px 0 10px"><h2 style="margin:0">Maps</h2><span class="spacer"></span>
+      <div class="seg">${[7, 30, 90].map(n => `<button data-md="${n}" class="${n === days ? "on" : ""}">${n} days</button>`).join("")}</div></div>
+    ${rows.length ? `<div class="card tight"><table><thead><tr><th>Map</th><th>Time played by everyone</th><th class="num">Players</th><th class="num">Avg. stay</th><th class="num">Peak</th><th class="num">Map was on</th></tr></thead><tbody>
+      ${rows.map(r => `<tr><td><b>${esc(r.map)}</b>${r.map === d.current ? ' <span class="badge">now</span>' : ""}</td>
+        <td><div class="row" style="gap:8px;flex-wrap:nowrap"><div style="flex:1;min-width:60px;max-width:220px;height:8px;border-radius:4px;background:var(--surface-2)"><div style="width:${Math.round(r.player_hours / top * 100)}%;height:100%;border-radius:4px;background:var(--accent)"></div></div><span class="small">${r.player_hours >= 0.1 ? r.player_hours + " h" : r.players ? "&lt;0.1 h" : "0 h"}</span></div></td>
+        <td class="num">${r.players}</td><td class="num">${r.avg_session_min ? r.avg_session_min + " min" : "-"}</td><td class="num">${r.peak}</td><td class="num muted">${r.map_hours >= 0.1 ? r.map_hours + " h" : "&lt;0.1 h"}</td></tr>`).join("")}</tbody></table></div>
+      <p class="small muted" style="margin-top:6px">${(() => { const busy = rows.filter(r => r.map_hours >= 2).sort((a, b) => b.per_hour - a.per_hour); return busy.length > 1 ? `Busiest map per hour it's on: <b>${esc(busy[0].map)}</b> (${busy[0].per_hour} players on average). Quietest: <b>${esc(busy[busy.length - 1].map)}</b> (${busy[busy.length - 1].per_hour}).` : ""; })()} Counted since ${esc(fmtTime(d.since))}.</p>`
+    : `<p class="small muted">${d.since ? "Nobody has played since " + esc(fmtTime(d.since)) + "." : "Map statistics start now - they appear once people have played on this server."}</p>`}`;
+  el.querySelectorAll("[data-md]").forEach(b => b.onclick = () => loadMapStats(+b.dataset.md));
+}
+
+/* ---------------- 1.11: maintenance mode (Players) */
+async function loadMaint() {
+  const el = $("#maintcard"); if (!el) return;
+  let mt; try { mt = await api("/api/maintenance"); } catch (e) { return; }
+  el.innerHTML = `<div class="card" style="margin-bottom:16px;${mt.on ? "border-color:var(--warning)" : ""}"><div class="row"><h2 style="margin:0">Maintenance mode</h2><span class="spacer"></span>
+      <span class="pill ${mt.on ? "warn" : ""}"><span class="dot"></span>${mt.on ? "On since " + esc(fmtTime(mt.since)) : "Off"}</span></div>
+    <p class="small muted">Close the server while you work on it: only admins (Config → Moderation) and the names below can join. Everyone else sees your message. Works right away, no restart.</p>
+    <label class="f"><span>Message players see</span><input type="text" id="mt_msg" maxlength="200" value="${esc(mt.message)}"></label>
+    <label class="f"><span>May still join (one name per line)</span><textarea id="mt_allow" rows="2" spellcheck="false" style="min-height:52px">${esc(mt.allow.join("\n"))}</textarea></label>
+    <label class="toggle"><input type="checkbox" id="mt_kick" ${mt.kick ? "checked" : ""}><span><b>Disconnect the other players</b><small>They get a 10-second warning in the chat first</small></span></label>
+    <div class="row" style="margin-top:10px">${mt.on ? `<button class="btn primary" id="mt_off">End maintenance</button><button class="btn" id="mt_save">Save changes</button>` : `<button class="btn primary" id="mt_on">Start maintenance</button>`}</div></div>`;
+  const body = st => ({ state: st, message: $("#mt_msg").value, allow: $("#mt_allow").value, kick: $("#mt_kick").checked });
+  const go = async st => { try { const r = await api("/api/maintenance", { json: body(st) }); toast(r.note, 7000); loadMaint(); } catch (e) { toast(e.message, 6000); } };
+  if ($("#mt_on")) $("#mt_on").onclick = () => confirm("Start maintenance? Only admins and the listed players can join until you end it.") && go("on");
+  if ($("#mt_off")) $("#mt_off").onclick = () => go("off");
+  if ($("#mt_save")) $("#mt_save").onclick = () => go("on");
+}
+
+/* ---------------- 1.11: security presets + config history (Config) */
+async function loadCfg111() {
+  const el = $("#cfg111"); if (!el) return;
+  let pr, hi;
+  let tm = { items: [] };
+  try { [pr, hi, tm] = await Promise.all([api("/api/preset"), api("/api/config/history"), api("/api/timed")]); }
+  catch (e) { el.innerHTML = ""; return; }
+  const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const others = SERVERS.filter(x => x.id !== SERVER);
+  let tl = null; try { tl = await api("/api/tools"); } catch (e) {}
+  el.innerHTML = `
+    ${tl ? `<div class="card" style="margin-top:16px" id="toolscard"><div class="row"><h2 style="margin:0">In-game tools: teleport &amp; repair</h2><span class="spacer"></span><span class="pill ${tl.installed ? "good" : ""}"><span class="dot"></span>${tl.installed ? "On" : "Off"}</span></div>
+      <p class="small muted">Chat commands players can use. They need a tiny helper mod (${fmtSize(tl.size)}) that players download automatically when they join - EasyServer adds and removes it for you. It only moves or repairs the player's own car when the server allows it.</p>
+      <label class="toggle"><input type="checkbox" id="tl_tp" ${tl.tp ? "checked" : ""}><span><b>/tp name - teleport to another player</b><small>The other player has to type /tpaccept, so nobody can be followed against their will</small></span></label>
+      <label class="f" style="max-width:260px"><span>Wait between teleports (seconds)</span><input type="number" id="tl_tpcd" min="0" max="3600" value="${esc(tl.tp_cd)}"></label>
+      <label class="f" style="max-width:420px"><span>Repairing cars</span><select id="tl_rep">
+        <option value="free" ${tl.repair === "free" ? "selected" : ""}>Normal - reset keys work (and /repair)</option>
+        <option value="cooldown" ${tl.repair === "cooldown" ? "selected" : ""}>Realism - reset keys off, /repair every few minutes</option>
+        <option value="off" ${tl.repair === "off" ? "selected" : ""}>Hardcore - no resets, no repairs</option></select>
+        <small>Realism and Hardcore turn off the reset / recover / teleport keys for everyone on this server (good for roleplay and realism servers)</small></label>
+      <label class="f" style="max-width:260px"><span>Minutes between repairs (Realism)</span><input type="number" id="tl_repcd" min="1" max="120" value="${esc(tl.repair_cd)}"></label>
+      <div class="row"><button class="btn primary sm" id="tl_save">Save</button></div></div>` : ""}
+    <div class="card" style="margin-top:16px" id="presetcard"><h2>Security presets</h2>
+      <p class="small muted">One click sets who can join, guests, anti-bot checks, the chat filter and flood protection together. ${pr.current ? "Right now this server matches <b>" + esc(pr.presets.find(x => x.id === pr.current).label) + "</b>." : "Your current settings are a custom mix."}</p>
+      <div class="grid g2" style="gap:10px">${pr.presets.map(p => `<div class="card tight" style="padding:12px 14px;${p.id === pr.current ? "border-color:var(--accent)" : ""}"><div class="row"><b>${esc(p.label)}</b>${p.id === "most_secure" ? ' <span class="badge">recommended</span>' : ""}<span class="spacer"></span><button class="btn sm" data-preset="${esc(p.id)}" ${p.id === pr.current ? "disabled" : ""}>${p.id === pr.current ? "In use" : "Use"}</button></div>
+        <div class="small muted">${esc(p.about)}</div></div>`).join("")}</div>
+    </div>
+    <div class="card" style="margin-top:16px" id="timedcard"><h2>Announcements at set times</h2>
+      <p class="small muted">Say something in the game chat at a fixed time, e.g. "Race night starts at 21:00!" every Friday at 20:30. Only sent when someone is online${tm.discord ? "; tick Discord to post it there too (and to Telegram / the webhook if set up)" : ""}.</p>
+      <div id="tm_rows"></div>
+      <div class="row" style="margin-top:8px;gap:6px"><button class="btn sm" id="tm_add">+ Add</button><button class="btn sm primary" id="tm_save">Save</button></div>
+    </div>
+    <div class="card" style="margin-top:16px" id="histcard"><div class="row"><h2 style="margin:0">What changed?</h2><span class="spacer"></span><span class="small muted">Last ${hi.keep} versions are kept</span></div>
+      <p class="small muted">Every time the config is saved - here, by a template, a preset or a map switch - the old version is kept. Compare and go back with one click.</p>
+      ${hi.items.length ? `<table style="margin-top:6px"><tbody>${hi.items.slice(0, 15).map((v, i) => `<tr><td>${esc(fmtTime(v.t))}</td><td>${esc(v.who)}</td><td class="small muted">${esc(v.why || "")}</td>
+          <td class="num"><div class="row" style="justify-content:flex-end;gap:6px"><button class="btn sm" data-hdiff="${esc(v.id)}">${i === 0 ? "Show change" : "Compare with now"}</button>${i === 0 ? "" : `<button class="btn sm" data-hres="${esc(v.id)}">Restore</button>`}</div></td></tr>`).join("")}</tbody></table>`
+        : `<p class="small muted">No changes saved yet.</p>`}
+      ${others.length ? `<div class="row" style="margin-top:10px;gap:8px"><span class="small">Compare with another server:</span><select id="h_other" style="max-width:220px">${others.map(x => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join("")}</select><button class="btn sm" id="h_cmp">Compare</button></div>` : ""}
+      <div id="h_out"></div>
+    </div>`;
+  if ($("#tl_save")) $("#tl_save").onclick = async () => {
+    try { const r = await api("/api/tools", { json: { tp: $("#tl_tp").checked, tp_cd: $("#tl_tpcd").value, repair: $("#tl_rep").value, repair_cd: $("#tl_repcd").value } }); toast(r.note, 8000); loadCfg111(); } catch (e) { toast(e.message, 6000); }
+  };
+  let rows = tm.items.map(x => ({ ...x }));
+  const drawTm = () => {
+    $("#tm_rows").innerHTML = rows.length ? rows.map((x, i) => `<div class="card tight" style="padding:10px 12px;margin-top:8px" data-tm="${i}">
+      <div class="row" style="flex-wrap:wrap;gap:8px"><input type="time" data-k="at" value="${esc(x.at || "20:00")}" style="width:auto;color-scheme:light dark;color:inherit">
+        ${DAYS.map((d, j) => `<label class="badge" style="cursor:pointer"><input type="checkbox" data-day="${j}" ${(x.days || []).includes(j) ? "checked" : ""}> ${d}</label>`).join("")}
+        <span class="spacer"></span><label class="small"><input type="checkbox" data-k="discord" ${x.discord ? "checked" : ""}> Discord</label><label class="small"><input type="checkbox" data-k="on" ${x.on !== false ? "checked" : ""}> On</label><button class="btn sm danger" data-tmdel="${i}">✕</button></div>
+      <textarea data-k="text" rows="2" maxlength="600" style="min-height:44px;margin-top:6px" placeholder="Up to 3 lines">${esc(x.text || "")}</textarea></div>`).join("") : `<p class="small muted">None yet.</p>`;
+    $("#tm_rows").querySelectorAll("[data-tmdel]").forEach(b => b.onclick = () => { collect(); rows.splice(+b.dataset.tmdel, 1); drawTm(); });
+  };
+  const collect = () => { $("#tm_rows").querySelectorAll("[data-tm]").forEach(c => { const x = rows[+c.dataset.tm];
+    x.at = c.querySelector('[data-k="at"]').value; x.text = c.querySelector('[data-k="text"]').value; x.discord = c.querySelector('[data-k="discord"]').checked;
+    x.on = c.querySelector('[data-k="on"]').checked; x.days = [...c.querySelectorAll("[data-day]")].filter(y => y.checked).map(y => +y.dataset.day); }); };
+  drawTm();
+  $("#tm_add").onclick = () => { collect(); if (rows.length >= 20) return toast("At most 20"); rows.push({ at: "20:00", days: [4, 5], text: "", discord: false, on: true }); drawTm(); };
+  $("#tm_save").onclick = async () => { collect(); try { const r = await api("/api/timed", { json: { items: rows } }); toast(r.note); loadCfg111(); } catch (e) { toast(e.message, 6000); } };
+  el.querySelectorAll("[data-preset]").forEach(b => b.onclick = async () => {
+    const p = pr.presets.find(x => x.id === b.dataset.preset);
+    if (!confirm("Use the \"" + p.label + "\" preset?\n\n" + p.about + "\n\nYou can change every setting afterwards.")) return;
+    try { const r = await api("/api/preset", { json: { id: p.id, preset: p.label } }); toast(r.note, 8000); show("config"); } catch (e) { toast(e.message, 6000); }
+  });
+  const showDiff = d => {
+    const val = v => v === undefined || v === null ? "—" : typeof v === "object" ? JSON.stringify(v) : String(v);
+    $("#h_out").innerHTML = `<div style="margin-top:12px;border-top:1px solid var(--line);padding-top:12px"><p class="small"><b>${esc(d.a)}</b> → <b>${esc(d.b)}</b></p>
+      ${d.changes.length ? `<table><thead><tr><th>Setting</th><th>Before</th><th>After</th></tr></thead><tbody>${d.changes.map(c => `<tr><td class="mono">${esc(c.key)}</td><td>${esc(val(c.old))}</td><td><b>${esc(val(c.new))}</b></td></tr>`).join("")}</tbody></table>` : `<p class="small muted">No setting changed (only spacing or comments).</p>`}
+      ${d.lines.length ? `<details style="margin-top:8px"><summary class="small">Show the exact lines</summary><pre class="mono small" style="white-space:pre-wrap">${d.lines.map(l => `<span style="color:${l[0] === "+" ? "var(--good-ink)" : l[0] === "-" ? "var(--crit-ink)" : "inherit"}">${esc(l)}</span>`).join("\n")}</pre></details>` : ""}</div>`;
+  };
+  el.querySelectorAll("[data-hdiff]").forEach(b => b.onclick = async () => {
+    const i = hi.items.findIndex(x => x.id === b.dataset.hdiff);
+    const q = i === 0 && hi.items[1] ? "v=" + encodeURIComponent(hi.items[1].id) + "&w=" + encodeURIComponent(hi.items[0].id) : "v=" + encodeURIComponent(b.dataset.hdiff);
+    try { showDiff(await api("/api/config/diff?" + q)); } catch (e) { toast(e.message); }
+  });
+  el.querySelectorAll("[data-hres]").forEach(b => b.onclick = async () => {
+    if (!confirm("Go back to this version of the config? The current one is kept in the history too.")) return;
+    try { const r = await api("/api/config/restore", { json: { v: b.dataset.hres } }); toast(r.note, 7000); show("config"); } catch (e) { toast(e.message); }
+  });
+  if ($("#h_cmp")) $("#h_cmp").onclick = async () => { try { showDiff(await api("/api/config/diff?other=" + encodeURIComponent($("#h_other").value))); } catch (e) { toast(e.message); } };
+}
 
 /* ---------------- 1.7: templates, map rotation, welcome & announcements (Config) */
 async function loadCfg17() {
@@ -1236,6 +1452,82 @@ async function loadPhone() {
   if ($("#nt_copy")) $("#nt_copy").onclick = () => { navigator.clipboard && navigator.clipboard.writeText(nt.subscribe.split("/").pop()).then(() => toast("Copied")); };
 }
 
+/* ---------------- users + roles (Settings, owner only) */
+async function loadInteg() {
+  const el = $("#integcard"); if (!el) return;
+  let d; try { d = await api("/api/integrations"); } catch (e) { el.innerHTML = `<h2>Telegram, Slack &amp; other apps</h2><p class="small muted">${esc(e.message)}</p>`; return; }
+  const T = d.telegram, W = d.webhook;
+  el.innerHTML = `<h2>Telegram, Slack &amp; other apps</h2>
+    <p class="small muted">The same alerts as Discord and email (the switches under Notifications decide which), sent to more places. Security alerts always go to every channel that is set up.</p>
+    <div class="grid g2" style="gap:16px">
+      <div><h3 style="margin:0 0 6px;font-size:15px">Telegram</h3>
+        <ol class="small muted" style="margin:0 0 8px;padding-left:18px"><li>In Telegram, open <b>@BotFather</b>, send <span class="mono">/newbot</span> and copy the token.</li><li>Paste it below and save.</li><li>Send your new bot a message (or add it to a group), then click <b>Find my chat</b>.</li></ol>
+        <label class="f"><span>Bot token</span><input type="password" id="tg_token" autocomplete="off" placeholder="${T.has_token ? "Saved (encrypted) - paste a new one to replace" : "123456789:ABC…"}"></label>
+        <label class="f"><span>Chat ID</span><div class="row" style="gap:6px"><input type="text" id="tg_chat" value="${esc(T.chat)}" placeholder="found automatically"><button class="btn sm" id="tg_find" ${T.has_token ? "" : "disabled"}>Find my chat</button></div></label>
+        <label class="toggle"><input type="checkbox" id="tg_on" ${T.enabled ? "checked" : ""}><span><b>Send alerts to Telegram</b></span></label>
+        <div class="row" style="gap:6px"><button class="btn sm primary" id="tg_save">Save</button><button class="btn sm" id="tg_test" ${T.has_token && T.chat ? "" : "disabled"}>Send test</button>${T.has_token ? `<button class="btn sm" id="tg_del">Remove</button>` : ""}</div></div>
+      <div><h3 style="margin:0 0 6px;font-size:15px">Any app with a webhook</h3>
+        <p class="small muted" style="margin:0 0 8px">Slack, Mattermost, Rocket.Chat, Google Chat, Microsoft Teams (Workflows), Home Assistant, n8n, Zapier… Paste the incoming-webhook address the app gives you.</p>
+        <label class="f"><span>Webhook address</span><input type="password" id="wh_url" autocomplete="off" placeholder="${W.has_url ? "Saved: " + esc(W.host) + " - paste a new one to replace" : "https://hooks.slack.com/services/…"}"></label>
+        <label class="toggle"><input type="checkbox" id="wh_on" ${W.enabled ? "checked" : ""}><span><b>Send alerts to the webhook</b></span></label>
+        <div class="row" style="gap:6px"><button class="btn sm primary" id="wh_save">Save</button><button class="btn sm" id="wh_test" ${W.has_url ? "" : "disabled"}>Send test</button>${W.has_url ? `<button class="btn sm" id="wh_del">Remove</button>` : ""}</div></div>
+    </div>
+    <div style="border-top:1px solid var(--line);margin-top:14px;padding-top:12px">
+      <label class="toggle"><input type="checkbox" id="ev_ads" ${d.event_ads ? "checked" : ""}><span><b>Advertise events automatically</b><small>Posts to ${d.discord ? "Discord" : "Discord (once the webhook is set)"}, Telegram and the webhook when you plan a new event and the day before it, and reminds players in the game chat every 30 minutes in the 3 hours before. Events are set up in Config → Events</small></span></label></div>`;
+  const send = async (body, again = true) => { try { const r = await api("/api/integrations", { json: body }); toast(r.note, 6000); if (again) loadInteg(); } catch (e) { toast(e.message, 8000); } };
+  $("#tg_save").onclick = () => { const b = { telegram_enabled: $("#tg_on").checked, telegram_chat: $("#tg_chat").value }; if ($("#tg_token").value.trim()) b.telegram_token = $("#tg_token").value.trim(); send(b); };
+  $("#tg_find").onclick = () => send({ telegram_find: true });
+  $("#tg_test").onclick = () => send({ test: "telegram" }, false);
+  if ($("#tg_del")) $("#tg_del").onclick = () => confirm("Remove the Telegram bot token?") && send({ telegram_token: "" });
+  $("#wh_save").onclick = () => { const b = { webhook_enabled: $("#wh_on").checked }; if ($("#wh_url").value.trim()) b.webhook_url = $("#wh_url").value.trim(); send(b); };
+  $("#wh_test").onclick = () => send({ test: "webhook" }, false);
+  if ($("#wh_del")) $("#wh_del").onclick = () => confirm("Remove the webhook?") && send({ webhook_url: "" });
+  $("#ev_ads").onchange = () => send({ event_ads: $("#ev_ads").checked });
+}
+
+async function loadStatusPage() {
+  const el = $("#statuscard"); if (!el) return;
+  let d; try { d = await api("/api/statuspage"); } catch (e) { el.innerHTML = `<h2>Public status page</h2><p class="small muted">${esc(e.message)}</p>`; return; }
+  const P = d.preview;
+  el.innerHTML = `<div class="row"><h2 style="margin:0">Public status page</h2><span class="spacer"></span><span class="pill ${d.on ? "good" : ""}"><span class="dot"></span>${d.on ? "On" : "Off"}</span></div>
+    <p class="small muted">A simple page anyone can open without logging in: is the server up, how many players, the map, the next event and the uptime of the last 30 days. No addresses, settings or admin buttons. Also as JSON for bots and websites (<span class="mono">/status.json</span>).</p>
+    <label class="toggle"><input type="checkbox" id="sp_on" ${d.on ? "checked" : ""}><span><b>Turn on the status page</b></span></label>
+    <label class="toggle"><input type="checkbox" id="sp_players" ${d.players ? "checked" : ""}><span><b>Show the names of online players</b><small>Off = only the number</small></span></label>
+    <label class="toggle"><input type="checkbox" id="sp_mods" ${d.mods ? "checked" : ""}><span><b>Show the mods and the download size</b><small>So players know what they'll download before they launch the game</small></span></label>
+    <label class="f"><span>Page title</span><input type="text" id="sp_title" maxlength="80" value="${esc(d.title)}" placeholder="${esc(P.title)}"></label>
+    ${d.on ? `<p class="small">On your network: <a href="${esc(d.lan_url)}" target="_blank" rel="noopener">${esc(d.lan_url)}</a>${d.remote ? `<br>On the internet: <a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.url)}</a>` : `<br><span class="muted">Players outside your network can only open it once internet access to the dashboard is on (Network). Or share the Discord status message instead.</span>`}</p>` : ""}
+    <div class="row" style="flex-wrap:wrap;gap:6px">${P.servers.map(x => `<span class="badge">${esc(x.name)}: ${esc(x.state)}${x.history.d30 != null ? " · " + x.history.d30 + "% (30 d)" : ""}</span>`).join("")}</div>
+    <div class="row" style="margin-top:10px"><button class="btn sm primary" id="sp_save">Save</button></div>`;
+  $("#sp_save").onclick = async () => {
+    if ($("#sp_on").checked && !d.on && !confirm("Turn on the public status page? Anyone who can reach your dashboard address can see it without logging in.")) return;
+    try { const r = await api("/api/statuspage", { json: { on: $("#sp_on").checked, players: $("#sp_players").checked, mods: $("#sp_mods").checked, title: $("#sp_title").value } }); toast(r.note, 6000); loadStatusPage(); } catch (e) { toast(e.message, 6000); }
+  };
+}
+
+async function loadUsers() {
+  const el = $("#userscard"); if (!el) return;
+  let d; try { d = await api("/api/users"); } catch (e) { el.innerHTML = `<h2>Users &amp; roles</h2><p class="small muted">${esc(e.message)}</p>`; return; }
+  const RL = { admin: "Admin - everything except accounts, passwords and internet access", moderator: "Moderator - players: kick, mute, ban, allow-list, chat, start/restart", viewer: "Viewer - can look, can't change anything" };
+  el.innerHTML = `<h2>Users &amp; roles</h2>
+    <p class="small muted">Give friends their own login with only the rights they need. You (the owner) log in with the main password and an empty name. Extra accounts only work on your home network - from the internet only the owner can log in. Everything they do shows up in Logs → Activity log.</p>
+    ${d.users.length ? d.users.map(u => `<div class="row small" style="padding:6px 0;border-top:1px solid var(--line);gap:8px;flex-wrap:wrap"><b>${esc(u.name)}</b>${u.disabled ? '<span class="badge warn">disabled</span>' : ""}
+      <select data-role="${esc(u.name)}" style="width:auto">${d.roles.map(r => `<option value="${r}" ${r === u.role ? "selected" : ""}>${r}</option>`).join("")}</select>
+      <span class="muted">${u.last_login ? "last login " + esc(ago(u.last_login)) : "never logged in"}</span><span class="spacer"></span>
+      <button class="btn sm" data-upw="${esc(u.name)}">New password</button><button class="btn sm" data-udis="${esc(u.name)}">${u.disabled ? "Enable" : "Disable"}</button><button class="btn sm danger" data-udel="${esc(u.name)}">Delete</button></div>`).join("") : `<p class="small muted">No extra accounts yet.</p>`}
+    <div class="grid g2" style="gap:0 12px;margin-top:10px">
+      <label class="f"><span>Name</span><input id="nu_name" maxlength="24" autocomplete="off" spellcheck="false" placeholder="e.g. dani"></label>
+      <label class="f"><span>Role</span><select id="nu_role">${d.roles.map(r => `<option value="${r}" ${r === "moderator" ? "selected" : ""}>${r}</option>`).join("")}</select></label>
+      <label class="f"><span>Password</span><input id="nu_pw" type="password" autocomplete="new-password" placeholder="at least 10 characters"></label>
+      <div class="small muted" style="align-self:center">${Object.entries(RL).map(([k, v]) => `<div>${esc(v)}</div>`).join("")}</div></div>
+    <button class="btn primary" id="nu_add">Add account</button>`;
+  const call = async body => { try { await api("/api/users", { json: body }); loadUsers(); toast("Saved"); } catch (e) { toast(e.message, 6000); } };
+  $("#nu_add").onclick = () => call({ action: "add", name: $("#nu_name").value.trim(), role: $("#nu_role").value, password: $("#nu_pw").value });
+  el.querySelectorAll("[data-role]").forEach(x => x.onchange = () => call({ action: "role", name: x.dataset.role, role: x.value }));
+  el.querySelectorAll("[data-upw]").forEach(x => x.onclick = () => { const pw = prompt("New password for " + x.dataset.upw + " (at least 10 characters):"); if (pw) call({ action: "password", name: x.dataset.upw, password: pw }); });
+  el.querySelectorAll("[data-udis]").forEach(x => x.onclick = () => call({ action: "disable", name: x.dataset.udis }));
+  el.querySelectorAll("[data-udel]").forEach(x => x.onclick = () => { if (confirm("Delete the account " + x.dataset.udel + "?")) call({ action: "delete", name: x.dataset.udel }); });
+}
+
 /* ---------------- sleep + Wake-on-LAN (Settings) */
 const ROUTERS = [
   ["fritz", "FRITZ!Box", m => `<ol class="small"><li>Open <b>fritz.box</b> → <b>Home Network</b> → <b>Network</b> → <b>Network Connections</b>.</li>
@@ -1443,7 +1735,10 @@ VIEWS.settings = async m => {
 
   <div class="card" style="margin:0 0 16px" id="phonecard"><h2>Phone app</h2><p class="muted small">Loading…</p></div>
   <div class="card" style="margin:0 0 16px" id="botcard"><h2>Discord bot</h2><p class="muted small">Loading…</p></div>
+  <div class="card" style="margin:0 0 16px" id="integcard"><h2>Telegram, Slack &amp; other apps</h2><p class="muted small">Loading…</p></div>
+  ${SESSION.role === "owner" || !SESSION.role ? `<div class="card" style="margin:0 0 16px" id="statuscard"><h2>Public status page</h2><p class="muted small">Loading…</p></div>` : ""}
   <div class="card" style="margin:0 0 16px" id="powercard"><h2>Sleep &amp; wake-up</h2><p class="muted small">Loading…</p></div>
+  ${SESSION.role === "owner" ? `<div class="card" style="margin:0 0 16px" id="userscard"><h2>Users &amp; roles</h2><p class="muted small">Loading…</p></div>` : ""}
 
   <div class="grid g2">
     <div class="card"><h2>Mod virus check</h2><p class="small muted">Optional VirusTotal key (free account at virustotal.com → your name → API key). Stored encrypted.</p>
@@ -1517,6 +1812,9 @@ VIEWS.settings = async m => {
   loadBot();
   loadPhone();
   loadPower();
+  loadUsers();
+  loadInteg();
+  loadStatusPage();
   loadSet17();
   ["security_alerts", "security_reminders"].forEach(k => $("#" + k).onchange = () => saveNotif(false).catch(e => toast(e.message)));
   const popNote = () => { $("#popupnote").textContent = !window.Notification ? (window.isSecureContext ? "This browser has no pop-ups" : "Pop-ups need HTTPS (turn it on below) or http://localhost") : Notification.permission === "granted" ? "On for this browser" : Notification.permission === "denied" ? "Blocked - allow notifications for this site in the browser settings" : ""; };
