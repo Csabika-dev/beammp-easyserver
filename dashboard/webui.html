@@ -1004,6 +1004,40 @@ VIEWS.notifications = async m => {
   if (d.items.some(n => !n.read)) { api("/api/notifications/read", { method: "POST" }).then(() => setUnread(0)).catch(() => {}); }
 };
 
+/* ---------------- Discord bot (Settings) */
+async function loadBot(keepOpen) {
+  const el = $("#botcard"); if (!el) return;
+  let b; try { b = await api("/api/discordbot"); } catch (e) { el.innerHTML = `<h2>Discord bot</h2><p class="small muted">${esc(e.message)}</p>`; return; }
+  const pill = !b.enabled ? `<span class="badge">Off</span>` : b.state === "online" ? `<span class="badge good">Online${b.bot_name ? " as " + esc(b.bot_name) : ""}</span>`
+    : b.state === "error" ? `<span class="badge bad">Problem</span>` : `<span class="badge warn">Connecting…</span>`;
+  const g = b.guilds.find(x => x.id === b.guild);
+  el.innerHTML = `<h2>Discord bot ${pill}</h2>
+    <p class="small muted">Control your servers from Discord with slash commands. <b>/status</b> shows every server with online players, map, CPU and memory - anyone in your Discord can use it. <b>/start</b>, <b>/stop</b> and <b>/restart</b> only work for people with <b>Manage Server</b> in your Discord, or the people you list below. A server has to be started from the dashboard once (to check its settings) before Discord can start it.</p>
+    ${b.error && b.enabled ? `<div class="issue error"><span class="ic">✕</span><span>${esc(b.error)}</span></div>` : ""}
+    <details style="margin:8px 0" ${b.has_token && !keepOpen ? "" : "open"}><summary class="small"><b>How to set it up (5 minutes)</b></summary><ol class="small">
+      <li>Open <a href="https://discord.com/developers/applications" target="_blank" rel="noopener noreferrer">discord.com/developers/applications</a> → <b>New Application</b> → give it a name (for example "BeamMP server").</li>
+      <li>Open <b>Bot</b> on the left → <b>Reset Token</b> → <b>Copy</b>. On the same page turn <b>Public Bot</b> off, so only you can add it to a Discord server.</li>
+      <li>Paste the token below, turn the bot on and press Save.</li>
+      <li>When it says <b>Online</b>, click <b>Add the bot to your Discord</b> and pick your Discord server.</li>
+      <li>Type <b>/status</b> in any channel. (New commands can take a minute to show up - restart Discord if they don't.)</li></ol></details>
+    <label class="toggle"><input type="checkbox" id="bot_on" ${b.enabled ? "checked" : ""}><span><b>Turn on the Discord bot</b><small>Off by default. The bot connects out to Discord - no port forwarding needed</small></span></label>
+    <label class="f" style="margin-top:10px"><span>Bot token</span><input type="password" id="bot_token" placeholder="${b.has_token ? "Saved (encrypted) - paste a new one to replace" : "Paste the bot token"}" autocomplete="off" spellcheck="false"><small>Keep it secret - anyone with the token can control the bot. Stored encrypted.</small></label>
+    ${b.invite ? `<p><a class="btn sm" href="${esc(b.invite)}" target="_blank" rel="noopener noreferrer">Add the bot to your Discord</a></p>` : ""}
+    ${b.guilds.length ? `<label class="f"><span>Discord server the bot answers in</span><select id="bot_guild"><option value="">- pick one -</option>${b.guilds.map(x => `<option value="${esc(x.id)}" ${x.id === b.guild ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select><small>Commands only appear and only work there. If someone else adds your bot to another Discord, it ignores them.</small></label>`
+      : b.enabled && b.state === "online" ? `<p class="small muted">The bot isn't in any Discord server yet - use the button above.</p>` : ""}
+    ${b.guild && !g && b.guilds.length ? `<p class="small" style="color:var(--warn-ink)">The bot is no longer in the Discord server it was set up for - pick another one.</p>` : ""}
+    <label class="f"><span>Also allow these people to start/stop (optional)</span><textarea id="bot_users" rows="2" spellcheck="false" placeholder="123456789012345678" style="min-height:60px">${esc(b.users.join("\n"))}</textarea><small>Discord user IDs, one per line. In Discord: Settings → Advanced → Developer Mode, then right-click a person → Copy User ID. People with Manage Server can always use the commands.</small></label>
+    <div class="row"><button class="btn primary" id="bot_save">Save</button><button class="btn" id="bot_refresh">Refresh</button></div>`;
+  $("#bot_refresh").onclick = () => loadBot(true);
+  $("#bot_save").onclick = async () => {
+    const body = { enabled: $("#bot_on").checked, users: $("#bot_users").value };
+    const t = $("#bot_token").value.trim(); if (t) body.token = t;
+    const gs = $("#bot_guild"); if (gs) body.guild = gs.value;
+    try { await api("/api/discordbot", { json: body }); toast(body.enabled ? "Saved - connecting to Discord…" : "Saved"); setTimeout(() => loadBot(true), body.enabled ? 4000 : 0); }
+    catch (e) { toast(e.message, 6000); }
+  };
+}
+
 /* ---------------- settings */
 VIEWS.settings = async m => {
   const s = await api("/api/settings");
@@ -1048,6 +1082,8 @@ VIEWS.settings = async m => {
     </div>
   </div>
   <div class="row" style="margin:16px 0 30px"><button class="btn primary" id="savenotif">Save notification settings</button></div>
+
+  <div class="card" style="margin:0 0 16px" id="botcard"><h2>Discord bot</h2><p class="muted small">Loading…</p></div>
 
   <div class="grid g2">
     <div class="card"><h2>Mod virus check</h2><p class="small muted">Optional VirusTotal key (free account at virustotal.com → your name → API key). Stored encrypted.</p>
@@ -1117,6 +1153,7 @@ VIEWS.settings = async m => {
     if (!quiet) toast("Saved");
   }
   $("#savenotif").onclick = () => saveNotif(false).catch(e => toast(e.message));
+  loadBot();
   ["security_alerts", "security_reminders"].forEach(k => $("#" + k).onchange = () => saveNotif(false).catch(e => toast(e.message)));
   const popNote = () => { $("#popupnote").textContent = !window.Notification ? (window.isSecureContext ? "This browser has no pop-ups" : "Pop-ups need HTTPS (turn it on below) or http://localhost") : Notification.permission === "granted" ? "On for this browser" : Notification.permission === "denied" ? "Blocked - allow notifications for this site in the browser settings" : ""; };
   popNote();
