@@ -9,6 +9,10 @@
 --   mapvote.txt    written by the dashboard: "mode=on|off" + maps players may vote for
 --   extras.txt     written by the dashboard: car cleanup + chat command settings (key=value)
 --   records.tsv    server records for /top (name, top speed, distance, longest drive)
+--   moderation.txt written by the dashboard: admins, chat filter, anti-spam, anti-bot settings
+--   bans.txt       written by the dashboard: name<TAB>until (0 = forever)<TAB>reason
+--   actions.txt    written by the dashboard: kick / mute / chat messages to run now
+--   verified.txt   players who passed the anti-bot check (one name per line)
 
 local DIR = "Resources/Server/EasyServerStats/"
 local EVENTS = DIR .. "events.log"
@@ -17,6 +21,10 @@ local ALLOW = DIR .. "allowlist.txt"
 local VOTEFILE = DIR .. "mapvote.txt"
 local EXTRAS = DIR .. "extras.txt"
 local RECORDS = DIR .. "records.tsv"
+local MODFILE = DIR .. "moderation.txt"
+local BANS = DIR .. "bans.txt"
+local ACTIONS = DIR .. "actions.txt"
+local VERIFIED = DIR .. "verified.txt"
 local MAX_LOG = 20 * 1024 * 1024   -- roll the log over at 20 MB
 
 local function jsonEscape(s)
@@ -64,6 +72,7 @@ end
 function esOnJoin(id)
   event("join", string.format(',"id":%d,"name":"%s"', id, jsonEscape(MP.GetPlayerName(id))))
   writeOnline()
+  if esModJoin then esModJoin(id) end
 end
 
 local votes = {}          -- player id -> map name
@@ -76,6 +85,7 @@ local COOLDOWN = 300      -- at most one map change per 5 minutes
 function esOnLeave(id)
   votes[id] = nil
   if esPlayerLeft then esPlayerLeft(id) end
+  if esModLeft then esModLeft(id) end
   event("leave", string.format(',"id":%d,"name":"%s"', id, jsonEscape(MP.GetPlayerName(id))))
   writeOnline()
 end
@@ -104,6 +114,10 @@ local function readAllowList()
 end
 
 function esOnAuth(name, role, isGuest, identifiers)
+  if esModAuth then
+    local why = esModAuth(tostring(name or ""), isGuest, identifiers)
+    if why then return why end
+  end
   local on, names = readAllowList()
   if not on then return end
   name = tostring(name or "")
@@ -138,6 +152,7 @@ end
 local function say(id, text) MP.SendChatMessage(id, text) end
 
 function esOnChat(id, name, message)
+  if esModChat and esModChat(id, tostring(name or ""), tostring(message or "")) then return 1 end
   local cmd, arg = tostring(message or ""):match("^%s*/(%a+)%s*(.-)%s*$")
   if not cmd or cmd:lower() ~= "vote" then return esExtraChat(id, name, message, cmd, arg) end
   local on, maps = readVote()
@@ -465,11 +480,362 @@ function esExtraChat(id, name, message, cmd, arg)
   end
 end
 
+-- ---------------------------------------------------------------------------
+-- Moderation + anti-bot (Config -> Moderation and Players in the dashboard).
+-- Bans are stored by the dashboard (bans.txt). Bans made in game take effect
+-- right away and are sent to the dashboard as events, which saves them.
+local mod = { admins = {}, filter = false, words = {}, spam = false, spam_limit = 5,
+              antibot = false, verify = true, per_ip = 3, join_flood = 8, guests = true }
+local modRead = -1000
+
+local function splitList(v, lower)
+  local t = {}
+  for w in tostring(v or ""):gmatch("[^,]+") do
+    w = trim(w)
+    if lower then w = w:lower() end
+    if w ~= "" and #t < 500 then t[#t + 1] = w end
+  end
+  return t
+end
+
+local function readMod(now)
+  if now - modRead < 10 then return end
+  modRead = now
+  local f = io.open(MODFILE, "r")
+  if not f then return end
+  local m = { admins = {}, filter = false, words = {}, spam = false, spam_limit = 5,
+              antibot = false, verify = true, per_ip = 3, join_flood = 8, guests = true }
+  for line in f:lines() do
+    local k, v = trim(line):match("^([%w_]+)%s*=%s*(.-)$")
+    if k == "admins" then
+      for _, n in ipairs(splitList(v, true)) do m.admins[n] = true end
+    elseif k == "words" then m.words = splitList(v, true)
+    elseif k == "filter" or k == "spam" or k == "antibot" or k == "verify" then m[k] = v:lower() == "on"
+    elseif k == "guests" then m.guests = v:lower() ~= "block"
+    elseif k == "spam_limit" or k == "per_ip" or k == "join_flood" then
+      local n = tonumber(v); if n and n >= 0 and n <= 100 then m[k] = math.floor(n) end
+    end
+  end
+  f:close()
+  mod = m
+end
+
+local gameBans, unbanned = {}, {}      -- in-game changes until the dashboard saves them
+local muted = {}                        -- lower name -> until
+local function now_() return os.time() end
+
+local function banFor(lname)
+  if unbanned[lname] then return nil end
+  local gb = gameBans[lname]
+  if gb and (gb.untilT == 0 or gb.untilT > now_()) then return gb end
+  local f = io.open(BANS, "r")
+  if not f then return nil end
+  local found = nil
+  for line in f:lines() do
+    local n, u, r = line:match("^([^\t]+)\t(%d+)\t?(.*)$")
+    if n and trim(n):lower() == lname then
+      u = tonumber(u)
+      if u == 0 or u > now_() then found = { untilT = u, reason = r } end
+    end
+  end
+  f:close()
+  return found
+end
+
+local function fmtUntil(u)
+  if u == 0 then return "forever" end
+  local left = u - now_()
+  if left >= 86400 then return "for " .. math.ceil(left / 86400) .. " more day(s)" end
+  if left >= 3600 then return "for " .. math.ceil(left / 3600) .. " more hour(s)" end
+  return "for " .. math.max(1, math.ceil(left / 60)) .. " more minute(s)"
+end
+
+local verified = nil
+local function isVerified(lname)
+  if not verified then
+    verified = {}
+    local f = io.open(VERIFIED, "r")
+    if f then for line in f:lines() do verified[trim(line):lower()] = true end f:close() end
+  end
+  return verified[lname]
+end
+local function markVerified(lname)
+  isVerified(lname)
+  verified[lname] = true
+  local f = io.open(VERIFIED, "a")
+  if f then f:write(lname, "\n") f:close() end
+end
+
+local authIp, idIp = {}, {}            -- lower name -> ip at login; player id -> ip
+local recentJoins, floodUntil = {}, 0
+
+local function isPrivate(ip)
+  ip = tostring(ip or "")
+  return ip == "" or ip:match("^127%.") or ip:match("^10%.") or ip:match("^192%.168%.")
+      or ip:match("^172%.1[6-9]%.") or ip:match("^172%.2%d%.") or ip:match("^172%.3[01]%.")
+      or ip == "::1" or ip:lower():match("^f[cd]") or ip:lower():match("^fe80")
+end
+
+local function badName(lname)
+  if lname:find("http", 1, true) or lname:find("www.", 1, true) or lname:find("discord.gg", 1, true)
+      or lname:find("@everyone", 1, true) or lname:find("@here", 1, true) then return true end
+  for _, w in ipairs(mod.words) do if lname:find(w, 1, true) then return true end end
+  return false
+end
+
+function esModAuth(name, isGuest, identifiers)
+  readMod(now_())
+  local lname = name:lower()
+  local b = banFor(lname)
+  if b then
+    event("refused", string.format(',"name":"%s","why":"banned"', jsonEscape(name)))
+    return "You are banned from this server " .. fmtUntil(b.untilT) .. (b.reason ~= "" and (". Reason: " .. b.reason) or ".")
+  end
+  if mod.filter and badName(lname) then
+    event("refused", string.format(',"name":"%s","why":"name"', jsonEscape(name)))
+    return "Your name isn't allowed on this server (links, @everyone or blocked words)."
+  end
+  if not mod.antibot then return end
+  if isGuest and not mod.guests then
+    event("refused", string.format(',"name":"%s","why":"guest"', jsonEscape(name)))
+    return "Guests can't join this server - log in with your BeamMP account."
+  end
+  local ip = type(identifiers) == "table" and tostring(identifiers.ip or "") or ""
+  authIp[lname] = ip
+  if mod.per_ip > 0 and not isPrivate(ip) then
+    local n = 0
+    for _, other in pairs(idIp) do if other == ip then n = n + 1 end end
+    if n >= mod.per_ip then
+      event("refused", string.format(',"name":"%s","why":"per_ip"', jsonEscape(name)))
+      return "Too many players are already connected from your internet connection."
+    end
+  end
+  if mod.join_flood > 0 and not isVerified(lname) then
+    local t, keep = now_(), {}
+    for _, x in ipairs(recentJoins) do if x > t - 60 then keep[#keep + 1] = x end end
+    recentJoins = keep
+    if t < floodUntil or #recentJoins >= mod.join_flood then
+      if t >= floodUntil then
+        floodUntil = t + 120
+        event("joinflood", string.format(',"count":%d', #recentJoins))
+      end
+      return "Lots of new players are joining right now - please try again in a few minutes."
+    end
+    recentJoins[#recentJoins + 1] = t
+  end
+end
+
+local pendingV = {}                    -- player id -> { code, deadline, nextMsg }
+
+function esModJoin(id)
+  local name = tostring(MP.GetPlayerName(id) or "")
+  local lname = name:lower()
+  idIp[id] = authIp[lname]
+  readMod(now_())
+  if mod.antibot and mod.verify and not isVerified(lname) and not mod.admins[lname] then
+    pendingV[id] = { code = tostring(math.random(1000, 9999)), deadline = now_() + 120, nextMsg = now_() }
+  end
+end
+
+function esModLeft(id)
+  pendingV[id], idIp[id] = nil, nil
+end
+
+local function findPlayer(q)
+  q = trim(q):lower()
+  if q == "" then return nil end
+  local exact, hits = nil, {}
+  for pid, n in pairs(MP.GetPlayers() or {}) do
+    local ln = tostring(n):lower()
+    if ln == q then exact = pid end
+    if ln:sub(1, #q) == q then hits[#hits + 1] = pid end
+  end
+  if exact then return exact end
+  if #hits == 1 then return hits[1] end
+  return nil, #hits > 1
+end
+
+local function parseDuration(s)
+  s = tostring(s or ""):lower()
+  if s == "perm" or s == "forever" then return 0 end
+  local n, u = s:match("^(%d+)([mhd]?)$")
+  if not n then return nil end
+  n = tonumber(n)
+  return n * (u == "d" and 86400 or u == "h" and 3600 or 60)
+end
+
+local spamTimes, strikes = {}, {}
+
+local function adminCommand(id, name, cmd, arg)
+  local who, rest = arg:match("^(%S+)%s*(.-)$")
+  if cmd == "unban" then
+    if not who then say(id, "Use: /unban <name>") return end
+    local l = who:lower()
+    unbanned[l], gameBans[l] = true, nil
+    event("unban", string.format(',"name":"%s","by":"%s"', jsonEscape(who), jsonEscape(name)))
+    say(id, who .. " is unbanned.")
+    return
+  end
+  if not who then say(id, "Use: /" .. cmd .. " <player> ...") return end
+  local pid, many = findPlayer(who)
+  local target = pid and tostring(MP.GetPlayerName(pid)) or who
+  if cmd == "kick" then
+    if not pid then say(id, many and "More than one player matches - type more of the name." or "No player called " .. who .. " is online.") return end
+    MP.DropPlayer(pid, rest ~= "" and ("Kicked: " .. rest) or "Kicked by an admin")
+    event("kick", string.format(',"name":"%s","by":"%s","reason":"%s"', jsonEscape(target), jsonEscape(name), jsonEscape(rest)))
+    say(-1, target .. " was kicked.")
+  elseif cmd == "ban" then
+    if many then say(id, "More than one player matches - type more of the name.") return end
+    local dur, reason = rest:match("^(%S+)%s*(.-)$")
+    local secs = parseDuration(dur)
+    if secs == nil then secs, reason = 0, rest end
+    local l = target:lower()
+    gameBans[l] = { untilT = secs == 0 and 0 or now_() + secs, reason = reason or "" }
+    unbanned[l] = nil
+    event("ban", string.format(',"name":"%s","by":"%s","until":%d,"reason":"%s"', jsonEscape(target), jsonEscape(name),
+      gameBans[l].untilT, jsonEscape(reason or "")))
+    if pid then MP.DropPlayer(pid, "Banned " .. fmtUntil(gameBans[l].untilT) .. ((reason or "") ~= "" and (": " .. reason) or "")) end
+    say(-1, target .. " was banned " .. fmtUntil(gameBans[l].untilT) .. ".")
+  elseif cmd == "mute" then
+    if not pid then say(id, "No player called " .. who .. " is online.") return end
+    local mins = tonumber(rest:match("^(%d+)")) or 10
+    muted[target:lower()] = now_() + mins * 60
+    event("mute", string.format(',"name":"%s","by":"%s","minutes":%d', jsonEscape(target), jsonEscape(name), mins))
+    say(-1, target .. " is muted for " .. mins .. " minutes.")
+  elseif cmd == "unmute" then
+    muted[target:lower()] = nil
+    say(id, target .. " can chat again.")
+  end
+end
+
+-- returns true when the message must not be shown
+function esModChat(id, name, message)
+  local t = now_()
+  readMod(t)
+  local lname = name:lower()
+  local p = pendingV[id]
+  if p then
+    local code = message:match("^%s*/verify%s+(%d+)%s*$") or message:match("^%s*(%d%d%d%d)%s*$")
+    if code == p.code then
+      pendingV[id] = nil
+      markVerified(lname)
+      say(id, "Thanks, you're verified - have fun!")
+    else
+      say(id, "First type /verify " .. p.code .. " to show you're not a bot.")
+    end
+    return true
+  end
+  local m = muted[lname]
+  if m and m > t then
+    say(id, "You are muted for " .. math.ceil((m - t) / 60) .. " more minute(s).")
+    return true
+  end
+  local cmd, arg = message:match("^%s*/(%a+)%s*(.-)%s*$")
+  cmd = cmd and cmd:lower()
+  if cmd == "kick" or cmd == "ban" or cmd == "unban" or cmd == "mute" or cmd == "unmute" then
+    if not mod.admins[lname] then say(id, "Only admins can use /" .. cmd .. ".") return true end
+    adminCommand(id, name, cmd, arg)
+    return true
+  end
+  if mod.spam and mod.spam_limit > 0 and not mod.admins[lname] then
+    local keep = {}
+    for _, x in ipairs(spamTimes[id] or {}) do if x > t - 10 then keep[#keep + 1] = x end end
+    keep[#keep + 1] = t
+    spamTimes[id] = keep
+    if #keep > mod.spam_limit then
+      muted[lname] = t + 120
+      spamTimes[id] = {}
+      event("mute", string.format(',"name":"%s","by":"anti-spam","minutes":2', jsonEscape(name)))
+      say(id, "Slow down - you're muted for 2 minutes for spamming.")
+      return true
+    end
+  end
+  if mod.filter and not cmd then
+    local low = message:lower()
+    local bad = low:find("@everyone", 1, true) or low:find("@here", 1, true) or low:find("discord.gg/", 1, true)
+    if not bad then for _, w in ipairs(mod.words) do if low:find(w, 1, true) then bad = true break end end end
+    if bad then
+      local keep = {}
+      for _, x in ipairs(strikes[id] or {}) do if x > t - 600 then keep[#keep + 1] = x end end
+      keep[#keep + 1] = t
+      strikes[id] = keep
+      if #keep >= 3 then
+        muted[lname] = t + 300
+        strikes[id] = {}
+        event("mute", string.format(',"name":"%s","by":"chat filter","minutes":5', jsonEscape(name)))
+        say(id, "Your message was blocked. You're muted for 5 minutes.")
+      else
+        say(id, "Your message was blocked by the chat filter.")
+      end
+      return true
+    end
+  end
+  return false
+end
+
+-- dashboard -> plugin: kick / mute / unmute / say, one per line
+-- seq<TAB>time<TAB>action<TAB>name<TAB>number<TAB>text
+local actionSeq = nil
+local function runActions(t)
+  local f = io.open(ACTIONS, "r")
+  if not f then actionSeq = actionSeq or 0 return end
+  local lines = {}
+  for line in f:lines() do lines[#lines + 1] = line end
+  f:close()
+  local first = actionSeq == nil
+  actionSeq = actionSeq or 0
+  for _, line in ipairs(lines) do
+    local seq, ts, act, who, num, text = line:match("^(%d+)\t(%d+)\t(%a+)\t([^\t]*)\t(%d*)\t?(.*)$")
+    seq, ts = tonumber(seq), tonumber(ts)
+    if seq and seq > actionSeq then
+      actionSeq = seq
+      if not first and ts > t - 120 then
+        if act == "say" then
+          say(-1, text)
+        elseif act == "kick" or act == "ban" then
+          local pid = findPlayer(who)
+          if pid and tostring(MP.GetPlayerName(pid)):lower() == who:lower() then
+            MP.DropPlayer(pid, text ~= "" and text or (act == "ban" and "Banned" or "Kicked by an admin"))
+          end
+          if act == "ban" then unbanned[who:lower()] = nil end
+        elseif act == "unban" then
+          gameBans[who:lower()] = nil
+        elseif act == "mute" then
+          muted[who:lower()] = t + (tonumber(num) or 10) * 60
+          local pid = findPlayer(who)
+          if pid then say(pid, "You were muted for " .. (tonumber(num) or 10) .. " minutes by an admin.") end
+        elseif act == "unmute" then
+          muted[who:lower()] = nil
+        end
+      end
+    end
+  end
+end
+
+function esModTick()
+  local t = now_()
+  runActions(t)
+  for id, p in pairs(pendingV) do
+    if t >= p.deadline then
+      pendingV[id] = nil
+      local n = tostring(MP.GetPlayerName(id) or "")
+      event("botkick", string.format(',"name":"%s"', jsonEscape(n)))
+      MP.DropPlayer(id, "You didn't type the verification code in time. Rejoin and type /verify CODE in chat.")
+    elseif t >= p.nextMsg then
+      p.nextMsg = t + 20
+      say(id, "Welcome! Type /verify " .. p.code .. " in chat within " .. (p.deadline - t) .. " seconds to keep playing.")
+    end
+  end
+end
+
+math.randomseed(os.time())
+
 local ticks = 0
 function esTick()
   local now = os.time()
   ticks = ticks + 1
   readExtras(now)
+  esModTick()
   cleanupTick(now)
   if countdownLeft then
     if countdownLeft > 0 then say(-1, countdownLeft .. "...") countdownLeft = countdownLeft - 1
