@@ -15,7 +15,7 @@
 # =============================================================================
 set -euo pipefail
 
-EASY_VERSION="1.9.0"
+EASY_VERSION="1.10.0"
 INSTALL_DIR="/opt/beammp-server"
 SERVICE_USER="beammp"
 DASH_USER="beammp-dash"
@@ -198,7 +198,7 @@ install_deps() {
     apt)
       export DEBIAN_FRONTEND=noninteractive
       apt-get update -qq || warn "apt update had problems, continuing anyway"
-      apt-get install -y -qq curl ca-certificates liblua5.3-0 python3 openssl util-linux >/dev/null
+      apt-get install -y -qq curl ca-certificates liblua5.3-0 python3 openssl util-linux ethtool >/dev/null
       ;;
     dnf)    dnf install -y -q curl ca-certificates python3 openssl compat-lua-libs || dnf install -y -q curl python3 openssl lua;;
     pacman) pacman -Sy --noconfirm --needed curl ca-certificates python openssl lua53;;
@@ -380,7 +380,7 @@ case "${1:-}" in
     cd "$DIR"
     exec "${AS_SERVER[@]}" /opt/beammp-server/BeamMP-Server --config="$RUN/ServerConfig.toml" ;;
   dashboard|mods)
-    for n in MODS_PASSWORD VT_API_KEY DISCORD_WEBHOOK SMTP_PASSWORD TOTP_SECRET DISCORD_BOT_TOKEN DUCKDNS_TOKEN NTFY_TOPIC; do
+    for n in MODS_PASSWORD VT_API_KEY DISCORD_WEBHOOK SMTP_PASSWORD TOTP_SECRET DISCORD_BOT_TOKEN DUCKDNS_TOKEN NTFY_TOPIC WAKE_TOPIC; do
       v=$(SEC "$n"); [[ -n "$v" ]] && export "$n=$v"
     done
     unset v
