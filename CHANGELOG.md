@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.8.0 - Discord chat, events and graphs
+
+- **Discord chat bridge** (Settings -> Discord bot): the game chat shows up in your Discord channel, and messages written there appear in the game as `[Discord] name: text`. Commands, muted players and filtered words are never sent, and nobody can be pinged from the game.
+- **Live status message**: one message in your Discord channel shows every server, its players, CPU, memory and the next events, and updates itself every minute. Works with just the webhook.
+- **New Discord commands**: `/top` (who played the most in the last 30 days), `/events` (what's coming), and `/whitelist add|remove|list|on|off` for people with Manage Server.
+- **Scheduled events** (Config -> Events): weekly events like "Friday 20:00 drift night". They're announced in Discord (optionally with @everyone) and the game chat, then the server switches to the event's map and turns on its mods, and switches back when it's over. "End now" stops one early. Map rotation pauses during an event.
+- **Graphs** (Settings -> Computer load): processor, free memory, upload and players for the last 24 hours.
+
 ## 1.7.0 - Rotation, messages, backups, fixed address
 
 - **Server templates** (Config): one click sets up a Drift, Racing, Roleplay or Chill server - player limit, car cleanup, AFK removal, chat tags, chat rules, welcome message and tips, and optionally the map.
