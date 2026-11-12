@@ -92,9 +92,15 @@ The **Map** card on Overview switches the map and restarts the server. With **Co
 - **DuckDNS**: a free fixed name like `myserver.duckdns.org` that keeps working when your home IP changes.
 - **Low-resource warnings** when the computer runs out of memory, the processor is maxed out or the upload is almost used up, with a suggested player limit.
 
+### Events (Config page)
+
+Weekly events like "Friday 20:00 drift night": announced in Discord and the game chat, then the server switches to the event's map and mods, and back when it's over.
+
 ### Discord commands (optional, off by default)
 
 **Settings → Discord bot** adds slash commands to your Discord: `/status` shows every server with online players, map, CPU and memory (anyone can use it), and `/start`, `/stop` and `/restart` let people with **Manage Server** (or the Discord users you allow) control the servers. You make a free bot in the Discord Developer Portal and paste its token; the dashboard walks you through it. The bot only answers in the Discord server you choose and needs no port forwarding.
+
+Also: `/top` (most played), `/events` and `/whitelist add|remove|list|on|off`; a **live status message** in your channel that updates every minute; and a **chat bridge** between the game chat and your Discord channel.
 
 ### Invite-only servers (allow-list)
 
