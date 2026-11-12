@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- steering wheel, same as the dashboard's web app icon; 108dp canvas, drawn inside the 72dp safe zone -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#FFFFFF"
+        android:pathData="M54,29 A25,25 0 1,1 53.99,29 Z M54,34 A20,20 0 1,0 54.01,34 Z" android:fillType="evenOdd" />
+    <path android:fillColor="#FFFFFF" android:pathData="M34.5,51.5 L73.5,51.5 L73.5,56.5 L34.5,56.5 Z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M51.5,54 L56.5,54 L56.5,73.5 L51.5,73.5 Z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M54,47 A7,7 0 1,1 53.99,47 Z" />
+</vector>
