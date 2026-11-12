@@ -80,6 +80,18 @@ The **Map** card on Overview switches the map and restarts the server. With **Co
 
 **Config → Join alerts** posts in your Discord channel when one of your chosen players joins ("Dani just joined - 3/8 online, come and play!"), optionally pinging people or a role (`@here`, `<@user id>`, `<@&role id>`) and including the address. When someone who isn't on your allow-list tries to join, the Discord message has an **Approve** link: tap it, confirm, and they can join right away.
 
+### Templates, map rotation and chat messages (Config page)
+
+- **Server templates**: one click sets up a Drift, Racing, Roleplay or Chill server (player limit, car cleanup, AFK removal, chat tags, chat rules, welcome message, tips and map). Change anything afterwards.
+- **Map rotation** (off by default): the next map from your list every 1-24 hours, with a countdown in the chat - or only when nobody is online.
+- **Welcome message and announcements**: greet new players and post tips or your Discord link every few minutes. `{name}` and `{players}` are filled in.
+
+### Backups, fixed address and computer load (Settings page)
+
+- **Nightly backups** (on by default) of every server's settings, the last 7 kept. Download one or restore it with Import.
+- **DuckDNS**: a free fixed name like `myserver.duckdns.org` that keeps working when your home IP changes.
+- **Low-resource warnings** when the computer runs out of memory, the processor is maxed out or the upload is almost used up, with a suggested player limit.
+
 ### Discord commands (optional, off by default)
 
 **Settings → Discord bot** adds slash commands to your Discord: `/status` shows every server with online players, map, CPU and memory (anyone can use it), and `/start`, `/stop` and `/restart` let people with **Manage Server** (or the Discord users you allow) control the servers. You make a free bot in the Discord Developer Portal and paste its token; the dashboard walks you through it. The bot only answers in the Discord server you choose and needs no port forwarding.
@@ -240,7 +252,7 @@ To turn on VirusTotal, make a free account at [virustotal.com](https://www.virus
 
 ## 🔐 Your keys are encrypted
 
-Your **BeamMP AuthKey**, your **VirusTotal key**, your **Discord bot token** and the **mod page password** are never stored in plain text, and never in `ServerConfig.toml`.
+Your **BeamMP AuthKey**, your **VirusTotal key**, your **Discord bot token**, your **DuckDNS token** and the **mod page password** are never stored in plain text, and never in `ServerConfig.toml`.
 
 - **Windows:** encrypted with Windows' own DPAPI, tied to your Windows account. The file is useless on any other PC or account.
 - **Linux:** AES-256 encrypted (`/var/lib/beammp-easyserver/secrets.enc`). The unlock key is a separate root-only file in `/etc/beammp-easyserver`.
