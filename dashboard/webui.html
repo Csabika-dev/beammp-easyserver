@@ -619,6 +619,7 @@ VIEWS.config = async m => {
       <div class="row" style="margin-top:12px"><button class="btn primary" id="rs_save">Save restarts</button></div>
     </div>
     <div id="cfg17"></div>
+    <div id="evcard"></div>
     <div class="card" style="margin-top:16px" id="mdcard"><div class="row"><h2 style="margin:0">Moderation &amp; anti-bot</h2><span class="spacer"></span>
         <span class="pill ${md.antibot ? "good" : ""}"><span class="dot"></span>${md.antibot ? "Anti-bot on" : "Anti-bot off"}</span></div>
       <p class="small muted">Kick, mute and ban players on the Players page. Everything here works right away, no restart needed.</p>
@@ -712,6 +713,7 @@ VIEWS.config = async m => {
     try { const r = await api("/api/joinalerts", { json: body }); toast(r.note); if (!test) show("config"); } catch (e) { toast(e.message); }
   };
   loadCfg17();
+  loadEvents();
   $("#rs_save").onclick = async () => {
     const body = { on: $("#rs_on").checked, every: Number($("#rs_every").value), at: $("#rs_at").value, warn: Number($("#rs_warn").value), when: $("#rs_when").value };
     if ($("#rs_auto")) body.auto_update = $("#rs_auto").checked;
@@ -1093,23 +1095,99 @@ async function loadSet17() {
       <div class="card tight stat" style="padding:10px 14px"><div class="label">Free memory</div><div class="value">${n.mem_free == null ? "-" : esc(fmtSize(n.mem_free * 1048576))}</div><div class="note">of ${n.mem_total == null ? "?" : esc(fmtSize(n.mem_total * 1048576))}</div></div>
       <div class="card tight stat" style="padding:10px 14px"><div class="label">Upload used</div><div class="value">${esc(fmtUp(n.up_kbps))}</div><div class="note">${rs.upload_mbit ? "of " + esc(rs.upload_mbit) + " Mbit/s" : "set your speed below"}</div></div>
     </div>
+    <div id="loadgraphs" style="margin:8px 0 12px"></div>
     <label class="f"><span>Your upload speed (Mbit/s)</span><div class="row"><input type="number" id="up_mbit" min="0" step="0.1" value="${esc(rs.upload_mbit || "")}" placeholder="e.g. 20" style="max-width:160px"><button class="btn" id="up_save">Save</button></div><small>Run a speed test (for example speedtest.net) on this computer and enter the <b>upload</b> number. Without it you only get memory and processor warnings.</small></label>
   </div>`;
   $("#bk_save").onclick = async () => { try { const r = await api("/api/backups", { json: { on: $("#bk_on").checked, mods: $("#bk_mods").checked, at: $("#bk_at").value } }); toast(r.note); loadSet17(); } catch (e) { toast(e.message); } };
   $("#bk_now").onclick = async () => { $("#bk_now").disabled = true; try { const r = await api("/api/backups/now", { json: { mods: $("#bk_mods").checked } }); toast(r.note); loadSet17(); } catch (e) { toast(e.message, 6000); $("#bk_now").disabled = false; } };
   $("#dk_save").onclick = async () => { $("#dk_save").disabled = true; try { const r = await api("/api/duckdns", { json: { domain: $("#dk_dom").value, token: $("#dk_tok").value } }); toast(r.note, 7000); loadSet17(); } catch (e) { toast(e.message, 7000); $("#dk_save").disabled = false; } };
+  drawLoadGraphs(rs.upload_mbit, rs.cpus);
   $("#up_save").onclick = async () => { try { const r = await api("/api/resources", { json: { upload_mbit: $("#up_mbit").value } }); toast(r.note); loadSet17(); } catch (e) { toast(e.message); } };
+}
+
+/* ---------------- 1.8: scheduled events (Config) */
+async function loadEvents() {
+  const el = $("#evcard"); if (!el) return;
+  let d; try { d = await api("/api/events"); } catch (e) { el.innerHTML = ""; return; }
+  const days = d.days;
+  const row = (e, i) => `<div class="card tight" style="padding:12px 14px;margin-top:10px" data-ev="${i}">
+      <div class="row"><input type="text" data-k="name" value="${esc(e.name || "")}" placeholder="Friday drift night" style="flex:1;font-weight:600"><label class="toggle" style="margin:0 0 0 10px"><input type="checkbox" data-k="on" ${e.on !== false ? "checked" : ""}><span><b>On</b></span></label><button class="btn sm danger" data-del="${i}" style="margin-left:8px">Remove</button></div>
+      <div class="row" style="flex-wrap:wrap;gap:6px;margin:8px 0">${days.map((n, k) => `<label class="badge" style="cursor:pointer"><input type="checkbox" data-day="${k}" ${(e.days || []).includes(k) ? "checked" : ""}> ${n}</label>`).join("")}</div>
+      <div class="grid g3" style="gap:10px">
+        <label class="f" style="margin:0"><span>Starts at</span><input type="time" data-k="at" value="${esc(e.at || "20:00")}" style="color-scheme:light dark;color:inherit"></label>
+        <label class="f" style="margin:0"><span>Lasts</span><select data-k="minutes">${[30, 60, 90, 120, 180, 240, 360].map(m => `<option value="${m}" ${m === (e.minutes || 120) ? "selected" : ""}>${m < 60 ? m + " min" : m / 60 + " h"}</option>`).join("")}</select></label>
+        <label class="f" style="margin:0"><span>Map</span><select data-k="map">${d.maps.map(m => `<option ${m === e.map ? "selected" : ""}>${esc(m)}</option>`).join("")}</select></label>
+      </div>
+      ${d.mods.length ? `<div class="small" style="margin:8px 0 2px">Turn these mods on during the event (they're turned off again after):</div><div class="row" style="flex-wrap:wrap;gap:6px">${d.mods.map(m => `<label class="badge" style="cursor:pointer"><input type="checkbox" data-mod="${esc(m)}" ${(e.mods || []).includes(m) ? "checked" : ""}> ${esc(m)}</label>`).join("")}</div>` : ""}
+      <div class="grid g2" style="gap:10px;margin-top:8px">
+        <label class="f" style="margin:0"><span>Announce in Discord and the game</span><select data-k="announce">${[[0, "Only when it starts"], [10, "10 min before"], [30, "30 min before"], [60, "1 hour before"], [120, "2 hours before"], [1440, "1 day before"]].map(([v, l]) => `<option value="${v}" ${v === (e.announce ?? 30) ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+        <label class="f" style="margin:0"><span>Extra text (optional)</span><input type="text" data-k="text" value="${esc(e.text || "")}" placeholder="Bring your best drift car!"></label>
+      </div>
+      <label class="toggle"><input type="checkbox" data-k="ping" ${e.ping ? "checked" : ""}><span><b>Ping @everyone in Discord</b><small>Only in the announcement</small></span></label>
+      ${e.next ? `<div class="small muted">Next: ${esc(fmtTime(e.next))}</div>` : ""}
+    </div>`;
+  let list = d.events.map(e => Object.assign({}, e));
+  const render = () => {
+    el.innerHTML = `<div class="card" style="margin-top:16px"><div class="row"><h2 style="margin:0">Events</h2><span class="spacer"></span><span class="pill ${list.some(e => e.on !== false) ? "good" : ""}"><span class="dot"></span>${list.length ? list.length + " planned" : "None"}</span></div>
+      <p class="small muted">Weekly events like "Friday 20:00 drift night": announced in Discord${d.has_webhook ? "" : " (add a webhook in Settings)"} and the game chat, then the server switches to the event's map and mods, and back to your normal map when it's over. Players can type <span class="mono">/events</span> in Discord to see what's coming.</p>
+      ${d.active ? `<div class="issue info"><span class="ic">★</span><span><b>${esc(d.active.name)}</b> is running until ${esc(fmtTime(d.active.end))}.</span><button class="btn sm" id="ev_stop" style="margin-left:auto">End now</button></div>` : ""}
+      <div id="evlist">${list.map(row).join("")}</div>
+      <div class="row" style="margin-top:12px"><button class="btn" id="ev_add">Add event</button><button class="btn primary" id="ev_save">Save events</button></div></div>`;
+    el.querySelectorAll("[data-del]").forEach(b => b.onclick = () => { collect(); list.splice(Number(b.dataset.del), 1); render(); });
+    $("#ev_add").onclick = () => { collect(); list.push({ name: "", days: [4], at: "20:00", minutes: 120, map: d.maps[0], announce: 30, on: true }); render(); };
+    $("#ev_save").onclick = async () => { collect(); try { const r = await api("/api/events", { json: { events: list } }); toast(r.note); loadEvents(); } catch (e) { toast(e.message, 6000); } };
+    if ($("#ev_stop")) $("#ev_stop").onclick = async () => { try { const r = await api("/api/events/stop", { method: "POST" }); toast(r.note); setTimeout(loadEvents, 4000); } catch (e) { toast(e.message); } };
+  };
+  const collect = () => {
+    list = [...el.querySelectorAll("[data-ev]")].map((c, i) => {
+      const v = k => c.querySelector(`[data-k="${k}"]`);
+      return { id: list[i] && list[i].id, name: v("name").value, on: v("on").checked, at: v("at").value, minutes: Number(v("minutes").value),
+               map: v("map").value, announce: Number(v("announce").value), text: v("text").value, ping: v("ping").checked,
+               days: [...c.querySelectorAll("[data-day]")].filter(x => x.checked).map(x => Number(x.dataset.day)),
+               mods: [...c.querySelectorAll("[data-mod]")].filter(x => x.checked).map(x => x.dataset.mod) };
+    });
+  };
+  render();
+}
+
+/* ---------------- 1.8: CPU / memory / upload graphs (Settings -> Computer load) */
+async function drawLoadGraphs(upMbit, cpus) {
+  const el = $("#loadgraphs"); if (!el) return;
+  let r; try { r = await api("/api/resources?n=1440"); } catch (e) { return; }
+  const h = r.history || [];
+  if (h.length < 3) { el.innerHTML = `<p class="small muted">Graphs appear after a few minutes - one point per minute, last 24 hours (kept while the dashboard runs).</p>`; return; }
+  const W = 560, H = 90, t0 = h[0].t, t1 = h[h.length - 1].t || t0 + 1;
+  const chart = (title, key, max, fmt, note) => {
+    const pts = h.filter(p => p[key] != null);
+    if (!pts.length) return "";
+    const top = Math.max(max || 0, ...pts.map(p => p[key])) || 1;
+    const xy = p => [((p.t - t0) / Math.max(1, t1 - t0)) * W, H - (p[key] / top) * (H - 6) - 2];
+    const line = pts.map(p => xy(p).map(n => n.toFixed(1)).join(",")).join(" ");
+    const last = pts[pts.length - 1][key];
+    return `<div class="card tight" style="padding:10px 12px"><div class="row small"><b>${title}</b><span class="spacer"></span><span>now ${esc(fmt(last))}</span></div>
+      <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:70px;display:block;margin-top:4px" role="img" aria-label="${esc(title)} over the last ${Math.round((t1 - t0) / 3600) || 1} hours">
+        <line x1="0" y1="${H - 1}" x2="${W}" y2="${H - 1}" stroke="currentColor" stroke-opacity=".15"/>
+        <polyline points="${line}" fill="none" stroke="var(--accent)" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>
+      </svg><div class="row small muted"><span>${esc(fmtTime(t0))}</span><span class="spacer"></span><span>${note || "max " + esc(fmt(top))}</span></div></div>`;
+  };
+  const mb = v => fmtSize(v * 1048576);
+  const up = k => k >= 1000 ? (k / 1000).toFixed(1) + " Mbit/s" : Math.round(k) + " kbit/s";
+  el.innerHTML = `<div class="grid g2" style="gap:10px">
+    ${chart("Processor", "cpu", 100, v => Math.round(v) + "%", "0-100%")}
+    ${chart("Free memory", "mem_free", 0, mb)}
+    ${chart("Upload", "up_kbps", upMbit ? upMbit * 1000 : 0, up, upMbit ? "line top = your " + upMbit + " Mbit/s" : "")}
+    ${chart("Players online", "players", 1, v => String(v))}</div>`;
 }
 
 /* ---------------- Discord bot (Settings) */
 async function loadBot(keepOpen) {
   const el = $("#botcard"); if (!el) return;
   let b; try { b = await api("/api/discordbot"); } catch (e) { el.innerHTML = `<h2>Discord bot</h2><p class="small muted">${esc(e.message)}</p>`; return; }
-  const pill = !b.enabled ? `<span class="badge">Off</span>` : b.state === "online" ? `<span class="badge good">Online${b.bot_name ? " as " + esc(b.bot_name) : ""}</span>`
+  const pill = !b.enabled ? `<span class="badge">Off</span>` : !b.has_token ? `<span class="badge warn">No token yet</span>` : b.state === "online" ? `<span class="badge good">Online${b.bot_name ? " as " + esc(b.bot_name) : ""}</span>`
     : b.state === "error" ? `<span class="badge bad">Problem</span>` : `<span class="badge warn">Connecting…</span>`;
   const g = b.guilds.find(x => x.id === b.guild);
   el.innerHTML = `<h2>Discord bot ${pill}</h2>
-    <p class="small muted">Control your servers from Discord with slash commands. <b>/status</b> shows every server with online players, map, CPU and memory - anyone in your Discord can use it. <b>/start</b>, <b>/stop</b> and <b>/restart</b> only work for people with <b>Manage Server</b> in your Discord, or the people you list below. A server has to be started from the dashboard once (to check its settings) before Discord can start it.</p>
+    <p class="small muted">Control your servers from Discord with slash commands. Anyone in your Discord can use <b>/status</b> (players, map, CPU, memory), <b>/top</b> (who played most) and <b>/events</b>. <b>/start</b>, <b>/stop</b>, <b>/restart</b> and <b>/whitelist</b> (add, remove, list, on, off) only work for people with <b>Manage Server</b> in your Discord, or the people you list below. A server has to be started from the dashboard once (to check its settings) before Discord can start it.</p>
     ${b.error && b.enabled ? `<div class="issue error"><span class="ic">✕</span><span>${esc(b.error)}</span></div>` : ""}
     <details style="margin:8px 0" ${b.has_token && !keepOpen ? "" : "open"}><summary class="small"><b>How to set it up (5 minutes)</b></summary><ol class="small">
       <li>Open <a href="https://discord.com/developers/applications" target="_blank" rel="noopener noreferrer">discord.com/developers/applications</a> → <b>New Application</b> → give it a name (for example "BeamMP server").</li>
@@ -1124,10 +1202,16 @@ async function loadBot(keepOpen) {
       : b.enabled && b.state === "online" ? `<p class="small muted">The bot isn't in any Discord server yet - use the button above.</p>` : ""}
     ${b.guild && !g && b.guilds.length ? `<p class="small" style="color:var(--warn-ink)">The bot is no longer in the Discord server it was set up for - pick another one.</p>` : ""}
     <label class="f"><span>Also allow these people to start/stop (optional)</span><textarea id="bot_users" rows="2" spellcheck="false" placeholder="123456789012345678" style="min-height:60px">${esc(b.users.join("\n"))}</textarea><small>Discord user IDs, one per line. In Discord: Settings → Advanced → Developer Mode, then right-click a person → Copy User ID. People with Manage Server can always use the commands.</small></label>
+    <h3 style="margin:16px 0 4px">In your Discord channel</h3>
+    <p class="small muted">These use the channel of your Discord webhook (Settings → Notifications).${b.has_webhook ? "" : " <b>Add the webhook first.</b>"}</p>
+    <label class="toggle"><input type="checkbox" id="bot_status" ${b.status_msg ? "checked" : ""}><span><b>Live status message</b><small>One message that shows every server, its players, CPU and memory and the next events - updated every minute. Pin it in the channel. Works without the bot</small></span></label>
+    <label class="toggle"><input type="checkbox" id="bot_bridge" ${b.bridge ? "checked" : ""}><span><b>Chat bridge</b><small>The game chat shows up in the channel, and messages written there appear in the game as [Discord] name: text. Needs the bot, and MESSAGE CONTENT INTENT turned on (Developer Portal → Bot). Commands, muted players and filtered words are never sent</small></span></label>
+    ${b.servers.length > 1 ? `<label class="f"><span>Bridge which server</span><select id="bot_bserver" style="max-width:260px">${b.servers.map(x => `<option value="${esc(x.id)}" ${x.id === b.bridge_server ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></label>` : ""}
     <div class="row"><button class="btn primary" id="bot_save">Save</button><button class="btn" id="bot_refresh">Refresh</button></div>`;
   $("#bot_refresh").onclick = () => loadBot(true);
   $("#bot_save").onclick = async () => {
-    const body = { enabled: $("#bot_on").checked, users: $("#bot_users").value };
+    const body = { enabled: $("#bot_on").checked, users: $("#bot_users").value, status_msg: $("#bot_status").checked, bridge: $("#bot_bridge").checked };
+    if ($("#bot_bserver")) body.bridge_server = $("#bot_bserver").value;
     const t = $("#bot_token").value.trim(); if (t) body.token = t;
     const gs = $("#bot_guild"); if (gs) body.guild = gs.value;
     try { await api("/api/discordbot", { json: body }); toast(body.enabled ? "Saved - connecting to Discord…" : "Saved"); setTimeout(() => loadBot(true), body.enabled ? 4000 : 0); }
