@@ -38,7 +38,7 @@ import zipfile
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-EASY_VERSION = "1.9.0"
+EASY_VERSION = "1.10.0"
 REPO = "Csabika-dev/beammp-easyserver"
 BEAMMP_REPO = "BeamMP/BeamMP-Server"
 IS_WIN = os.name == "nt"
@@ -74,7 +74,7 @@ BUILTIN_MAPS = ["gridmap_v2", "west_coast_usa", "east_coast_usa", "utah", "italy
                 "hirochi_raceway", "johnson_valley", "derby", "driver_training"]
 
 SECRET_NAMES = ("MODS_PASSWORD", "VT_API_KEY", "DISCORD_WEBHOOK", "SMTP_PASSWORD", "TOTP_SECRET",
-                "BEAMMP_AUTH_KEY", "DISCORD_BOT_TOKEN", "DUCKDNS_TOKEN", "NTFY_TOPIC")
+                "BEAMMP_AUTH_KEY", "DISCORD_BOT_TOKEN", "DUCKDNS_TOKEN", "NTFY_TOPIC", "WAKE_TOPIC")
 
 DEFAULT_SETTINGS = {
     "port": 30815,
@@ -83,7 +83,8 @@ DEFAULT_SETTINGS = {
     "notify": {"crash": True, "stopped": True, "update": True, "mod_blocked": True,
                "login_failed": True, "player_join": False, "player_denied": True,
                "moderation": True, "network": True, "restart": False,
-               "resources": True, "backup": True, "rotation": False, "mod_update": True},
+               "resources": True, "backup": True, "rotation": False, "mod_update": True,
+               "sleep": False},
     "discord_enabled": False,
     "email_enabled": False,
     "smtp_host": "", "smtp_port": 587, "smtp_security": "starttls",
@@ -114,6 +115,12 @@ DEFAULT_SETTINGS = {
     "ntfy_enabled": False,         # push notifications to phones through the free ntfy app
     "ntfy_server": "https://ntfy.sh",
     "mod_update_check": True,      # look for newer versions of repository mods once a day
+    "sleep_on": False,             # the computer goes to sleep when nobody has played for sleep_idle minutes
+    "sleep_idle": 30,
+    "sleep_from": "",              # ...only between these times (HH:MM, empty = any time)
+    "sleep_to": "",
+    "sleep_wake_at": "",           # wake up by itself every day at this time (HH:MM, empty = no)
+    "sleep_wake_events": True,     # ...and 10 minutes before every scheduled event
 }
 SECURITY_FILE = os.path.join(DATA_DIR, "security.json")
 SECURITY_REPEAT = 15 * 60
@@ -2716,15 +2723,43 @@ def ntfy_send(title, message, level="info", click=None):
 APP_FILES = ("/manifest.webmanifest", "/sw.js", "/icon-192.png", "/icon-512.png", "/apple-touch-icon.png")
 # Network first, so the dashboard is always live; the cached page only shows
 # when the server can't be reached. API answers are never cached.
-SW_JS = """const C = "es-shell-v1";
-self.addEventListener("install", e => { self.skipWaiting(); e.waitUntil(caches.open(C).then(c => c.addAll(["/", "/icon-192.png"])).catch(() => {})); });
-self.addEventListener("activate", e => e.waitUntil(self.clients.claim()));
+SW_JS = r"""const C = "es-shell-v2";
+self.addEventListener("install", e => { self.skipWaiting(); e.waitUntil(caches.open(C).then(c => c.addAll(["/icon-192.png"])).catch(() => {})); });
+self.addEventListener("activate", e => e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== C).map(k => caches.delete(k))))
+  .then(() => self.clients.claim())));
 self.addEventListener("fetch", e => {
   const u = new URL(e.request.url);
   if (e.request.method !== "GET" || u.origin !== location.origin || u.pathname.startsWith("/api/")) return;
-  e.respondWith(fetch(e.request).then(r => { if (u.pathname === "/" && r.ok) { const k = r.clone(); caches.open(C).then(c => c.put("/", k)); } return r; })
-    .catch(() => caches.match(u.pathname === "/" ? "/" : e.request)));
+  if (e.request.mode === "navigate") { e.respondWith(fetch(e.request).catch(() => asleep())); return; }
+  e.respondWith(fetch(e.request).catch(() => caches.match(e.request)));
 });
+// The server doesn't answer: it's probably asleep. Offer to wake it up through the wake helper.
+async function asleep() {
+  let w = null;
+  try { const r = await (await caches.open(C)).match("/__wake.json"); if (r) w = await r.json(); } catch (x) {}
+  const ns = w && /^https:\/\/[A-Za-z0-9.\-]{1,253}(:\d{1,5})?$/.test(w.server || "") ? w.server : "";
+  const ok = !!ns && /^beammp-wake-[A-Za-z0-9]{20,40}$/.test(w.topic || "");
+  const data = JSON.stringify(ok ? {s: ns, t: w.topic} : null).replace(/</g, "\\u003c");
+  const csp = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self'; connect-src "
+    + (ok ? ns : "'none'") + "; base-uri 'none'; form-action 'none'";
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#2a78d6"><title>BeamMP - asleep?</title><style>
+body{margin:0;font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#151514;color:#eee;display:flex;min-height:100vh;align-items:center;justify-content:center}
+main{max-width:380px;padding:28px;text-align:center}img{width:72px;height:72px;border-radius:18px}h1{font-size:21px;margin:14px 0 6px}
+p{color:#aaa;margin:6px 0 18px}button{font:inherit;font-weight:600;border:0;border-radius:10px;padding:12px 20px;margin:5px;cursor:pointer}
+.b{background:#2a78d6;color:#fff}.g{background:#2b2b29;color:#eee}#m{min-height:24px;color:#cfe3ff}</style></head><body><main>
+<img src="/icon-192.png" alt=""><h1>The server isn't answering</h1><p>The server computer is probably asleep to save power.</p>
+<div id="w"></div><button class="g" id="r">Try again</button><p id="m"></p></main><script>
+const W=${data}, m=document.getElementById("m");
+document.getElementById("r").onclick=()=>location.reload();
+if(W){const b=document.createElement("button");b.className="b";b.textContent="Wake it up";document.getElementById("w").appendChild(b);
+b.onclick=async()=>{b.disabled=true;m.textContent="Sending…";try{const r=await fetch(W.s+"/"+W.t,{method:"POST",body:"wake"});
+if(!r.ok)throw 0;let n=45;const t=setInterval(()=>{m.textContent="Waking up… trying again in "+n+" s";if(--n<0){clearInterval(t);location.reload();}},1000);}
+catch(x){b.disabled=false;m.textContent="Couldn't send the wake-up - check your internet connection.";}};}
+else m.textContent="To wake it, use your router's Wake-on-LAN or set up the wake helper (dashboard: Settings, Sleep & wake-up).";
+</script></body></html>`;
+  return new Response(html, {status: 503, headers: {"Content-Type": "text/html; charset=utf-8", "Content-Security-Policy": csp, "Cache-Control": "no-store"}});
+}
 """
 _ICONS = {}
 
@@ -2770,6 +2805,237 @@ def cert_sha256():
         return hashlib.sha256(der).hexdigest()
     except (OSError, ValueError):
         return ""
+
+
+# ----------------------------------------------------------------------------- sleep + Wake-on-LAN
+# The computer can go to sleep when nobody plays and be woken up again by a
+# "magic packet" from the router, the phone app or the always-on wake helper
+# (another device at home, e.g. a Raspberry Pi), or by itself before an event.
+WAKE_TOPIC_RE = re.compile(r"beammp-wake-[A-Za-z0-9]{20,40}")
+HHMM_RE = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
+WIN_WAKE_TASK = "BeamMP EasyServer wake-up"
+_POWER = {"t": 0, "data": None}
+
+
+def _ps(cmd, timeout=40):
+    return subprocess.run(["powershell.exe", "-NoProfile", "-Command", cmd], capture_output=True, text=True,
+                          timeout=timeout, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
+def win_power_status():
+    ps = ("$r=@(); foreach($a in Get-NetAdapter -Physical -ErrorAction SilentlyContinue){"
+          "$pm=Get-NetAdapterPowerManagement -Name $a.Name -ErrorAction SilentlyContinue;"
+          "$ip=Get-NetIPAddress -InterfaceIndex $a.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue|Select-Object -First 1;"
+          "$r+=[pscustomobject]@{name=$a.Name;desc=$a.InterfaceDescription;mac=$a.MacAddress;up=($a.Status -eq 'Up');"
+          "wifi=($a.NdisPhysicalMedium -eq 9 -or \"$($a.PhysicalMediaType)\" -match '802\\.11|Wireless');"
+          "magic=\"$($pm.WakeOnMagicPacket)\";ip=\"$($ip.IPAddress)\";prefix=[int]$ip.PrefixLength}};"
+          "$armed=(powercfg /devicequery wake_armed) -join \"`n\";"
+          "$hib=(powercfg /a) -join \"`n\";"
+          "[pscustomobject]@{adapters=$r;armed=$armed;sleep=$hib}|ConvertTo-Json -Depth 4 -Compress")
+    try:
+        raw = json.loads(_ps(ps).stdout or "{}")
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        raw = {}
+    armed = str(raw.get("armed") or "")
+    ads = raw.get("adapters") or []
+    if isinstance(ads, dict):
+        ads = [ads]
+    out = []
+    for a in ads:
+        if not isinstance(a, dict):
+            continue
+        ip, prefix = str(a.get("ip") or ""), int(a.get("prefix") or 0)
+        brd = ""
+        try:
+            if ip and prefix:
+                brd = str(ipaddress.ip_network("%s/%d" % (ip, prefix), strict=False).broadcast_address)
+        except ValueError:
+            pass
+        magic = str(a.get("magic") or "")
+        if a.get("wifi"):
+            wol = "wifi"
+        elif magic == "Unsupported":
+            wol = "unsupported"
+        elif magic == "Enabled" and str(a.get("desc") or "") in armed:
+            wol = "on"
+        elif magic in ("Enabled", "Disabled"):
+            wol = "off"
+        else:
+            wol = "unknown"
+        out.append({"name": str(a.get("name") or "")[:80], "desc": str(a.get("desc") or "")[:120],
+                    "mac": str(a.get("mac") or "").replace("-", ":").lower(), "wifi": bool(a.get("wifi")),
+                    "cable": bool(a.get("up")), "ip": ip, "prefix": prefix, "brd": brd, "wol": wol})
+    sl = str(raw.get("sleep") or "")
+    can = bool(re.search(r"Standby \((S3|S0 Low Power Idle)\)", sl.split("not available")[0])) if sl else True
+    return {"ok": True, "adapters": out, "can_sleep": can, "rtc": True, "persist": True}
+
+
+def power_status(force=False):
+    """Network adapters, Wake-on-LAN state and whether this computer can sleep (cached for a minute)."""
+    with LOCK:
+        if not force and _POWER["data"] and time.time() - _POWER["t"] < 60:
+            return _POWER["data"]
+    if IS_WIN:
+        d = win_power_status()
+    else:
+        d = control("power-status", timeout=45)
+        if not d.get("ok"):
+            d = {"ok": False, "msg": d.get("msg"), "adapters": [], "can_sleep": False, "rtc": False}
+    ads = [a for a in d.get("adapters") or [] if isinstance(a, dict)]
+    me = lan_ip()
+    main = (next((a for a in ads if a.get("ip") == me and not a.get("wifi")), None)
+            or next((a for a in ads if not a.get("wifi") and a.get("cable")), None)
+            or next((a for a in ads if not a.get("wifi")), None))
+    d["main"] = main["name"] if main else ""
+    d["on_wifi"] = bool(next((a for a in ads if a.get("ip") == me and a.get("wifi")), None))
+    if main and re.fullmatch(r"([0-9a-f]{2}:){5}[0-9a-f]{2}", main.get("mac") or ""):
+        with LOCK:
+            st = APP.state
+            new = {"wol_mac": main["mac"], "wol_brd": main.get("brd") or "", "wol_ip": main.get("ip") or ""}
+            if any(st.get(k) != v for k, v in new.items()):
+                st.update(new)
+                changed = True
+            else:
+                changed = False
+        if changed:
+            APP.save_state()
+    with LOCK:
+        _POWER.update(t=time.time(), data=d)
+    return d
+
+
+def wol_target():
+    """(mac, [broadcast addresses], ip) of the network cable adapter, as last seen."""
+    st = APP.state
+    brd = [b for b in (st.get("wol_brd"),) if b]
+    return st.get("wol_mac") or "", brd, st.get("wol_ip") or ""
+
+
+def magic_packet(mac):
+    m = bytes.fromhex(re.sub(r"[^0-9a-fA-F]", "", mac))
+    if len(m) != 6:
+        raise ValueError("bad MAC address")
+    return b"\xff" * 6 + m * 16
+
+
+def next_wake_at():
+    """When the computer should wake up by itself: 10 minutes before the next event and/or a daily time."""
+    s, t = APP.settings, now()
+    cands = []
+    if s.get("sleep_wake_events"):
+        with LOCK:
+            insts = list(INSTANCES.values())
+        for inst in insts:
+            for e in events_cfg(inst):
+                if e.get("on", True):
+                    st = event_next_start(e, t + 660)
+                    if st:
+                        cands.append(st - 600)
+    w = s.get("sleep_wake_at") or ""
+    if HHMM_RE.fullmatch(w):
+        h, m = (int(x) for x in w.split(":"))
+        lt = time.localtime(t)
+        for add in (0, 1):
+            c = int(time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday + add, h, m, 0, 0, 0, -1)))
+            if c > t + 120:
+                cands.append(c)
+                break
+    cands = [c for c in cands if c > t + 120]
+    return min(cands) if cands else 0
+
+
+def set_wake_timer(at):
+    """Ask the computer to wake up by itself at `at` (0 = cancel). Returns an error text or ""."""
+    try:
+        if IS_WIN:
+            cmd = "Unregister-ScheduledTask -TaskName '%s' -Confirm:$false -ErrorAction SilentlyContinue" % WIN_WAKE_TASK
+            if at:
+                cmd += ("; $t=New-ScheduledTaskTrigger -Once -At ([DateTime]::Parse('%s'));"
+                        "$a=New-ScheduledTaskAction -Execute 'cmd.exe' -Argument '/c exit';"
+                        "$s=New-ScheduledTaskSettingsSet -WakeToRun -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries;"
+                        "Register-ScheduledTask -TaskName '%s' -Action $a -Trigger $t -Settings $s -RunLevel Limited | Out-Null"
+                        % (time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(at)), WIN_WAKE_TASK))
+            r = _ps(cmd)
+            return "" if r.returncode == 0 else (r.stderr.strip()[-200:] or "failed")
+        r = control("rtc-wake", at=int(at or 0), timeout=30)
+        return "" if r.get("ok") else (r.get("msg") or "failed")
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return short_err(e)
+
+
+def win_sleep():
+    """Windows: put the computer to sleep (not hibernate)."""
+    import ctypes
+    from ctypes import wintypes
+    adv, k32 = ctypes.WinDLL("advapi32", use_last_error=True), ctypes.WinDLL("kernel32")
+    k32.GetCurrentProcess.restype = wintypes.HANDLE
+
+    class LUID(ctypes.Structure):
+        _fields_ = [("Low", wintypes.DWORD), ("High", wintypes.LONG)]
+
+    class TP(ctypes.Structure):
+        _fields_ = [("Count", wintypes.DWORD), ("Luid", LUID), ("Attr", wintypes.DWORD)]
+
+    tok = wintypes.HANDLE()
+    adv.OpenProcessToken(k32.GetCurrentProcess(), 0x0020 | 0x0008, ctypes.byref(tok))   # ADJUST_PRIVILEGES | QUERY
+    luid = LUID()
+    adv.LookupPrivilegeValueW(None, "SeShutdownPrivilege", ctypes.byref(luid))
+    tp = TP(1, luid, 0x2)                                                                # SE_PRIVILEGE_ENABLED
+    adv.AdjustTokenPrivileges(tok, False, ctypes.byref(tp), 0, None, None)
+    k32.CloseHandle(tok)
+    ctypes.WinDLL("powrprof").SetSuspendState(False, False, False)
+
+
+def in_time_window(frm, to, t=None):
+    """True when the local time is between frm and to (HH:MM, may wrap past midnight). Empty = always."""
+    if not (HHMM_RE.fullmatch(frm or "") and HHMM_RE.fullmatch(to or "")):
+        return True
+    lt = time.localtime(t or now())
+    cur = lt.tm_hour * 60 + lt.tm_min
+    a = int(frm[:2]) * 60 + int(frm[3:])
+    b = int(to[:2]) * 60 + int(to[3:])
+    return a <= cur < b if a <= b else (cur >= a or cur < b)
+
+
+def wake_pairing_code():
+    """What the wake helper needs, as one code to paste: where to send the magic packet, the
+    private ntfy topic it listens on, and which Discord server it may answer /start in.
+    The Discord bot token is NOT in it - the helper asks for that itself."""
+    s = APP.settings
+    mac, brd, ip = wol_target()
+    d = {"v": 1, "mac": mac, "brd": brd, "ip": ip, "port": int(s.get("port") or 30815),
+         "ntfy": (s.get("ntfy_server") or "https://ntfy.sh").rstrip("/"), "topic": APP.secrets.get("WAKE_TOPIC"),
+         "guild": s.get("discord_bot_guild") or "", "users": list(s.get("discord_bot_users") or [])[:50],
+         "name": (re.sub(r"\^[0-9a-fk-or]", "", server_name() or "").strip() or "BeamMP server")[:60]}
+    return "ESW1-" + base64.urlsafe_b64encode(json.dumps(d, separators=(",", ":")).encode()).decode().rstrip("=")
+
+
+def ntfy_wake_post(text, topic_suffix=""):
+    s, topic = APP.settings, APP.secrets.get("WAKE_TOPIC")
+    if not topic:
+        raise ValueError("no wake helper set up")
+    server = (s.get("ntfy_server") or "https://ntfy.sh").rstrip("/")
+    req = urllib.request.Request("%s/%s%s" % (server, topic, topic_suffix), data=text.encode(), method="POST",
+                                 headers={"User-Agent": "BeamMP-EasyServer/" + EASY_VERSION, "Cache": "no"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        r.read()
+
+
+def ntfy_wake_replies(since="30s"):
+    s, topic = APP.settings, APP.secrets.get("WAKE_TOPIC")
+    server = (s.get("ntfy_server") or "https://ntfy.sh").rstrip("/")
+    req = urllib.request.Request("%s/%s-r/json?poll=1&since=%s" % (server, topic, since),
+                                 headers={"User-Agent": "BeamMP-EasyServer/" + EASY_VERSION})
+    out = []
+    with urllib.request.urlopen(req, timeout=15) as r:
+        for line in r.read(200000).decode("utf-8", "replace").splitlines():
+            try:
+                m = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(m, dict) and m.get("event") == "message":
+                out.append(str(m.get("message") or "")[:200])
+    return out
 
 
 # ----------------------------------------------------------------------------- Discord webhook helpers
@@ -3210,6 +3476,8 @@ class DiscordBot:
                          {"type": 3, "name": "player", "description": "BeamMP player name", "required": False,
                           "max_length": 40}] + opts},
             {"name": "events", "description": "Upcoming events on the BeamMP server", "type": 1, "contexts": [0]},
+            {"name": "sleep", "description": "Put the server computer to sleep to save power (/start wakes it up)",
+             "type": 1, "contexts": [0], "default_member_permissions": str(PERM_MANAGE_GUILD)},
         ]
 
     def sync_commands(self, token):
@@ -3265,13 +3533,16 @@ class DiscordBot:
                 return discord_api("PATCH", edit, body={"embeds": [{"title": "Upcoming events", "color": 0x8B5CF6,
                                                                     "description": upcoming_events_text()}],
                                                         "allowed_mentions": {"parse": []}})
-            if name not in ("start", "stop", "restart", "whitelist"):
+            if name not in ("start", "stop", "restart", "whitelist", "sleep"):
                 return
             perms = int(member.get("permissions") or 0)
             if not (perms & (PERM_ADMIN | PERM_MANAGE_GUILD)) and uid not in (self.app.settings.get("discord_bot_users") or []):
                 return discord_api("POST", cb, body={"type": 4, "data": {
                     "content": "Only people with **Manage Server** (or who are allowed in the dashboard) can do that.",
                     "flags": 64}})
+            if name == "sleep":
+                return discord_api("POST", cb, body={"type": 4, "data": {"content": self.do_sleep(who),
+                                                                         "allowed_mentions": {"parse": []}}})
             with LOCK:
                 inst = INSTANCES.get(str(opts.get("server") or "main"))
             if not inst:
@@ -3325,6 +3596,25 @@ class DiscordBot:
         self.app.notifier.add("moderation", "Allow-list changed from Discord", "%s by %s." % (msg.replace("*", ""), who[:60]),
                               "info", send=False)
         return msg + ("" if on else " (The list isn't switched on - /whitelist on makes the server invite-only.)")
+
+    def do_sleep(self, who):
+        app = self.app
+        why = app.sleep_blockers()
+        if why and why != "the dashboard is being used":
+            return "⏳ Not now: %s." % why
+        if not power_status().get("can_sleep"):
+            return "❌ This computer can't go to sleep."
+        r = app.go_sleep("Sent to sleep from Discord by %s." % who[:60])
+        if not r.get("ok"):
+            return "❌ %s" % discord_escape(r.get("msg") or "Couldn't go to sleep")
+        msg = "💤 The server computer is going to sleep (by %s)." % discord_escape(who)
+        if r.get("wake_at"):
+            msg += " It wakes up by itself <t:%d:R>." % r["wake_at"]
+        if app.secrets.has("WAKE_TOPIC"):
+            msg += " Use **/start** to wake it up sooner."
+        else:
+            msg += " To wake it up: use your router's Wake-on-LAN, the phone app at home, or the power button."
+        return msg
 
     def do_action(self, inst, what, who):
         use_server(inst.id)
@@ -3383,6 +3673,10 @@ class App:
         self.flood_dropped = None
         self.flood_next = 0
         self.flood_lock = threading.Lock()
+        self.idle_since = now()        # auto-sleep: nobody has played (or used the dashboard) since
+        self.sleep_busy_why = ""
+        self.last_use = 0              # last click in the dashboard (keeps the computer awake)
+        self.sleeping = False
         self.state = read_json(STATE_FILE, {})
         self.updates = self.state.get("updates", {})
         with open(os.path.join(HERE, "webui.html"), encoding="utf-8") as f:
@@ -3474,8 +3768,15 @@ class App:
                 use_server(inst.id)
                 if inst.server.status()["state"] != "running":
                     inst.server._win_start()
+        last = time.time()
         while True:
             time.sleep(10)
+            gap, last = time.time() - last, time.time()
+            if gap > 90:                        # the loop stood still: the computer was asleep
+                try:
+                    self.on_resume(gap)
+                except Exception as e:
+                    sys.stderr.write("resume: %s\n" % short_err(e))
             try:
                 load_servers()
             except Exception as e:
@@ -3503,7 +3804,8 @@ class App:
                 sys.stderr.write("flood protection: %s\n" % short_err(e))
             for name, fn in (("address check", self.addr_tick), ("backup", self.backup_tick),
                              ("duckdns", self.duck_tick), ("resources", self.resource_tick),
-                             ("discord status", self.status_msg_tick), ("mod updates", self.mod_update_tick)):
+                             ("discord status", self.status_msg_tick), ("mod updates", self.mod_update_tick),
+                             ("sleep", self.sleep_tick)):
                 try:
                     fn()
                 except Exception as e:
@@ -3877,6 +4179,121 @@ class App:
                                            "allowed_mentions": {"parse": []}})
         except Exception as e:
             sys.stderr.write("chat bridge: %s\n" % short_err(e))
+
+    # ---------- sleep / wake up
+    def sleep_blockers(self):
+        """Why the computer must stay awake right now ("" = it may sleep)."""
+        t = now()
+        with LOCK:
+            insts = list(INSTANCES.values())
+        players = 0
+        for inst in insts:
+            use_server(inst.id)
+            if inst.server.status()["state"] == "running":
+                players += len(online_names())
+            if isinstance(inst.meta.get("event_active"), dict):
+                use_server("main")
+                return "an event is running"
+            for e in events_cfg(inst):
+                st = event_next_start(e, t) if e.get("on", True) else None
+                if st and st - t < 30 * 60:
+                    use_server("main")
+                    return "an event starts soon"
+        use_server("main")
+        if players:
+            return "%d player%s online" % (players, "" if players == 1 else "s")
+        if t - self.last_use < 10 * 60:
+            return "the dashboard is being used"
+        if self.bot.busy:
+            return "a server is being started from Discord"
+        return ""
+
+    def sleep_tick(self):
+        s, t = self.settings, now()
+        why = self.sleep_blockers() if s.get("sleep_on") else "auto-sleep is off"
+        self.sleep_busy_why = why
+        if why or self.sleeping:
+            if why:
+                self.idle_since = t
+            return
+        if t - self.idle_since < max(5, int(s.get("sleep_idle") or 30)) * 60:
+            return
+        if not in_time_window(s.get("sleep_from"), s.get("sleep_to"), t):
+            return
+        if not power_status().get("can_sleep"):
+            return
+        self.go_sleep("Nobody played for %d minutes." % int(s.get("sleep_idle") or 30))
+
+    def go_sleep(self, why, delay=6):
+        """Send the computer to sleep (in the background, after `delay` seconds)."""
+        if self.sleeping:
+            return {"ok": False, "msg": "already going to sleep"}
+        self.sleeping = True
+        self.idle_since = now()
+        at = next_wake_at()
+        err = set_wake_timer(at) if at else ""
+        mac = wol_target()[0]
+        how = []
+        if at and not err:
+            how.append("it wakes up by itself %s" % time.strftime("%a %H:%M", time.localtime(at)))
+        if mac:
+            how.append("wake it from your router, the phone app or the wake helper (MAC %s)" % mac)
+        self.state.update({"slept_at": now(), "slept_why": why, "wake_at": at if not err else 0})
+        self.save_state()
+        self.notifier.add("sleep", "Server computer went to sleep", "%s %s" % (why, ("Next: " + "; ".join(how) + ".") if how else
+                          "Press its power button to wake it up."), "info")
+        try:
+            self.status_msg_asleep(at if not err else 0)
+        except Exception as e:
+            sys.stderr.write("discord status: %s\n" % short_err(e))
+
+        def later():
+            time.sleep(delay)
+            try:
+                if IS_WIN:
+                    win_sleep()
+                    r = {"ok": True}
+                else:
+                    r = control("sleep", timeout=30)
+                if not r.get("ok"):
+                    self.sleeping = False
+                    self.notifier.add("sleep", "Couldn't go to sleep", r.get("msg") or "unknown error", "warning", send=False)
+            except Exception as e:
+                self.sleeping = False
+                self.notifier.add("sleep", "Couldn't go to sleep", short_err(e), "warning", send=False)
+            # if the computer never really slept (or woke up quickly), carry on normally
+            threading.Timer(300, lambda: setattr(self, "sleeping", False)).start()
+        threading.Thread(target=later, daemon=True).start()
+        return {"ok": True, "wake_at": at if not err else 0, "timer_error": err}
+
+    def on_resume(self, gap):
+        self.sleeping = False
+        self.idle_since = now()                 # give people time to join before sleeping again
+        self.status_next = 0
+        self.state["duck_next"] = 0
+        _PUBLIC_IP["t"] = 0
+        with LOCK:
+            _POWER["t"] = 0
+        self.state["woke_at"] = now()
+        self.save_state()
+        threading.Thread(target=set_wake_timer, args=(0,), daemon=True).start()
+        self.bot.reconnect()                     # the old Discord connection died while sleeping
+        h, m = int(gap // 3600), int(gap % 3600 // 60)
+        self.notifier.add("sleep", "Server computer woke up", "It was asleep for %s." % (
+            ("%dh %dmin" % (h, m)) if h else "%d minutes" % max(1, m)), "success")
+
+    def status_msg_asleep(self, wake_at):
+        """Show "asleep" in the live Discord status message before the computer goes to sleep."""
+        mid = self.state.get("status_msg")
+        if not (self.settings.get("discord_status_msg") and mid and webhook_parts()[0]):
+            return
+        txt = "The server computer is asleep to save power."
+        if wake_at:
+            txt += " It wakes up by itself <t:%d:R>." % wake_at
+        if self.secrets.has("WAKE_TOPIC") and self.settings.get("discord_bot"):
+            txt += " Use **/start** to wake it up now."
+        webhook_call("PATCH", "/messages/%s" % mid, {"embeds": [{"title": "💤 BeamMP servers - asleep", "color": 0x64748B,
+                                                                  "description": txt}]})
 
     def status_msg_tick(self):
         """A message in the webhook's Discord channel that shows the servers and updates itself every minute."""
@@ -4493,6 +4910,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             path, q = self.route()
             if method == "GET" and path == "/":
+                APP.last_use = now()
                 return self.page()
             if method == "GET" and path in APP_FILES:
                 return self.app_file(path)
@@ -4508,6 +4926,8 @@ class Handler(BaseHTTPRequestHandler):
             if not fn:
                 return self.fail(404, "not found")
             self.sess = sess
+            if method != "GET":
+                APP.last_use = now()
             want = self.headers.get("X-ES-Server") or q.get("srv") or "main"
             with LOCK:
                 known = want in INSTANCES
@@ -5647,7 +6067,13 @@ class Handler(BaseHTTPRequestHandler):
         hosts.append(lan_ip())
         base = "%s://%s:%s/" % ("https" if https_ else "http", hosts[-1], st.get("port"))
         fp = cert_sha256() if https_ else ""
-        link = "easyserver://connect?" + urllib.parse.urlencode({"url": base, "fp": fp})
+        args = {"url": base, "fp": fp}
+        mac, brd, _ = wol_target()
+        if mac:                                  # the app can wake the computer up when it's asleep
+            args.update({"mac": mac, "bc": ",".join(brd)})
+        if APP.secrets.has("WAKE_TOPIC"):
+            args.update({"wt": APP.secrets.get("WAKE_TOPIC"), "ns": (st.get("ntfy_server") or "https://ntfy.sh").rstrip("/")})
+        link = "easyserver://connect?" + urllib.parse.urlencode(args)
         self.send(200, {"https": https_, "url": base, "fingerprint": fp, "link": link, "qr": qr_svg_path(link),
                         "apk": "https://github.com/%s/releases/latest" % REPO})
 
@@ -5683,6 +6109,146 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 return self.fail(400, "Couldn't send it: %s" % short_err(e))
         self.send(200, {"ok": True})
+
+    # ---------- sleep + Wake-on-LAN
+    def get_power(self, q):
+        app, s = APP, APP.settings
+        st = power_status(force=q.get("refresh") == "1")
+        mac, brd, ip = wol_target()
+        t = now()
+        idle_min = int(s.get("sleep_idle") or 30)
+        why = app.sleep_busy_why if s.get("sleep_on") else ""
+        sleeps_at = 0
+        if s.get("sleep_on") and not why:
+            sleeps_at = app.idle_since + idle_min * 60
+        self.send(200, {
+            "platform": "windows" if IS_WIN else "linux",
+            "settings": {k: s.get(k) for k in ("sleep_on", "sleep_idle", "sleep_from", "sleep_to", "sleep_wake_at",
+                                               "sleep_wake_events")},
+            "adapters": st.get("adapters") or [], "main": st.get("main") or "", "on_wifi": bool(st.get("on_wifi")),
+            "can_sleep": bool(st.get("can_sleep")), "rtc": bool(st.get("rtc")), "error": st.get("msg") if not st.get("ok") else "",
+            "mac": mac, "brd": brd, "ip": ip, "busy": why, "idle_for": max(0, t - app.idle_since),
+            "sleeps_at": sleeps_at, "in_window": in_time_window(s.get("sleep_from"), s.get("sleep_to"), t),
+            "next_wake": next_wake_at(), "slept_at": app.state.get("slept_at") or 0, "woke_at": app.state.get("woke_at") or 0,
+            "helper": {"paired": app.secrets.has("WAKE_TOPIC"), "last_seen": app.state.get("helper_seen") or 0,
+                       "version": app.state.get("helper_version") or "", "bot": bool(s.get("discord_bot"))},
+            "ntfy_server": (s.get("ntfy_server") or "https://ntfy.sh").rstrip("/"),
+        })
+
+    def post_power(self, q):
+        b = self.body_json()
+        upd = {}
+        if "sleep_on" in b:
+            upd["sleep_on"] = bool(b["sleep_on"])
+            if upd["sleep_on"] and not APP.settings.get("sleep_on"):
+                APP.idle_since = now()          # count from now, don't fall asleep right away
+        if "sleep_idle" in b:
+            try:
+                v = int(b["sleep_idle"])
+            except (TypeError, ValueError):
+                raise ValueError("Pick how many minutes")
+            if not 5 <= v <= 1440:
+                raise ValueError("Pick between 5 minutes and 24 hours")
+            upd["sleep_idle"] = v
+        for k in ("sleep_from", "sleep_to", "sleep_wake_at"):
+            if k in b:
+                v = str(b[k] or "").strip()
+                if v and not HHMM_RE.fullmatch(v):
+                    raise ValueError("Times look like 23:30")
+                upd[k] = v
+        if bool(upd.get("sleep_from", APP.settings.get("sleep_from"))) != bool(upd.get("sleep_to", APP.settings.get("sleep_to"))):
+            raise ValueError("Fill in both times (from and until), or leave both empty")
+        if "sleep_wake_events" in b:
+            upd["sleep_wake_events"] = bool(b["sleep_wake_events"])
+        if upd:
+            APP.settings.update(upd)
+        self.send(200, {"ok": True})
+
+    def post_power_wol(self, q):
+        """Turn Wake-on-LAN on for the network cable adapter."""
+        name = str(self.body_json().get("adapter") or "")
+        st = power_status(force=True)
+        a = next((x for x in st.get("adapters") or [] if x.get("name") == name), None)
+        if not a:
+            return self.fail(400, "That network adapter wasn't found - press Refresh")
+        if a.get("wifi"):
+            return self.fail(400, "Wake-on-LAN doesn't work over Wi-Fi. Connect the computer with a network cable.")
+        if IS_WIN:
+            n = name.replace("'", "''")
+            cmd = ("$n='%s'; Set-NetAdapterPowerManagement -Name $n -WakeOnMagicPacket Enabled -ErrorAction SilentlyContinue;"
+                   "Set-NetAdapterAdvancedProperty -Name $n -RegistryKeyword '*WakeOnMagicPacket' -RegistryValue 1 -ErrorAction SilentlyContinue;"
+                   "$d=(Get-NetAdapter -Name $n).InterfaceDescription; powercfg /deviceenablewake \"$d\";"
+                   "powercfg /setacvalueindex SCHEME_CURRENT SUB_SLEEP RTCWAKE 1; powercfg /setactive SCHEME_CURRENT" % n)
+            enc = base64.b64encode(cmd.encode("utf-16-le")).decode()
+            subprocess.Popen(["powershell.exe", "-NoProfile", "-Command",
+                              "Start-Process powershell.exe -Verb RunAs -WindowStyle Hidden -ArgumentList '-NoProfile','-EncodedCommand','%s'" % enc],
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            with LOCK:
+                _POWER["t"] = 0
+            return self.send(200, {"ok": True, "msg": "Windows asks for permission on the server PC - click Yes there, then press Refresh."})
+        r = control("wol-enable", iface=name, timeout=330)
+        with LOCK:
+            _POWER["t"] = 0
+        if not r.get("ok"):
+            return self.fail(400, r.get("msg") or "Couldn't turn on Wake-on-LAN")
+        APP.notifier.add("network", "Wake-on-LAN turned on", "Adapter %s (%s)." % (name, a.get("mac")), "success", send=False)
+        self.send(200, {"ok": True, "msg": r.get("msg")})
+
+    def post_power_sleep(self, q):
+        app = APP
+        why = app.sleep_blockers()
+        if why and why != "the dashboard is being used" and not self.body_json().get("force"):
+            return self.send(409, {"ok": False, "error": "Not now: %s." % why, "busy": why})
+        if not power_status().get("can_sleep"):
+            return self.fail(400, "This computer can't go to sleep")
+        r = app.go_sleep("Sent to sleep from the dashboard.", delay=4)
+        if not r.get("ok"):
+            return self.fail(400, r.get("msg"))
+        self.send(200, r)
+
+    def get_power_offline(self, q):
+        """What the "server is asleep" page (cached by the browser) needs to send a wake-up."""
+        topic = APP.secrets.get("WAKE_TOPIC")
+        self.send(200, {"server": (APP.settings.get("ntfy_server") or "https://ntfy.sh").rstrip("/"), "topic": topic} if topic else {})
+
+    def post_power_helper(self, q):
+        """The always-on wake helper: pair (new code), test (is it listening?) or forget it."""
+        app = APP
+        b = self.body_json()
+        act = b.get("action")
+        if act == "pair":
+            if not wol_target()[0]:
+                power_status(force=True)
+            if not wol_target()[0]:
+                return self.fail(400, "No network cable adapter found - Wake-on-LAN needs one")
+            if not app.secrets.has("WAKE_TOPIC") or b.get("new"):
+                app.secrets.set("WAKE_TOPIC", "beammp-wake-" + secrets.token_hex(14))
+                app.state.update({"helper_seen": 0, "helper_version": ""})
+                app.save_state()
+            return self.send(200, {"ok": True, "code": wake_pairing_code()})
+        if act == "forget":
+            app.secrets.set("WAKE_TOPIC", "")
+            app.state.update({"helper_seen": 0, "helper_version": ""})
+            app.save_state()
+            return self.send(200, {"ok": True})
+        if act == "test":
+            if not app.secrets.has("WAKE_TOPIC"):
+                return self.fail(400, "Set up the wake helper first")
+            nonce = secrets.token_hex(6)
+            try:
+                ntfy_wake_post("ping " + nonce)
+                for _ in range(8):
+                    time.sleep(1.5)
+                    for m in ntfy_wake_replies("1m"):
+                        p = m.split()
+                        if len(p) >= 3 and p[0] == "pong" and p[1] == nonce:
+                            app.state.update({"helper_seen": now(), "helper_version": re.sub(r"[^\w.\-]", "", p[2])[:20]})
+                            app.save_state()
+                            return self.send(200, {"ok": True, "found": True, "version": app.state["helper_version"]})
+            except (OSError, ValueError) as e:
+                return self.fail(400, "Couldn't reach ntfy: %s" % short_err(e))
+            return self.send(200, {"ok": True, "found": False})
+        self.fail(400, "unknown action")
 
     # ---------- scheduled events
     def get_events(self, q):
