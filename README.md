@@ -1,39 +1,463 @@
 # BeamMP EasyServer
 
-**Host your own BeamNG.drive multiplayer (BeamMP) server in one click, on Windows or Linux.**
+[![Tests](https://github.com/Csabika-dev/beammp-easyserver/actions/workflows/tests.yml/badge.svg)](https://github.com/Csabika-dev/beammp-easyserver/actions/workflows/tests.yml)
+[![Latest release](https://img.shields.io/github/v/release/Csabika-dev/beammp-easyserver)](https://github.com/Csabika-dev/beammp-easyserver/releases/latest)
 
-No config files, no command line knowledge needed. The installer downloads the newest official BeamMP server, asks a few simple questions (name, map, player count), sets everything up and starts it. Then you manage everything from a **web dashboard** on any PC or phone.
+**🌐 Website:** [csabika-dev.github.io/beammp-easyserver](https://csabika-dev.github.io/beammp-easyserver/) · **Found a bug?** [Open an issue](https://github.com/Csabika-dev/beammp-easyserver/issues/new/choose) · **Want to help?** [CONTRIBUTING.md](CONTRIBUTING.md)
+
+**Host your own BeamNG.drive multiplayer (BeamMP) server in one click, on Windows or Linux - and run it from a web dashboard on your PC or phone.**
+
+No config files and no command line needed. The installer downloads the newest official BeamMP server, asks a few simple questions (name, map, player count), sets everything up and starts it. After that you do everything in the dashboard: mods, maps, players, moderation, Discord, backups, health checks and more.
+
+<img alt="The EasyServer dashboard (demo server)" src="docs/img/overview-dark.webp">
 
 > Not affiliated with or endorsed by the BeamMP team. This only automates the setup of the official [BeamMP server](https://github.com/BeamMP/BeamMP-Server).
 
+## Quick start
+
+1. **Get a free AuthKey** at [keymaster.beammp.com](https://keymaster.beammp.com) (log in with Discord → **Keys** → **+** → copy it).
+2. **Install:**
+   - **Windows:** download `BeamMP-EasyServer-Windows.zip` from the [latest release](https://github.com/Csabika-dev/beammp-easyserver/releases/latest), extract it, double-click `Install-BeamMP-Server.bat`.
+   - **Linux:** `curl -fsSL https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/main/linux/install.sh | sudo bash`
+3. **Open the dashboard** at `http://localhost:30815` on the server computer (Windows: the **BeamMP Dashboard** shortcut), create your password, and you're running. From other devices at home use `http://<server-ip>:30815`.
+
+Then work through the [guides](#-guides) below - start with [Let friends join over the internet](#let-friends-join-over-the-internet).
+
+## Contents
+
+- [The dashboard at a glance](#️-the-dashboard-at-a-glance)
+- [Installing](#installing) - [Windows](#windows) · [Linux](#linux-recommended-for-a-dedicated-server)
+- [📖 Guides](#-guides) - step by step for every feature
+- [Feature reference](#feature-reference) - cars & chat, moderation, anti-bot, privacy
+- [Mod virus check](#️-mod-virus-check) · [Encrypted keys](#-your-keys-are-encrypted) · [Security](#how-its-built-security)
+- [Roadmap](#️-roadmap) · [Support](#️-support-the-project)
+
 ---
 
-## 🖥️ The dashboard
-
-Open `http://<server-ip>:30815` from any PC or phone at home, or use the **BeamMP Dashboard** shortcut on Windows.
+## 🖥️ The dashboard at a glance
 
 | Page | What you can do |
 |---|---|
-| **Overview** | Server status, who's online, uptime, start / stop / restart, **switch the map in one click** |
-| **Servers** | Run **several BeamMP servers on one computer**, each with its own port, mods, config and allow-list, and set **CPU, RAM and mod download limits** per server |
-| **Config** | Edit every server setting (max players, cars per player, map, port, private…) in a simple form, or as text, **without touching files**. Every change is checked first (wrong types, bad ports, unknown maps, duplicate lines…) and you get plain-English errors with line numbers. Also **Who can join** (an allow-list that makes the server invite-only), **Map vote** (players type `/vote` in chat), **Join alerts** (Discord ping when your friends join), **Cars & chat** (scheduled car cleanup, abandoned-car removal, chat commands), **Restarts & updates** and **Moderation & anti-bot** - see below |
-| **Mods** | Drag & drop mods, turn them on/off, pick map mods, see the virus check result for each, and **update** repository mods in one click. Shows how much players have to **download before joining**, and can put it in the server description ("\| Mods: 1.2 GB") |
-| **Players** | Player analytics: players per day, busiest hours, a week heatmap, top players, sessions, peak and usage, plus **server records** (top speed, distance, longest drive without a reset). **Kick, mute and ban** players, send chat messages, and manage the ban list |
-| **Network** | Port checker: is the server listening, reachable at home, reachable from the internet, listed in the BeamMP server list? Tells you what to fix |
-| **Updates** | Checks for new BeamMP server and EasyServer versions, installs server updates in one click |
-| **Logs** | Live server log, with hints that explain common errors in plain English |
-| **Notifications** | Crashes, unexpected stops, updates, blocked mods, failed logins, player joins, **mod updates**, failed backups, high computer load. Shown in the dashboard and optionally sent to **Discord**, **email** and/or your **phone** (ntfy) |
-| **Settings** | Notifications, password, **two-step login** (scan a QR code), **access from the internet (HTTPS)**, **hide your IP / DDoS protection**, **backup / import / export**, nightly backups, **DuckDNS**, computer-load graphs, the **Discord bot**, the **phone app** and **sleep & wake-up** |
+| **Overview** | Status, who's online, uptime, start / stop / restart, switch the map in one click |
+| **Servers** | Run several servers on one computer, copy a server, CPU / RAM / download limits per server |
+| **Config** | Every server setting in a simple form (or as text) with plain-English checks; who can join, map vote, events, map rotation, templates, **security presets**, **teleport & repair**, announcements, restarts, moderation & anti-bot, and **"What changed?"** with one-click undo |
+| **Mods** | Drag & drop mods (each one virus-checked), turn them on/off, **light mode** for map mods, one-click mod updates, **modpacks** |
+| **Players** | Players per day, busiest hours, top players, server records, **per-map statistics**, kick / mute / ban, **maintenance mode** |
+| **Health** | **Health report** (internet, BeamMP backend, server, port, config, AuthKey, plugin, mods, reachability, disk, memory), **diagnostic reports**, the **"someone can't join?"** doctor and the port checker |
+| **Updates** | New BeamMP server and EasyServer versions, one-click server update |
+| **Logs** | Live server log with a **log explainer**, plus the **activity log** (who changed what) |
+| **Notifications** | Crashes, updates, blocked mods, failed logins, joins, health problems ... sent to Discord, email, phone, Telegram or any webhook if you like |
+| **Settings** | Alerts, password, two-step login, **users & roles**, internet access (HTTPS), hide your IP, backups, DuckDNS, Discord bot, phone app, **public status page**, sleep & wake-up |
 
-Also: **dark / light mode** (follows your system, or switch with the moon icon), and it works on phones - there's an **Android app**, and on iPhone you can add it to the home screen. Before anything changes your network (server port, internet access, HTTPS) the dashboard shows exactly what will change and asks first; the firewall on the server is updated for you, your router never is.
+Dark and light mode, works on phones (Android app, or add it to the iPhone home screen). Before anything changes your network the dashboard shows exactly what will change and asks first. Your router is never changed.
 
-### Several servers on one computer
+---
 
-**Servers → Add a server**: give it a name and a free port, and it's up in seconds, starting from your main server's settings, with its own empty mods folder. Pick which server the other pages manage with the **Server** menu at the top of the sidebar. Every server runs on its own, so one crashing doesn't affect the others. All of them use the same BeamMP program, so one update updates them all. Each server that should be in the public list needs its own AuthKey (make as many as you want on keymaster.beammp.com) and its own port forwarded on your router.
+## Installing
 
-**Limits** per server: **CPU** (e.g. 1.5 cores), **RAM** (the server is restarted if it goes over) and **mod download speed** (so players downloading 2 GB of mods don't slow down the game for everyone else).
-- Linux: systemd CPU/memory limits, plus `tc` for the download speed. Applied right away, and again at every start.
-- Windows: a Windows job object caps CPU and RAM while the dashboard is running. The download speed limit is a Windows QoS policy, so Windows asks once for permission on the server PC.
+### Before you start: get your free AuthKey (1 minute)
+
+1. Go to **https://keymaster.beammp.com** and log in with Discord
+2. Click **Keys**, then **+**, give it any name
+3. Copy the key; the installer will ask for it
+
+### Windows
+
+1. Download **BeamMP-EasyServer-Windows.zip** from the [Releases page](https://github.com/Csabika-dev/beammp-easyserver/releases/latest) and extract it (or use the green **Code** button → **Download ZIP** and open the `windows` folder)
+2. Double-click **`Install-BeamMP-Server.bat`**
+3. Click **Yes** when Windows asks for permission
+4. Fill in the window (paste your AuthKey) and press **Install**
+
+That's it. You get a **Start BeamMP Server** shortcut on your desktop.
+
+It also handles:
+- The **web dashboard** (a small portable Python is downloaded for it; it starts when you log in). The first time you open it, you create a password
+- A **Drop BeamMP Mods Here** desktop icon: drag mod zips onto it (each one is virus-checked first)
+- Your AuthKey and VirusTotal key are stored **encrypted**
+- Microsoft Visual C++ Runtime (installed automatically if missing)
+- Windows Firewall rules for the server port
+- Optional auto-start when you log in
+
+| File | What it does |
+|---|---|
+| `Install-BeamMP-Server.bat` | Install, or change settings later (run it again) |
+| `Add-Mods.bat` | Drag mod .zip files onto it (same as the desktop icon) |
+| `Reset-Dashboard-Login.bat` | Forgot the dashboard password or lost your two-step phone |
+| `Update-BeamMP-Server.bat` | Download the newest BeamMP server |
+| `Uninstall-BeamMP-Server.bat` | Remove everything |
+
+### Linux (recommended for a dedicated server)
+
+Linux runs the server in the background as a service. It starts by itself when the computer boots, and it runs well on old laptops and PCs.
+
+#### Option A: one command
+
+Open a terminal and paste:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/main/linux/install.sh | sudo bash
+```
+
+#### Option B: download and run
+
+1. Download **BeamMP-EasyServer-Linux.zip** from the [Releases page](https://github.com/Csabika-dev/beammp-easyserver/releases/latest) and extract it
+2. Double-click **`install.sh`** and choose **Run in Terminal**
+   - Doesn't run? Right-click inside the folder → **Open in Terminal**, then type `bash install.sh` and press Enter
+3. Enter your password and answer the questions
+
+#### What the Linux installer does automatically
+
+- Detects your distro and downloads the matching official build
+- Installs the needed libraries (Lua 5.3)
+- Creates a separate `beammp` user so the server doesn't run as root
+- Creates a **systemd service** so the server starts on boot and restarts if it crashes
+- Opens the port in the firewall (ufw / firewalld) if one is active
+- **Laptop mode:** keeps the server running with the lid closed and stops the machine from going to sleep
+- Sets up **easy mod uploading**: a drag & drop web page, a `BeamMP-Mods` folder, and automatic restart when mods change
+- **Virus-checks every mod** and **stores your keys encrypted** (see below)
+- Installs the **web dashboard** (runs as its own limited user, separate from the game server)
+- Installs a simple `beammp` command to manage it
+
+#### Managing the server
+
+```
+beammp status      is it running?
+beammp logs        live server console (Ctrl+C to leave)
+beammp restart     restart (also: start / stop)
+beammp config      edit name, map, key... then auto-restart
+beammp dashboard   dashboard address and password
+beammp reset-login new dashboard password, turns off two-step login (lost phone)
+beammp mods        list mods
+beammp addmod F    add mod .zip file(s)
+beammp map NAME    change the map (e.g. beammp map italy)
+beammp scan        virus-check all mods again
+beammp key         change your BeamMP AuthKey (stored encrypted)
+beammp virustotal  set or remove the VirusTotal key (stored encrypted)
+beammp ip          the addresses your friends connect to
+beammp update      download the newest BeamMP server
+beammp uninstall   remove everything (also undoes laptop mode)
+```
+
+#### Supported systems
+
+| Distro | Status |
+|---|---|
+| Ubuntu 22.04 / 24.04 and newer | ✅ official build |
+| Linux Mint 21 / 22, Pop!_OS, Zorin, elementary | ✅ official build |
+| Debian 12 / 13, LMDE 6+ | ✅ official build |
+| Fedora, Arch, openSUSE | ⚠️ best effort |
+| 64-bit x86 and ARM64 (e.g. Raspberry Pi 4/5 with 64-bit OS) | ✅ |
+
+#### Advanced (no questions asked)
+
+```bash
+sudo bash install.sh --unattended --key YOUR_KEY --name "My Server" \
+  --map west_coast_usa --players 10 --public --laptop-mode yes --mod-page yes
+```
+
+Run `bash install.sh --help` for all options.
+
+---
+
+---
+
+## 📖 Guides
+
+Click a guide to open it. Every path like **Config → Who can join** means: open the **Config** page in the sidebar, then the card called **Who can join**.
+
+### Getting started
+
+<details>
+<summary><b>First start: the checklist</b></summary>
+
+1. Open the dashboard on the server computer (`http://localhost:30815`) and **create a password** (at least 8 characters; 12 if you'll ever use it from outside your home).
+2. **Config → AuthKey**: if you didn't enter it during install, paste it now. Without it the server works on your home network but isn't in the public list.
+3. **Config → Basics**: server name, description, map, max players. Press **Save changes**.
+4. Pick a **security preset** (Config → Security presets) - see [Choose how open your server is](#choose-how-open-your-server-is).
+5. **Overview → Start**. The first time, the dashboard shows the key settings once (name, map, public/private, AuthKey, anti-bot ...) so nothing goes live by accident.
+6. **Health** page → **Check again**. Everything should be green; anything else says what to do.
+7. Optional but recommended: **Settings → Two-step login** (scan the QR code with Google Authenticator, Microsoft Authenticator, Aegis ...).
+</details>
+
+<details>
+<summary id="let-friends-join-over-the-internet"><b>Let friends join over the internet</b></summary>
+
+Friends on the **same Wi-Fi** can join right away (BeamMP → Direct connect → the server's home address, port 30814).
+
+For everyone else:
+1. Give the server computer a fixed address in your router (often called *DHCP reservation* or *static lease*), so the next step keeps working.
+2. **Forward port 30814, TCP and UDP**, to the server computer. Search for "*your router model* port forwarding". Several servers? Forward each server's port (shown on the Servers page).
+3. Open **Health** → **Full check**. "Reachable from the internet" should be green.
+4. If the server is public (Config → Private off) it shows up in the BeamMP server list within a minute or two. Private servers: friends use **Direct connect** with your public address (Health page shows it).
+5. Your public address changes from time to time? Set up a free fixed name: **Settings → Fixed address (DuckDNS)**. Friends then connect to `yourname.duckdns.org`.
+
+Worried about your home IP or DDoS? Use **Settings → Hide your IP** and read [PROTECT-YOUR-IP.md](PROTECT-YOUR-IP.md).
+</details>
+
+<details>
+<summary id="choose-how-open-your-server-is"><b>Choose how open your server is (security presets)</b></summary>
+
+**Config → Security presets**, then **Use** on one of these:
+
+| Preset | For |
+|---|---|
+| **Most secure** (recommended) | Only invited friends. Hidden from the list, BeamMP accounts only, anti-bot with name check, chat filter, anti-spam, flood protection. Your admins are put on the invite list; add your friends under **Config → Who can join** |
+| **Public but safe** | Listed publicly, but no guests, new players type a code once, max 3 per internet connection, chat filter and anti-spam |
+| **Friends only** | Hidden and invite-only, otherwise relaxed (no codes, no filter) |
+| **Open to everyone** | Public, guests welcome, no extra checks |
+| **Weak computer** | Fewer players and cars, abandoned cars removed quickly - for old laptops and slow internet |
+
+The card shows which preset your current settings match. You can change every single setting afterwards, and **Config → What changed?** can undo it.
+</details>
+
+<details>
+<summary><b>Make the server invite-only</b></summary>
+
+1. **Config → Who can join**: turn on the list and type your friends' **BeamMP usernames**, one per line (not case-sensitive).
+2. Press **Save list**. It works right away - no restart.
+3. Everyone else (and all guests) gets an "invite-only" message. They appear under **Recently refused** with a **+ allow** button, so letting someone in later is one click.
+
+From Discord (with the bot): `/whitelist add name`, `/whitelist remove name`, `/whitelist list`, `/whitelist on|off`.
+</details>
+
+### Running the server
+
+<details>
+<summary><b>Add mods (and make joining faster)</b></summary>
+
+1. Open **Mods** and **drag the mod .zip files onto the page** (or click it to pick files). Each one is virus-checked first; blocked files never reach the server.
+2. The server restarts by itself about 15 seconds later (Windows: press Restart). This disconnects anyone playing, so add mods when it's quiet.
+3. A map mod shows a **map:** badge - click **Use map** to play it.
+
+**Make joining faster:**
+- The card at the top shows how much players download before they can join.
+- Turn on **Light mode**: only the map mod for the map being played is sent. The other map mods wait (badge *waiting - light mode*) and come back by themselves when you switch to their map - from Config, a map vote, rotation or an event. Mods that aren't maps are always sent.
+- Turn on **Show the download size in the server description** so players see it in the server list.
+
+**Share or move mods:** **Mods → Modpack → Download modpack** gives you one .zip of all enabled mods with checksums. On another EasyServer: **Import a modpack…** (virus-checked again). Players on slow internet can copy the files from the modpack's `mods` folder into `Documents\BeamNG.drive\mods\multiplayer` before joining.
+
+**Updates:** mods from the BeamNG repository are checked daily. An **Update** button appears when there's a new version.
+
+Other ways: Windows - drag zips onto **Drop BeamMP Mods Here** on the desktop. Linux - drop them into the `BeamMP-Mods` folder, or `beammp addmod ~/Downloads/*.zip`.
+</details>
+
+<details>
+<summary><b>Change the map, map vote, rotation and events</b></summary>
+
+- **Switch now:** **Overview → Map**, pick one, confirm. The server restarts on the new map.
+- **Let players vote:** **Config → Map vote**: tick the maps players may choose. In the game chat they type `/vote`, then `/vote 2` or `/vote utah`. More than half of the players online = the map changes about 30 seconds later (at most once every 5 minutes).
+- **Rotate automatically:** **Config → Map rotation**: tick at least two maps in order, choose how often (1-24 hours) and the countdown. Optionally only change when nobody is online.
+- **Weekly events:** **Config → Events → Add event**: name (e.g. "Friday drift night"), days, start time, how long, the map and any mods to turn on. The event is announced in Discord and the game chat, the server switches over at the start time and switches back afterwards. **End now** stops it early.
+- **Advertise events:** **Settings → Telegram, Slack & other apps → Advertise events automatically** posts new events to Discord / Telegram / your webhook, again the day before, and reminds players in the game every 30 minutes in the last 3 hours.
+
+Built-in maps: `gridmap_v2`, `west_coast_usa`, `east_coast_usa`, `utah`, `italy`, `jungle_rock_island`, `industrial`, `small_island`, `automation_test_track`, `hirochi_raceway`, `johnson_valley`, `derby`, `driver_training`. Without the dashboard: Linux `beammp map italy`, or edit `ServerConfig.toml` → `Map = "/levels/italy/info.json"`.
+</details>
+
+<details>
+<summary><b>Chat messages: welcome, tips and announcements at set times</b></summary>
+
+- **Config → Welcome message & announcements**: a greeting only the new player sees, and messages posted to everyone every 5-120 minutes, in turn (your Discord link, rules, tips). `{name}` = the player's name, `{players}` = how many are online.
+- **Config → Announcements at set times**: **+ Add**, pick a time and days (e.g. 20:30 on Fri and Sat), write up to 3 lines, tick **Discord** to post it there too, **Save**. Only sent to the game when someone is online.
+- **Config → Quick setup: server templates** fills all of this in for a Drift, Racing, Roleplay or Chill server in one click.
+</details>
+
+<details>
+<summary><b>Teleport and repair commands (/tp, /repair)</b></summary>
+
+1. **Config → In-game tools: teleport & repair**.
+2. Turn on **/tp name** and choose the wait between teleports.
+3. Choose how **repairing** works:
+   - **Normal** - reset keys work as usual, `/repair` too.
+   - **Realism** - reset, recover and teleport keys are off for everyone; `/repair` works every few minutes (you choose how many).
+   - **Hardcore** - no resets and no repairs.
+4. **Save.** EasyServer adds a tiny helper mod (2 KB, shown as *EasyServer tools* on the Mods page) and the server restarts once. Players download it automatically.
+
+In the game:
+- `/tp dani` asks Dani; Dani types `/tpaccept` (or `/tpdeny`) within 60 seconds, and you're placed behind their car. Part of a name is enough.
+- `/repair` (or `/fix`) repairs your car in place.
+- `/help` lists the commands that are on.
+
+The helper only moves or repairs the player's own car, and only when the server says so. Turning every tool off removes it again.
+</details>
+
+<details>
+<summary><b>Moderate players: kick, mute, ban and in-game admins</b></summary>
+
+- **Players → Online now & moderation**: **Mute 10 min**, **Kick** or **Ban…** (1 hour to forever, with a reason the player sees). Unban under **Banned players**. Send a message to everyone in the game chat.
+- **In-game admins:** **Config → Moderation & anti-bot → Admins**: their BeamMP names. They can then type `/kick name`, `/ban name 1d reason`, `/mute name 10`, `/unmute name`, `/unban name` in the game chat. Their bans are saved in the dashboard.
+- **Chat filter, anti-spam and anti-bot** are on the same card - see the [feature reference](#moderation--anti-bot-config-and-players-pages).
+- Every ban, kick and mute (from the dashboard, Discord or the game) is in **Logs → Activity log**.
+</details>
+
+<details>
+<summary><b>Maintenance mode (close the server while you work on it)</b></summary>
+
+1. **Players → Maintenance mode**.
+2. Write the message players see (e.g. "Updating mods - back at 18:00").
+3. Optionally list players who may still join (testers). Admins can always join.
+4. Leave **Disconnect the other players** on to warn people online and disconnect them after 10 seconds.
+5. **Start maintenance.** Works right away, no restart. Discord's status message and the public status page show "Maintenance".
+6. Done? **End maintenance** - everyone can join again and the game chat is told.
+
+Moderators can do this too.
+</details>
+
+<details>
+<summary><b>Scheduled restarts and automatic updates</b></summary>
+
+**Config → Restarts & updates**: restart once a day at a set time or every 1-12 hours, with a countdown in the game chat - or only when nobody is online. Tick **install BeamMP updates** to update at that restart. EasyServer updates itself from the **Updates** page.
+</details>
+
+### Your team
+
+<details>
+<summary><b>Give friends their own login (admins, moderators, viewers)</b></summary>
+
+**Settings → Users & roles** (only you, the owner, see this):
+1. Type a name, pick a role, set a password (at least 10 characters) → **Add**. Give them the name, the password and the dashboard address.
+2. Roles:
+
+| Role | Can |
+|---|---|
+| **Viewer** | Look at everything, change nothing |
+| **Moderator** | Kick, mute, ban, unban, who can join, restart the server, maintenance mode, chat messages |
+| **Admin** | Everything except users, passwords, two-step login, internet access and the status page |
+| **Owner** (you) | Everything |
+
+3. Change a role, reset a password, disable or delete someone at any time on the same card.
+
+Extra accounts can only log in from your home network. **Logs → Activity log** shows who did what, when and from where - including Discord commands and in-game admin actions.
+</details>
+
+<details>
+<summary><b>Discord: alerts, status message, bot and chat bridge</b></summary>
+
+**Alerts and the live status message (webhook - 1 minute):**
+1. In Discord: your channel → **Edit channel → Integrations → Webhooks → New webhook → Copy webhook URL**.
+2. Dashboard: **Settings → Discord** → paste it, turn on **Send to Discord**, **Send test**, then **Save notification settings**.
+3. Choose what you're told about under **Notify me about**.
+4. **Settings → Discord bot → Live status message** keeps one message in the channel up to date (servers, players, CPU, next events).
+
+**Slash commands (bot - 5 minutes):**
+1. Open [discord.com/developers/applications](https://discord.com/developers/applications) → **New Application** → name it.
+2. **Installation** → set **Install Link** to **None** and save (otherwise Discord won't let you make the bot private).
+3. **Bot** → turn **Public Bot** off. For the chat bridge also turn on **Message Content Intent**. Then **Reset Token** → **Copy**.
+4. Dashboard: **Settings → Discord bot** → paste the token, turn the bot on, **Save**. When it says **Online**, click **Add the bot to your Discord**, pick your Discord server, and choose it in **Discord server the bot answers in**.
+5. Type `/status` in Discord. New commands can take a minute - restart Discord if they don't show up.
+
+Commands: `/status` and `/events` and `/top` (everyone), `/start`, `/stop`, `/restart`, `/sleep` and `/whitelist` (people with **Manage Server**, or the Discord users you allow). **Chat bridge**: the game chat appears in the channel and messages from the channel appear in the game.
+
+**Join alerts:** **Config → Join alerts** posts when chosen players join ("Dani just joined - 3/8 online") and can ping a role.
+</details>
+
+<details>
+<summary><b>Alerts on your phone, Telegram, Slack, email and more</b></summary>
+
+All alert channels use the same **Notify me about** switches (Settings). Security alerts always go everywhere you set up.
+
+- **Phone (ntfy):** install the free **ntfy** app (Android / iPhone), then **Settings → Phone app** → scan the subscribe QR code. Stored privately and encrypted.
+- **Telegram:** in Telegram open **@BotFather** → `/newbot` → copy the token. **Settings → Telegram, Slack & other apps** → paste it → **Save**. Send your new bot a message (or add it to a group) → **Find my chat** → turn on **Send alerts to Telegram** → **Send test**.
+- **Slack, Teams, Mattermost, Rocket.Chat, Google Chat, Home Assistant, n8n, Zapier ...:** create an *incoming webhook* in that app, paste its address under **Any app with a webhook**, turn it on → **Send test**.
+- **Email:** **Settings → Email** - your provider's SMTP server. Gmail / Outlook need an *app password* from your account's security settings.
+- **Discord:** see the Discord guide above.
+</details>
+
+<details>
+<summary><b>Phone app</b></summary>
+
+- **Android:** download `BeamMP-EasyServer.apk` from the [latest release](https://github.com/Csabika-dev/beammp-easyserver/releases/latest), install it, then scan the QR code under **Settings → Phone app**. The app remembers your dashboard's certificate, so it only ever talks to your server. It also has a **Wake up** button when the server computer sleeps.
+- **iPhone:** open the dashboard in Safari → Share → **Add to Home Screen**.
+</details>
+
+<details>
+<summary><b>Public status page (for your players)</b></summary>
+
+1. **Settings → Public status page** → turn it on.
+2. Choose whether to show player names and the mod list (with the download size), optionally a title → **Save**.
+3. Share `http://<your-address>:30815/status`. It shows each server's state (online, offline, maintenance, sleeping), players, map, mods, the next event and 30-day uptime. No login, no addresses, no buttons.
+4. For a website or bot: `/status.json`.
+
+At home it works right away. Players outside your network can only open it when **internet access to the dashboard** is on (see below) - otherwise share Discord's live status message instead.
+</details>
+
+### When something goes wrong
+
+<details>
+<summary><b>Someone can't join</b></summary>
+
+1. **Health → Someone can't join?** → type their BeamMP name → **Check**. It reads what happened to their last join attempt (banned, not on the invite list, maintenance, guest blocked, anti-bot, too many from one connection, server full ...) and tells you the fix.
+2. Nobody can join? **Health → Check again** (or **Full check** for the outside view). Red items say what to do - usually the port isn't forwarded, the AuthKey is missing, or the server isn't running.
+3. **Logs → Explain the whole log** lists every error and warning in plain English. Click any red or yellow line to explain just that line.
+4. Still stuck? **Health → Download diagnostic report** and share it when asking for help (BeamMP Discord, or an issue here). Keys, passwords and addresses are removed from it.
+</details>
+
+<details>
+<summary><b>Undo a config change ("What changed?")</b></summary>
+
+**Config → What changed?** keeps the last 40 versions of the config with who changed it and why (a save, a preset, a template, a map switch ...).
+- **Show change / Compare with now** lists exactly which settings changed (before → after); **Show the exact lines** shows the raw text.
+- **Restore** goes back to that version (your AuthKey is kept). The current version stays in the list, so you can undo the undo.
+- **Compare with another server** shows how two of your servers differ.
+</details>
+
+<details>
+<summary><b>The server keeps crashing or lagging</b></summary>
+
+- **Health** shows memory and disk. **Settings → Computer load** has 24-hour graphs of processor, memory, upload and players.
+- Low-resource warnings come with a suggested player limit. Try the **Weak computer** preset, fewer Max cars, or light mode for map mods.
+- **Logs → Explain the whole log** - crashes, out-of-memory and broken mods are recognised.
+- Running several servers? **Servers → Limits…** caps CPU, RAM and mod download speed per server.
+- EasyServer restarts a crashed server automatically and tells you (if crash notifications are on).
+</details>
+
+### More
+
+<details>
+<summary><b>Run several servers / copy a server</b></summary>
+
+1. **Servers → Add a server**.
+2. **Start from**: *a fresh server*, or *a copy of* an existing one - the copy gets its config, who can join, moderation, bans, chat messages, events and restart times (mods aren't copied - use a modpack).
+3. Name, a **free port** (each server needs its own, and its own port forward for internet play), optionally its own AuthKey (one key per public server).
+4. **Create server.** Pick which server the other pages manage with the **Server** menu at the top of the sidebar.
+
+Each server runs on its own - one crashing doesn't affect the others - and one BeamMP update updates them all. **Limits…** caps CPU, RAM and mod download speed per server.
+</details>
+
+<details>
+<summary><b>Manage the server from outside your home</b></summary>
+
+**Settings → Access from the internet** is only allowed once:
+1. **HTTPS** is on (Settings). The browser warns you the first time - compare the fingerprint shown in Settings, then continue.
+2. **Two-step login** is on (scan the QR code with an authenticator app).
+3. Your password has at least 12 characters.
+
+Then forward port **30815 (TCP)** on your router. Wrong passwords lock the visitor out for 15 minutes and notify you. Users other than the owner still only work from home.
+
+Forgot the password or lost your phone? Linux: `sudo beammp reset-login`. Windows: double-click `Reset-Dashboard-Login.bat`, then open the dashboard on the server computer.
+</details>
+
+<details>
+<summary><b>Don't run the computer 24/7 (sleep and Wake-on-LAN)</b></summary>
+
+1. **Settings → Sleep & wake-up → Auto-sleep**: the computer sleeps when nobody has played for a while (5 minutes to 24 hours), optionally only between certain hours. It never sleeps while someone is online, an event runs or starts within 30 minutes, or the dashboard is being used. **Sleep now** and Discord `/sleep` work too.
+2. **Wake up by itself** 10 minutes before every event, and optionally every day at a set time - no extra device needed.
+3. **Wake-on-LAN** (wake it on demand): connect the computer with a **network cable** (Wi-Fi can't wake it; laptops must stay plugged in) → **Turn on** next to the cable adapter. The **compatibility score** lists exactly what still has to change (e.g. a BIOS setting).
+4. **Waking it from anywhere:** the **router guide** has steps for FRITZ!Box, ASUS, TP-Link, Ubiquiti, MikroTik, OpenWrt, Netgear and others. Or use the **wake helper** on a Raspberry Pi or any always-on device at home: it answers `/start` in Discord and the **Wake up** button in the phone app while the server sleeps, without port forwarding.
+   - Linux / Raspberry Pi: `curl -fsSLO https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/main/wake/install-wake-helper.sh && sudo bash install-wake-helper.sh`
+   - Windows: `BeamMP-EasyServer-WakeHelper.zip` from the latest release → `Install-Wake-Helper.bat`
+   - Pair it with the code from **Settings → Sleep & wake-up → Wake helper**, then **Test the helper**.
+</details>
+
+<details>
+<summary><b>Backups and moving to a new computer</b></summary>
+
+- **Nightly backups** (on by default, Settings → Automatic backups): every server's settings, invite list, bans, moderation, messages and rotation at 03:30, optionally with mods. The last 7 are kept - download one any time.
+- **Move or restore:** **Settings → Backup / move to another computer → Export settings** (or **+ mods**). On the new EasyServer: **Import…** the file. Mods are virus-checked again; keys and passwords are never exported, so paste the AuthKey again.
+</details>
+
+---
+
+## Feature reference
 
 ### Cars & chat (Config page)
 
@@ -59,204 +483,14 @@ All of this runs in the small EasyServerStats plugin on the server, so players d
   - **Max players from one internet connection** (your own network is never limited)
   - **Max new players per minute:** above it, new joins pause for 2 minutes and you get a security alert
 
-### Restarts & updates (Config page)
 
-Restart the server on a schedule (off by default): once a day or every 1-12 hours, with a countdown in the chat - or wait until nobody is online. Optionally **install BeamMP updates automatically** at that restart.
+### Privacy
 
-### Privacy and first start
-
-- **IP addresses are blurred** in the dashboard until you click them (like a password), so screenshots and screen-sharing don't leak your address.
-- **Before a server's first start** the dashboard shows its key settings once (name, map, public/private, AuthKey, two-step login, internet access, anti-bot, car cleanup…) so nothing goes live by accident.
-
-### Address change warning
-
-If this computer's address on your home network changes (your phone's dashboard link stops working) or your public IP changes (friends can't join), you get a notification with the new address and how to stop it happening (a DHCP reservation in your router).
-
-### Map: one-click switch and voting
-
-The **Map** card on Overview switches the map and restarts the server. With **Config → Map vote** turned on, players type `/vote` in the game chat to see the maps you picked, then `/vote 2` (or `/vote utah`). When more than half of the players online agree, everyone is told and the server switches about 30 seconds later. At most one change every 5 minutes.
-
-### Join alerts (automatic invites)
-
-**Config → Join alerts** posts in your Discord channel when one of your chosen players joins ("Dani just joined - 3/8 online, come and play!"), optionally pinging people or a role (`@here`, `<@user id>`, `<@&role id>`) and including the address. When someone who isn't on your allow-list tries to join, the Discord message has an **Approve** link: tap it, confirm, and they can join right away.
-
-### Templates, map rotation and chat messages (Config page)
-
-- **Server templates**: one click sets up a Drift, Racing, Roleplay or Chill server (player limit, car cleanup, AFK removal, chat tags, chat rules, welcome message, tips and map). Change anything afterwards.
-- **Map rotation** (off by default): the next map from your list every 1-24 hours, with a countdown in the chat - or only when nobody is online.
-- **Welcome message and announcements**: greet new players and post tips or your Discord link every few minutes. `{name}` and `{players}` are filled in.
-
-### Backups, fixed address and computer load (Settings page)
-
-- **Nightly backups** (on by default) of every server's settings, the last 7 kept. Download one or restore it with Import.
-- **DuckDNS**: a free fixed name like `myserver.duckdns.org` that keeps working when your home IP changes.
-- **Low-resource warnings** when the computer runs out of memory, the processor is maxed out or the upload is almost used up, with a suggested player limit.
-
-### Phone app and phone notifications
-
-- **Android:** download `BeamMP-EasyServer.apk` from the [latest release](https://github.com/Csabika-dev/beammp-easyserver/releases/latest), open it, and scan the QR code under **Settings → Phone app** with the camera. The app only connects to your dashboard's own certificate.
-- **iPhone:** open the dashboard in Safari → Share → **Add to Home Screen**. It opens full screen like an app (Apple doesn't allow apps from outside the App Store).
-- **Push notifications** on both through the free **ntfy** app - scan the QR code under Settings → Phone app.
-
-### Mod updates (Mods page)
-
-Mods from the BeamNG repository are checked once a day. When there's a new version you get a notification and an **Update** button that downloads it, runs the virus check and swaps it in.
-
-### Events (Config page)
-
-Weekly events like "Friday 20:00 drift night": announced in Discord and the game chat, then the server switches to the event's map and mods, and back when it's over.
-
-### Sleep & wake-up: don't run the computer 24/7 (Settings page)
-
-- **Auto-sleep** (off by default): the computer goes to sleep after nobody has played for a while - never while someone is online, an event runs or starts soon, or the dashboard is in use. Optionally only between certain hours. Also a **Sleep now** button and `/sleep` in Discord.
-- **Wakes up by itself** 10 minutes before every scheduled event, and optionally every day at a set time (built-in alarm clock, no other device needed).
-- **Wake-on-LAN setup**: finds the network cable adapter and turns Wake-on-LAN on (Linux and Windows), with a **compatibility score** that lists exactly what has to change when something isn't supported, and BIOS tips. Wake-on-LAN needs a **network cable** - it doesn't work over Wi-Fi - and laptops must stay plugged in.
-- **Router guide** with the steps for FRITZ!Box (it even wakes the computer when a friend tries to join), ASUS, TP-Link, Ubiquiti, MikroTik, OpenWrt, Netgear and others, with your MAC address filled in.
-- **Wake helper** (optional): a tiny program for a device at home that's always on (Raspberry Pi, NAS, another PC). While the computer sleeps, it answers `/start` in Discord and the **Wake up** button in the phone app and on the "server is asleep" page - from anywhere, without port forwarding. It can only send wake-up signals. Linux/Raspberry Pi: `curl -fsSLO https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/main/wake/install-wake-helper.sh && sudo bash install-wake-helper.sh`. Windows: `BeamMP-EasyServer-WakeHelper.zip` from the latest release → `Install-Wake-Helper.bat`.
-- The **Android app** wakes the computer itself when you're on the home Wi-Fi, and through the wake helper when you're not.
-
-### Discord commands (optional, off by default)
-
-**Settings → Discord bot** adds slash commands to your Discord: `/status` shows every server with online players, map, CPU and memory (anyone can use it), and `/start`, `/stop` and `/restart` let people with **Manage Server** (or the Discord users you allow) control the servers. You make a free bot in the Discord Developer Portal and paste its token; the dashboard walks you through it. The bot only answers in the Discord server you choose and needs no port forwarding.
-
-Also: `/top` (most played), `/events`, `/sleep` and `/whitelist add|remove|list|on|off`; a **live status message** in your channel that updates every minute; and a **chat bridge** between the game chat and your Discord channel.
-
-### Invite-only servers (allow-list)
-
-BeamMP has no join password, so EasyServer adds a guest list instead: **Config → Who can join**. Turn it on, type the BeamMP usernames of your friends (one per line, not case-sensitive) and press **Save list**. Everyone else, and all guests, get an "invite-only" message when they try to join. It works immediately, without a restart. Refused players show up under **Recently refused** with a one-click **+ allow**, and you can get a notification when it happens.
-
-### Access from the internet (optional, off by default)
-
-To manage the server when you're not at home, go to **Settings → Access from the internet**. It's only allowed when all of these are true:
-- **HTTPS** is on. The dashboard makes its own certificate, so your browser warns you the first time; compare the fingerprint shown in Settings, then continue.
-- **Two-step login** is on, with codes from Google Authenticator, Microsoft Authenticator, Aegis or similar.
-- Your password has at least 12 characters.
-
-Then forward port **30815 (TCP)** on your router. Wrong passwords lock out the visitor for 15 minutes, and you get a notification.
-
-Forgot the password or lost your phone? On Linux run `sudo beammp reset-login`. On Windows double-click `Reset-Dashboard-Login.bat`, then open the dashboard on the server PC to set a new password.
-
-### Backup and moving servers
-
-**Settings → Backup** exports your config and settings (optionally all mods) into one file. Import it on another EasyServer and the mods are virus-checked again on the way in. Keys and passwords are never exported.
+- **IP addresses are blurred** in the dashboard until you click them, so screenshots and screen-sharing don't leak your address.
+- **Address change warning:** if the server's home address or your public IP changes, you get a notification with the new address and how to stop it happening.
+- Player statistics, the activity log and diagnostic reports stay on your computer.
 
 ---
-
-## Before you start: get your free AuthKey (1 minute)
-
-1. Go to **https://keymaster.beammp.com** and log in with Discord
-2. Click **Keys**, then **+**, give it any name
-3. Copy the key; the installer will ask for it
-
----
-
-## Windows
-
-1. Download **BeamMP-EasyServer-Windows.zip** from the [Releases page](https://github.com/Csabika-dev/beammp-easyserver/releases/latest) and extract it (or use the green **Code** button → **Download ZIP** and open the `windows` folder)
-2. Double-click **`Install-BeamMP-Server.bat`**
-3. Click **Yes** when Windows asks for permission
-4. Fill in the window (paste your AuthKey) and press **Install**
-
-That's it. You get a **Start BeamMP Server** shortcut on your desktop.
-
-It also handles:
-- The **web dashboard** (a small portable Python is downloaded for it; it starts when you log in). The first time you open it, you create a password
-- A **Drop BeamMP Mods Here** desktop icon: drag mod zips onto it (each one is virus-checked first)
-- Your AuthKey and VirusTotal key are stored **encrypted**
-- Microsoft Visual C++ Runtime (installed automatically if missing)
-- Windows Firewall rules for the server port
-- Optional auto-start when you log in
-
-| File | What it does |
-|---|---|
-| `Install-BeamMP-Server.bat` | Install, or change settings later (run it again) |
-| `Add-Mods.bat` | Drag mod .zip files onto it (same as the desktop icon) |
-| `Reset-Dashboard-Login.bat` | Forgot the dashboard password or lost your two-step phone |
-| `Update-BeamMP-Server.bat` | Download the newest BeamMP server |
-| `Uninstall-BeamMP-Server.bat` | Remove everything |
-
----
-
-## Linux (recommended for a dedicated server)
-
-Linux runs the server in the background as a service. It starts by itself when the computer boots, and it runs well on old laptops and PCs.
-
-### Option A: one command
-
-Open a terminal and paste:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/main/linux/install.sh | sudo bash
-```
-
-### Option B: download and run
-
-1. Download **BeamMP-EasyServer-Linux.zip** from the [Releases page](https://github.com/Csabika-dev/beammp-easyserver/releases/latest) and extract it
-2. Double-click **`install.sh`** and choose **Run in Terminal**
-   - Doesn't run? Right-click inside the folder → **Open in Terminal**, then type `bash install.sh` and press Enter
-3. Enter your password and answer the questions
-
-### What the Linux installer does automatically
-
-- Detects your distro and downloads the matching official build
-- Installs the needed libraries (Lua 5.3)
-- Creates a separate `beammp` user so the server doesn't run as root
-- Creates a **systemd service** so the server starts on boot and restarts if it crashes
-- Opens the port in the firewall (ufw / firewalld) if one is active
-- **Laptop mode:** keeps the server running with the lid closed and stops the machine from going to sleep
-- Sets up **easy mod uploading**: a drag & drop web page, a `BeamMP-Mods` folder, and automatic restart when mods change
-- **Virus-checks every mod** and **stores your keys encrypted** (see below)
-- Installs the **web dashboard** (runs as its own limited user, separate from the game server)
-- Installs a simple `beammp` command to manage it
-
-### Managing the server
-
-```
-beammp status      is it running?
-beammp logs        live server console (Ctrl+C to leave)
-beammp restart     restart (also: start / stop)
-beammp config      edit name, map, key... then auto-restart
-beammp dashboard   dashboard address and password
-beammp reset-login new dashboard password, turns off two-step login (lost phone)
-beammp mods        list mods
-beammp addmod F    add mod .zip file(s)
-beammp map NAME    change the map (e.g. beammp map italy)
-beammp scan        virus-check all mods again
-beammp key         change your BeamMP AuthKey (stored encrypted)
-beammp virustotal  set or remove the VirusTotal key (stored encrypted)
-beammp ip          the addresses your friends connect to
-beammp update      download the newest BeamMP server
-beammp uninstall   remove everything (also undoes laptop mode)
-```
-
-### Supported systems
-
-| Distro | Status |
-|---|---|
-| Ubuntu 22.04 / 24.04 and newer | ✅ official build |
-| Linux Mint 21 / 22, Pop!_OS, Zorin, elementary | ✅ official build |
-| Debian 12 / 13, LMDE 6+ | ✅ official build |
-| Fedora, Arch, openSUSE | ⚠️ best effort |
-| 64-bit x86 and ARM64 (e.g. Raspberry Pi 4/5 with 64-bit OS) | ✅ |
-
-### Advanced (no questions asked)
-
-```bash
-sudo bash install.sh --unattended --key YOUR_KEY --name "My Server" \
-  --map west_coast_usa --players 10 --public --laptop-mode yes --mod-page yes
-```
-
-Run `bash install.sh --help` for all options.
-
----
-
-## Letting friends join over the internet
-
-Friends on the **same Wi-Fi** can join right away using the LAN address shown at the end of the install.
-
-For friends **anywhere else**, forward port **30814** (both **TCP and UDP**) on your router to the server computer. Search for "*your router model* port forwarding" for instructions. Then your server shows up in the BeamMP server list (if you chose public), or friends can connect with your public IP.
-
-**Worried about DDoS?** Forwarding the port means players connect straight to your home IP. Under **Settings → Hide your IP** (off by default) players can join through a relay instead - playit.gg, a VPN with port forwarding, or your own VPS. Much less chance of a DDoS hitting your home, but a bit more lag. On Linux there's also optional **flood protection** for the game port. See [PROTECT-YOUR-IP.md](PROTECT-YOUR-IP.md).
 
 ## 🛡️ Mod virus check
 
@@ -286,53 +520,14 @@ Your **BeamMP AuthKey**, your **VirusTotal key**, your **Discord bot token**, yo
 
 So you can share or back up your server folder and `ServerConfig.toml` without leaking your keys. Change them with `sudo beammp key` / `sudo beammp virustotal` (Linux) or by running the installer again (Windows).
 
-## Adding mods (easy)
-
-Mods are `.zip` files, for example from the BeamNG.drive mod repository. Players who join download them automatically.
-
-### From the dashboard (Linux and Windows)
-
-Open the dashboard's **Mods** page and **drag & drop mod zips onto it**. Each upload is virus-checked first, and a blocked file never reaches the server. From there you can also:
-- turn mods on/off without deleting them
-- delete mods
-- pick a **map mod** as the server map with one click (map mods are detected automatically)
-
-The server **restarts by itself about 15 seconds after any change**, so there's nothing else to do. Note that a restart disconnects anyone who is playing.
-
-Other ways on Linux:
-- On the server itself, drop zips into the **`BeamMP-Mods`** folder in your home folder or on your desktop (log out and back in once after installing)
-- From the terminal: `beammp addmod ~/Downloads/*.zip`, and change the map with `beammp map italy`
-
-> The mod page is for your home network only. Do **not** port-forward port 30815.
-
-### Windows: drag & drop onto the desktop icon
-
-Drag mod `.zip` files onto **Drop BeamMP Mods Here** on your desktop. It copies them in, offers to switch to the map if the mod contains one, and restarts the server for you. Double-clicking the icon opens the mods folder.
-
-Mods folder locations: `C:\BeamMP-Server\Resources\Client` (Windows) and `/opt/beammp-server/Resources/Client` (Linux).
-
-## Changing the map
-
-Easiest: the **Map** card on the dashboard's Overview page (or let players vote, see above). Without the dashboard, run the installer again, or edit `ServerConfig.toml`:
-
-```toml
-Map = "/levels/west_coast_usa/info.json"
-```
-
-Built-in maps: `gridmap_v2`, `west_coast_usa`, `east_coast_usa`, `utah`, `italy`, `jungle_rock_island`, `industrial`, `small_island`, `automation_test_track`, `hirochi_raceway`, `johnson_valley`, `derby`, `driver_training`
-
----
-
 ## 🗺️ Roadmap
 
 Ideas for future versions (not built yet):
 
-- **AI troubleshooting assistant**: reads the server log and explains errors in plain English with suggested fixes (today the Logs page has simple built-in hints)
+- **Live map** on the status page with car positions (if the BeamMP server makes them available)
+- **More game-side rules**: blocking heavy props and articulated trailers, using the same helper mod as `/tp` and `/repair`
 - **Plugin ecosystem**: let developers add their own pages and tools to the dashboard
-- More analytics: per-map statistics and mod download stats
-- **Public player page**: a read-only page without login where players can see who's online, the current map and the mods before they launch the game (live car positions if the BeamMP server makes them available)
-- **Game-side commands**: `/tp <player>` with `/tpaccept`, a `/repair` cooldown for realism/RP servers, and blocking heavy props and articulated trailers. These need a small mod that players download automatically when they join, because the server alone can't move or repair cars
-- **Light modpack mode**: only send players the map mod that's actually being played, instead of every map
+- Mod download statistics
 
 Suggestions are welcome; open an issue.
 

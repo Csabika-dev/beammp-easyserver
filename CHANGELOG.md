@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.12.0 - Teleport, repair, light mode
+
+- **In-game tools** (Config, off by default): `/tp name` with `/tpaccept` / `/tpdeny` and a wait between teleports; repairing set to Normal, Realism (reset keys off, `/repair` every few minutes) or Hardcore (no resets, no repairs). Uses a 2 KB helper mod that EasyServer adds and removes by itself and players download automatically.
+- **Light mode for map mods** (Mods page): players only download the map mod of the map being played; the others come back by themselves when their map is picked (Config, vote, rotation, events). Shows how much download it saves.
+- **Map statistics** (Players page): hours played, players, average stay, peak and time on for every map, for 7 / 30 / 90 days.
+- **Log explainer** (Logs page): "Explain the whole log" groups every error and warning with what it means and what to do; click a red or yellow line to explain it. The automatic hints use the same, much bigger list.
+- **Status page**: now also lists the mods and the download size (can be turned off).
+
+**Security fixes** (found by attacking a test install):
+- Log explainer: a player could slow the dashboard down for many seconds by writing specially crafted chat (chat ends up in the server log). Lines are now cut to 400 characters, the patterns are bounded and reading stops after 4 seconds.
+- An AuthKey written with single quotes, triple quotes or a lower-case `authkey` was not hidden in diagnostic reports and the config history (which viewers can read). Every TOML form is hidden now.
+- A modified game client could fire the plugin's internal timer events (fake player counts in the statistics, a lot of disk writes, skipping countdowns). The plugin now ignores timer events sent by players.
+- The custom alert webhook can only reach internet addresses - not this computer, the home network or cloud-internal addresses - and doesn't follow redirects.
+- `/tp` requests have a 15-second cooldown and one open request per player, so nobody can flood someone's chat with them.
+- Guests never get admin rights or the maintenance bypass, even with an admin's name.
+- Chat bridge: players can't post disguised links (`[free mods](https://...)`) into your Discord any more.
+- Wake helper: refuses `/start` when it was paired before a Discord server was picked, instead of answering in any Discord server.
+- Windows installer: the downloaded Python and Visual C++ files must carry a valid signature from the Python Software Foundation / Microsoft before they run, and get random temp names.
+- Mods named after reserved Windows devices (`CON.zip`, `NUL.zip` ...) are refused.
+
+## 1.11.0 - Admin tools
+
+- **Server health report** (the Network page is now **Health**): internet connectivity, the BeamMP backend, the server process, the game port, config, AuthKey, stats plugin, mods, outside reachability, disk and memory - each Passed / Warning / Failed with the fix. Checked every 30 minutes; when something starts failing you get a notification and a **diagnostic report** is saved (the last 10 are kept, downloadable, with keys, passwords and addresses removed).
+- **Connection doctor**: "Someone can't join?" - type a name and it explains why their last join failed and what to do.
+- **Users & roles** (Settings, owner only): extra logins for moderators (kick, mute, ban, who can join, restart, maintenance), viewers (read-only) and admins. Extra accounts only work from your home network; the user list is signed against tampering. Every request is checked against the role.
+- **Activity log** (Logs page): who did what and when, from the dashboard, Discord and the game, including logins.
+- **Maintenance mode** (Players page): only admins and listed players can join, everyone else gets your message; online players get a 10-second warning. Shown in the Discord status message and on the status page.
+- **Security presets** (Config): Most secure, Public but safe, Friends only, Open to everyone, Weak computer.
+- **What changed?** (Config): the last 40 versions of the config with who changed it, a setting-by-setting comparison (also between two servers) and one-click restore.
+- **Copy a server**: create a new server as a copy of an existing one (config, who can join, moderation, bans, messages, events, restarts).
+- **Announcements at set times** (Config) - in the game chat and optionally Discord.
+- **Advertise events automatically** (Settings): posted to Discord / Telegram / webhook when planned and the day before, plus in-game reminders in the last 3 hours.
+- **Telegram and webhook alerts** (Settings): Telegram through your own bot (finds the chat by itself) and any incoming webhook - Slack, Mattermost, Rocket.Chat, Google Chat, Teams, Home Assistant, n8n, Zapier ...
+- **Public status page** (Settings, off by default): `/status` and `/status.json` with state, players, map, next event and 30-day uptime. No login, no addresses.
+- **Modpack** (Mods page): download all enabled mods as one .zip with checksums, and import a modpack into another server (virus-checked).
+
 ## 1.10.0 - Sleep & wake-up
 
 - **Auto-sleep** (Settings -> Sleep & wake-up, off by default): the server computer goes to sleep when nobody has played for 5 minutes to 24 hours, optionally only between certain hours. It never sleeps while someone is online, an event runs or starts within 30 minutes, the dashboard is being used or a server is being started from Discord. **Sleep now** button and `/sleep` in Discord (Manage Server only).
