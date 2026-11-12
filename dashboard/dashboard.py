@@ -14,6 +14,7 @@ Not affiliated with the BeamMP team.
 import base64
 import hashlib
 import hmac
+from html import escape as html_escape
 import ipaddress
 import json
 import os
@@ -38,7 +39,7 @@ import zipfile
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-EASY_VERSION = "1.10.0"
+EASY_VERSION = "1.12.0"
 REPO = "Csabika-dev/beammp-easyserver"
 BEAMMP_REPO = "BeamMP/BeamMP-Server"
 IS_WIN = os.name == "nt"
@@ -74,7 +75,8 @@ BUILTIN_MAPS = ["gridmap_v2", "west_coast_usa", "east_coast_usa", "utah", "italy
                 "hirochi_raceway", "johnson_valley", "derby", "driver_training"]
 
 SECRET_NAMES = ("MODS_PASSWORD", "VT_API_KEY", "DISCORD_WEBHOOK", "SMTP_PASSWORD", "TOTP_SECRET",
-                "BEAMMP_AUTH_KEY", "DISCORD_BOT_TOKEN", "DUCKDNS_TOKEN", "NTFY_TOPIC", "WAKE_TOPIC")
+                "BEAMMP_AUTH_KEY", "DISCORD_BOT_TOKEN", "DUCKDNS_TOKEN", "NTFY_TOPIC", "WAKE_TOPIC", "USERS_KEY",
+                "TELEGRAM_TOKEN", "CUSTOM_WEBHOOK")
 
 DEFAULT_SETTINGS = {
     "port": 30815,
@@ -121,6 +123,14 @@ DEFAULT_SETTINGS = {
     "sleep_to": "",
     "sleep_wake_at": "",           # wake up by itself every day at this time (HH:MM, empty = no)
     "sleep_wake_events": True,     # ...and 10 minutes before every scheduled event
+    "telegram_enabled": False,     # alerts to a Telegram chat through your own bot (token = secret TELEGRAM_TOKEN)
+    "telegram_chat": "",
+    "webhook_enabled": False,      # alerts to any web address (Slack, Mattermost, Rocket.Chat, Teams workflows, Home Assistant ...)
+    "statuspage_on": False,        # public page /status: is the server up, players, uptime - no login
+    "statuspage_players": False,   # ...also show the names of online players
+    "statuspage_title": "",
+    "statuspage_mods": True,       # ...and the mod list with the download size
+    "event_ads": False,            # advertise events: Discord/Telegram/webhook post when planned + a day before, in-game reminders
 }
 SECURITY_FILE = os.path.join(DATA_DIR, "security.json")
 SECURITY_REPEAT = 15 * 60
@@ -161,6 +171,8 @@ class Instance:
         self.VERIFIED_FILE = os.path.join(self.STATS_DIR, "verified.txt")
         self.MSG_FILE = os.path.join(self.STATS_DIR, "messages.txt")
         self.BRIDGE_FILE = os.path.join(self.STATS_DIR, "bridge.txt")
+        self.MAINT_FILE = os.path.join(self.STATS_DIR, "maintenance.txt")
+        self.TOOLS_FILE = os.path.join(self.STATS_DIR, "tools.txt")
         self.CONFIG = os.path.join(self.SERVER_DIR, "ServerConfig.toml")
         self.SERVER_LOG = os.path.join(self.SERVER_DIR, "Server.log")
         self.authkey_name = "BEAMMP_AUTH_KEY" if iid == "main" else "BEAMMP_AUTH_KEY_" + iid.upper()
@@ -895,6 +907,7 @@ def map_name(v):
 
 
 def enabled_mod_maps():
+    """Maps players can play: from enabled mods, and from map mods parked by light mode (they come back with their map)."""
     found = set()
     try:
         for n in os.listdir(I().CLIENT_DIR):
@@ -902,7 +915,118 @@ def enabled_mod_maps():
                 found.update(zip_maps(os.path.join(I().CLIENT_DIR, n)) or [])
     except OSError:
         pass
+    for n in parked_maps(I()):
+        found.update(zip_maps(os.path.join(I().DISABLED_DIR, n)) or [])
     return sorted(found)
+
+
+# ----------------------------------------------------------------------------- light mode: only the map being played
+def parked_maps(inst):
+    v = inst.meta.get("parked_maps")
+    return [n for n in v if isinstance(n, str)] if isinstance(v, list) and inst.meta.get("light_maps") else []
+
+
+def light_sync(inst, cur=None):
+    """With light mode on, only the map mod of the map being played is sent to players. The other map mods
+    wait in Client-disabled (marked as parked) and come back when their map is picked. Returns what moved."""
+    if not inst.meta.get("light_maps"):
+        return []
+    cur = cur or current_map()
+    parked = list(inst.meta.get("parked_maps") or [])
+    moved = []
+    try:
+        names = sorted(os.listdir(inst.CLIENT_DIR))
+    except OSError:
+        names = []
+    for n in names:
+        if not n.lower().endswith(".zip") or n == TOOLS_MOD:
+            continue
+        maps = zip_maps(os.path.join(inst.CLIENT_DIR, n)) or []
+        if maps and cur not in maps and set_mod_enabled(n, False):
+            parked.append(n)
+            moved.append("-" + n)
+    keep = []
+    for n in parked:
+        pth = os.path.join(inst.DISABLED_DIR, n)
+        if not os.path.exists(pth):
+            continue
+        if cur in (zip_maps(pth) or []):
+            if set_mod_enabled(n, True):
+                moved.append("+" + n)
+                continue
+        if n not in keep:
+            keep.append(n)
+    if keep != inst.meta.get("parked_maps"):
+        set_server_meta(inst.id, parked_maps=keep)
+    return moved
+
+
+def light_off(inst):
+    back = [n for n in (inst.meta.get("parked_maps") or []) if set_mod_enabled(n, True)]
+    set_server_meta(inst.id, parked_maps=None, light_maps=None)
+    return back
+
+
+# ----------------------------------------------------------------------------- map history (for per-map statistics)
+def _maplog_path(inst):
+    return os.path.join(DATA_DIR, "maps-%s.json" % inst.id)
+
+
+def map_timeline(inst):
+    v = read_json(_maplog_path(inst), [])
+    return [x for x in v if isinstance(x, list) and len(x) == 2] if isinstance(v, list) else []
+
+
+def record_map(inst, name, t=None):
+    if not name:
+        return
+    tl = map_timeline(inst)
+    if tl and tl[-1][1] == name:
+        return
+    tl.append([t or now(), name])
+    write_json(_maplog_path(inst), tl[-2000:])
+
+
+def per_map_stats(inst, days=30):
+    t_now = now()
+    since = t_now - days * 86400
+    tl = map_timeline(inst)
+    if not tl:
+        return {"since": None, "maps": []}
+    spans = []
+    for i, (t0, m) in enumerate(tl):
+        t1 = tl[i + 1][0] if i + 1 < len(tl) else t_now
+        a, b = max(t0, since), min(t1, t_now)
+        if b > a:
+            spans.append((a, b, m))
+    sessions, samples = event_sessions(read_events(since), t_now)
+    out = {}
+    for a, b, m in spans:
+        d = out.setdefault(m, {"map": m, "map_hours": 0.0, "player_hours": 0.0, "sessions": 0, "players": set(), "peak": 0,
+                               "avg_sum": 0, "avg_n": 0, "last": 0})
+        d["map_hours"] += (b - a) / 3600.0
+        d["last"] = max(d["last"], b)
+        for n, sa, sb in sessions:
+            ov = min(sb, b) - max(sa, a)
+            if ov > 0:
+                d["player_hours"] += ov / 3600.0
+                d["players"].add(n)
+                if a <= sa < b:
+                    d["sessions"] += 1
+        for t, n in samples:
+            if a <= t < b:
+                d["peak"] = max(d["peak"], n)
+                d["avg_sum"] += n
+                d["avg_n"] += 1
+    rows = []
+    for d in out.values():
+        rows.append({"map": d["map"], "map_hours": round(d["map_hours"], 1), "player_hours": round(d["player_hours"], 1),
+                     "sessions": d["sessions"], "players": len(d["players"]), "peak": d["peak"],
+                     "avg_players": round(d["avg_sum"] / d["avg_n"], 2) if d["avg_n"] else 0,
+                     "avg_session_min": round(d["player_hours"] * 60 / d["sessions"]) if d["sessions"] else 0,
+                     "per_hour": round(d["player_hours"] / d["map_hours"], 2) if d["map_hours"] else 0, "last": d["last"]})
+    rows.sort(key=lambda r: -r["player_hours"])
+    return {"since": max(tl[0][0], since), "maps": rows, "current": tl[-1][1]}
 
 
 def validate_config(text, dashboard_port, has_authkey):
@@ -982,6 +1106,9 @@ def safe_zip_name(name):
     name = re.sub(r"[^A-Za-z0-9._\- ()\[\]+]", "_", name)
     if not name.lower().endswith(".zip") or name.startswith(".") or len(name) > 180:
         return None
+    # Windows reserves these names even with an extension - writing "CON.zip" would hang or fail
+    if re.fullmatch(r"(?i)(con|prn|aux|nul|com\d|lpt\d)(\..*)?", name.split(".")[0] + ".zip"):
+        return None
     return name
 
 
@@ -1006,6 +1133,7 @@ def list_mods():
             if n.lower().endswith(".zip") and os.path.isfile(p) and not os.path.islink(p):
                 r = modscan.cached_result(p)
                 out.append({"name": n, "size": os.path.getsize(p), "enabled": enabled,
+                            "parked": not enabled and n in parked_maps(I()), "builtin": n == TOOLS_MOD,
                             "maps": zip_maps(p) or [], "safety": r["verdict"] if r else "unchecked",
                             "reasons": r["reasons"] if r else []})
     return out
@@ -1188,6 +1316,18 @@ class Notifier:
                 notes.append("Discord")
             except Exception as e:
                 notes.append("Discord failed: %s" % short_err(e))
+        if (self.s.get("telegram_enabled") or everywhere) and self.sec.has("TELEGRAM_TOKEN") and self.s.get("telegram_chat"):
+            try:
+                telegram_send("%s\n%s" % (item["title"], item["message"]), level=item["level"])
+                notes.append("Telegram")
+            except Exception as e:
+                notes.append("Telegram failed: %s" % short_err(e))
+        if (self.s.get("webhook_enabled") or everywhere) and self.sec.has("CUSTOM_WEBHOOK"):
+            try:
+                custom_webhook_send(item["title"], item["message"], item["level"], item.get("kind"), item.get("server_name"))
+                notes.append("webhook")
+            except Exception as e:
+                notes.append("webhook failed: %s" % short_err(e))
         if (self.s.get("email_enabled") or everywhere) and self.s.get("smtp_host") and self.s.get("smtp_to"):
             try:
                 self.send_email(item["title"], item["message"])
@@ -1714,6 +1854,135 @@ TEMPLATES = {
 }
 
 
+# ----------------------------------------------------------------------------- config history + comparison
+HIST_DIR = os.path.join(DATA_DIR, "config-history")
+HIST_KEEP = 40
+
+
+def _hist_dir(inst):
+    return os.path.join(HIST_DIR, inst.id)
+
+
+def save_config_version(inst, old, new, why=""):
+    """Keep every version of ServerConfig.toml (the last 40), with who changed it."""
+    if old == new:
+        return
+    d = _hist_dir(inst)
+    os.makedirs(d, exist_ok=True)
+    names = sorted(n for n in os.listdir(d) if n.endswith(".json"))
+    if not names and old:                       # the very first change: keep what was there before
+        write_json(os.path.join(d, "%d-0.json" % (now() - 1)), {"t": now() - 1, "who": "before", "why": "original", "text": redact_key(old)})
+    who = getattr(_TL, "user", None) or "dashboard"
+    write_json(os.path.join(d, "%d-%s.json" % (now(), secrets.token_hex(3))),
+               {"t": now(), "who": who, "why": why[:120], "text": redact_key(new)})
+    names = sorted(n for n in os.listdir(d) if n.endswith(".json"))
+    for n in names[:-HIST_KEEP]:
+        try:
+            os.remove(os.path.join(d, n))
+        except OSError:
+            pass
+
+
+_AUTHKEY_LINE = re.compile(r'''(?im)^(\s*authkey\s*=\s*)(?:"""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'|"[^"\n]*"|'[^'\n]*'|[^\s#]+)''')
+
+
+def redact_key(text):
+    """Blank the AuthKey whatever the quoting (\"..\", '..', triple quotes, bare) and the case of the name."""
+    return _AUTHKEY_LINE.sub(r'\1""', text or "")
+
+
+def config_versions(inst):
+    d = _hist_dir(inst)
+    out = []
+    try:
+        names = sorted((n for n in os.listdir(d) if n.endswith(".json")), reverse=True)
+    except OSError:
+        return []
+    for n in names:
+        v = read_json(os.path.join(d, n), None)
+        if isinstance(v, dict) and isinstance(v.get("text"), str):
+            out.append({"id": n[:-5], "t": v.get("t", 0), "who": v.get("who", ""), "why": v.get("why", ""), "text": v["text"]})
+    return out
+
+
+def flat_config(text):
+    data, _, _ = toml_parse(text or "")
+    out = {}
+    for sec, vals in data.items():
+        if isinstance(vals, dict):
+            for k, v in vals.items():
+                if k != "AuthKey":
+                    out["%s.%s" % (sec, k)] = v
+    return out
+
+
+def config_diff(a_text, b_text):
+    """What changed between two configs: setting by setting, plus the raw lines."""
+    import difflib
+    a, b = flat_config(a_text), flat_config(b_text)
+    changes = []
+    for k in sorted(set(a) | set(b)):
+        if a.get(k, None) != b.get(k, None):
+            changes.append({"key": k, "old": a.get(k), "new": b.get(k), "kind": "added" if k not in a else "removed" if k not in b else "changed"})
+    lines = list(difflib.unified_diff(redact_key(a_text).splitlines(), redact_key(b_text).splitlines(), "before", "after", lineterm="", n=1))
+    return {"changes": changes, "lines": lines[2:400]}
+
+
+# ----------------------------------------------------------------------------- maintenance mode
+def maintenance_cfg(inst):
+    m = inst.meta.get("maintenance")
+    d = {"on": False, "message": "The server is in maintenance - back soon!", "allow": [], "since": 0, "kick": True}
+    if isinstance(m, dict):
+        d.update({k: m[k] for k in d if k in m})
+    return d
+
+
+def write_maintenance_file(inst, cfg):
+    lines = ["on" if cfg["on"] else "off", "message=" + re.sub(r"[\r\n]", " ", cfg["message"])[:200]]
+    lines += [n for n in cfg["allow"]]
+    shared_write(inst.MAINT_FILE, "\n".join(lines) + "\n")
+
+
+def clone_server_files(src, dst):
+    """Copy the dashboard-managed plugin files (who can join, moderation, bans, chat messages ...) to another server."""
+    n = 0
+    for attr in ("ALLOW_FILE", "VOTE_FILE", "EXTRAS_FILE", "MOD_FILE", "BANS_FILE", "MSG_FILE", "BRIDGE_FILE", "VERIFIED_FILE"):
+        text = shared_read(getattr(src, attr), 4 * 1024 * 1024)
+        if text:
+            try:
+                shared_write(getattr(dst, attr), text)
+                n += 1
+            except OSError as e:
+                sys.stderr.write("clone %s: %s\n" % (attr, short_err(e)))
+    return n
+
+
+# ----------------------------------------------------------------------------- presets (security / style)
+PRESETS = {
+    "most_secure": {"label": "Most secure", "about": "Invite-only, hidden from the server list, accounts only, anti-bot with name check, "
+                    "chat filter, anti-spam and flood protection. For a server only your friends should ever find.",
+                    "config": {"Private": True, "AllowGuests": False},
+                    "mod": {"antibot": True, "verify": True, "guests": False, "per_ip": 2, "join_flood": 4, "filter": True, "spam": True},
+                    "allowlist": True, "flood": True},
+    "public_safe": {"label": "Public but safe", "about": "Listed publicly, but guests can't join, new players must type a code once, "
+                    "max 3 per internet connection, chat filter and anti-spam on.",
+                    "config": {"Private": False, "AllowGuests": False},
+                    "mod": {"antibot": True, "verify": True, "guests": False, "per_ip": 3, "join_flood": 8, "filter": True, "spam": True},
+                    "allowlist": False, "flood": True},
+    "friends": {"label": "Friends only", "about": "Hidden from the list and invite-only (allow-list), otherwise relaxed: no codes, no filter.",
+                "config": {"Private": True, "AllowGuests": False},
+                "mod": {"antibot": False, "guests": False, "filter": False, "spam": False},
+                "allowlist": True, "flood": False},
+    "open": {"label": "Open to everyone", "about": "Public, guests welcome, no extra checks - the most players, the least protection.",
+             "config": {"Private": False, "AllowGuests": True},
+             "mod": {"antibot": False, "guests": True, "filter": False, "spam": True},
+             "allowlist": False, "flood": False},
+    "low_end": {"label": "Weak computer", "about": "Fewer players and cars, abandoned cars removed fast - for old laptops and slow internet.",
+                "config": {"MaxPlayers": 6, "MaxCars": 1},
+                "extras": {"clear": True, "every": 2, "afk": True, "afk_minutes": 5}},
+}
+
+
 RESTART_DEFAULTS = {"on": False, "every": 24, "at": "05:00", "warn": 10, "when": "countdown"}
 
 
@@ -1764,6 +2033,34 @@ def read_events(since=0):
             continue
     evs.sort(key=lambda e: e["t"])
     return evs
+
+
+def event_sessions(evs, t_now):
+    """(sessions [(name, start, end)], player-count samples [(t, n)]) from events.log lines."""
+    sessions, open_s, samples = [], {}, []
+    last_t = None
+    t = t_now
+    for e in evs:
+        ev, t = e.get("ev"), e["t"]
+        if ev == "start":
+            for name, st in open_s.items():
+                sessions.append((name, st, last_t or st))
+            open_s = {}
+        elif ev == "join" and e.get("name"):
+            name = str(e["name"])[:64]
+            if name in open_s:
+                sessions.append((name, open_s[name], t))
+            open_s[name] = t
+        elif ev == "leave" and e.get("name"):
+            name = str(e["name"])[:64]
+            if name in open_s:
+                sessions.append((name, open_s.pop(name), t))
+        elif ev == "count" and isinstance(e.get("n"), int):
+            samples.append((t, e["n"]))
+        last_t = t
+    for name, st in open_s.items():
+        sessions.append((name, st, t_now))
+    return [(n, a, max(a, b)) for n, a, b in sessions], samples
 
 
 def analytics(max_players):
@@ -2084,6 +2381,351 @@ def network_check(cfg, status, deep):
             "relay": fmt_addr(*game_address()[:2]) if relay_on() else None}
 
 
+# ----------------------------------------------------------------------------- health report
+HEALTH_ORDER = {"fail": 0, "warn": 1, "info": 2, "pass": 3}
+
+
+def internet_ok():
+    for host, port in (("1.1.1.1", 443), ("8.8.8.8", 53), ("9.9.9.9", 443)):
+        if tcp_open(host, port, timeout=3):
+            return True
+    return False
+
+
+def beammp_backend_ok():
+    try:
+        req = urllib.request.Request("https://backend.beammp.com/servers-info", method="HEAD",
+                                     headers={"User-Agent": "BeamMP-EasyServer/" + EASY_VERSION})
+        with urllib.request.urlopen(req, timeout=10):
+            return True
+    except urllib.error.HTTPError as e:
+        return e.code < 500                  # it answered
+    except Exception:
+        return False
+
+
+def health_report(deep=False):
+    """Plain-language checks for the selected server: pass / warn / fail, each with what to do."""
+    inst = I()
+    checks = []
+
+    def c(cid, title, state, detail, fix=""):
+        checks.append({"id": cid, "title": title, "state": state, "detail": detail, "fix": fix})
+
+    st = inst.server.status()
+    running = st.get("state") == "running"
+    data, _, _ = toml_parse(APP.read_config_text())
+    g = data.get("General", {})
+    port = g.get("Port") if isinstance(g.get("Port"), int) else 30814
+    # 1. internet
+    net = internet_ok()
+    c("internet", "Internet connectivity", "pass" if net else "fail",
+      "This computer is online." if net else "This computer can't reach the internet.",
+      "" if net else "Check the network cable / Wi-Fi and the router. Friends on your home network can still play.")
+    if net:
+        be = beammp_backend_ok()
+        c("backend", "BeamMP services", "pass" if be else "warn",
+          "BeamMP's server list and login service answer." if be else "BeamMP's servers don't answer right now.",
+          "" if be else "Usually a BeamMP outage - check beammp.com or their Discord. Your server keeps running; "
+                        "it may be missing from the server list until it's back.")
+    # 2. the server process
+    if running:
+        c("process", "BeamMP server process", "pass", "Running for %s." % fmt_secs(st.get("uptime") or 0) if st.get("uptime") else "Running.")
+    elif st.get("state") == "failed":
+        c("process", "BeamMP server process", "fail", "The server crashed or couldn't start.",
+          "Open Logs - the hints there explain the most common reasons (AuthKey, port in use, broken mod).")
+    else:
+        c("process", "BeamMP server process", "warn", "The server is stopped.", "Press Start on the Overview page.")
+    if running:
+        tcp, udp = listening(port)
+        c("port", "Game port %d" % port, "pass" if (tcp and udp) else "fail",
+          "Open for TCP and UDP." if (tcp and udp) else "TCP %s, UDP %s." % ("open" if tcp else "closed", "open" if udp else "closed"),
+          "" if (tcp and udp) else "Another program may use the port, or the server is still starting. Check Logs.")
+    # 3. config + key
+    _, issues = validate_config(APP.read_config_text(), APP.settings.get("port"), inst.has_authkey())
+    errs = [i for i in issues if i.get("level") == "error"]
+    c("config", "Server settings", "fail" if errs else "pass",
+      ("%d problem%s in the settings: %s" % (len(errs), "" if len(errs) == 1 else "s", "; ".join(i.get("message", "") for i in errs[:3])))
+      if errs else "The server settings are valid.", "Open Config - the problems are marked there." if errs else "")
+    c("authkey", "AuthKey", "pass" if inst.has_authkey() else "fail",
+      "Set (stored encrypted)." if inst.has_authkey() else "No AuthKey - the server can't start or show up in the list.",
+      "" if inst.has_authkey() else "Get a free key at keymaster.beammp.com and paste it under Config → AuthKey.")
+    # 4. our plugin
+    plug = os.path.exists(os.path.join(inst.STATS_DIR, "main.lua"))
+    online = read_json(os.path.join(inst.STATS_DIR, "online.json"), None)
+    fresh = isinstance(online, dict) and now() - int(online.get("t", 0)) < 120
+    lua_errors = []
+    lines, _ = tail_log(400)
+    for line in lines:
+        if re.search(r"(?i)\[LUA\].*error|lua error|\[LUA ERROR\]", line):
+            lua_errors.append(line.strip()[-200:])
+    if not plug:
+        c("plugin", "Plugin loading", "fail", "The EasyServer plugin is missing from Resources/Server/EasyServerStats.",
+          "Run the installer again (it puts the plugin back). Statistics, the allow-list, moderation and messages need it.")
+    elif running and not fresh:
+        c("plugin", "Plugin loading", "warn", "The server is running but the EasyServer plugin isn't reporting.",
+          "If the server just started, wait a minute. Otherwise check Logs for Lua errors - another plugin may be breaking it.")
+    elif lua_errors:
+        c("plugin", "Plugin loading", "warn", "%d Lua error%s in the log, e.g.: %s" % (len(lua_errors), "" if len(lua_errors) == 1 else "s", lua_errors[-1]),
+          "A server plugin in Resources/Server has an error. Fix or remove that plugin, then restart.")
+    else:
+        c("plugin", "Plugin loading", "pass", "The EasyServer plugin is loaded%s." % (" and reporting" if running else ""))
+    # 5. mods
+    mods = list_mods()
+    on = [m for m in mods if m["enabled"]]
+    bad = [m for m in on if m["safety"] == "blocked"]
+    broken = [m["name"] for m in on if not zipfile.is_zipfile(os.path.join(inst.CLIENT_DIR, m["name"]))]
+    mapname = str(g.get("Map") or "").replace("/levels/", "").replace("/info.json", "").strip("/")
+    map_ok = (not mapname) or mapname in BUILTIN_MAPS or mapname in enabled_mod_maps()
+    total = sum(m["size"] for m in on)
+    problems = []
+    if bad:
+        problems.append("blocked by the virus check: " + ", ".join(m["name"] for m in bad[:3]))
+    if broken:
+        problems.append("damaged zip files: " + ", ".join(broken[:3]))
+    if not map_ok:
+        problems.append("the map \"%s\" isn't built in and no enabled mod contains it" % mapname)
+    if problems:
+        c("mods", "Mod configuration", "fail", "; ".join(problems).capitalize() + ".",
+          "Open Mods: remove or replace the listed files, or pick another map under Config.")
+    elif total > 2 * 1024 ** 3:
+        c("mods", "Mod configuration", "warn", "%d mods, %s to download before joining - slow connections may time out." % (len(on), fmt_bytes(total)),
+          "Turn off mods you don't need (Mods page), or tell players to be patient on the first join.")
+    else:
+        c("mods", "Mod configuration", "pass", "%d mod%s on, %s to download, map OK." % (len(on), "" if len(on) == 1 else "s", fmt_bytes(total)))
+    # 6. reachable from outside
+    if relay_on():
+        rhost, rport, _ = game_address()
+        if running:
+            ok = tcp_open(rhost, rport, timeout=5)
+            c("external", "External connectivity", "pass" if ok else "fail",
+              "Players can reach the server through the relay." if ok else "Nothing answers at the relay address.",
+              "" if ok else "Check that the relay (playit.gg / VPN / VPS tunnel) is running - Network page has details.")
+    elif net and running:
+        pip = public_ip()
+        reach = bool(pip) and tcp_open(pip, port, timeout=4)
+        listed = None
+        if deep and pip and g.get("Private") is not True:
+            try:
+                listed = server_list_lookup(pip, port)["listed"]
+            except Exception:
+                listed = None
+        if reach or listed:
+            c("external", "External connectivity", "pass", "The server can be reached from the internet%s." % (
+                " and is in the server list" if listed else ""))
+        elif listed is False:
+            c("external", "External connectivity", "fail", "The server isn't in the BeamMP server list.",
+              "Check the port forward (TCP and UDP %d to %s) and the AuthKey. Wait 2 minutes after starting." % (port, lan_ip()))
+        else:
+            c("external", "External connectivity", "warn",
+              "Couldn't confirm from inside your home - many routers block this test even when it works.",
+              "Press Full check (it looks for your server in the BeamMP list), or ask a friend to join.")
+    # 7. the computer
+    try:
+        du = shutil.disk_usage(inst.SERVER_DIR)
+        free = du.free
+        c("disk", "Disk space", "fail" if free < 1024 ** 3 else "warn" if free < 5 * 1024 ** 3 else "pass",
+          "%s free." % fmt_bytes(free), "Free up space - logs, backups and mods need room." if free < 5 * 1024 ** 3 else "")
+    except OSError:
+        pass
+    tot, avail = sys_mem()
+    if tot and avail is not None:
+        pct = 100.0 * avail / tot
+        c("memory", "Memory", "warn" if pct < 10 else "pass", "%d%% free (%s of %s)." % (pct, fmt_bytes(avail * 1048576), fmt_bytes(tot * 1048576)),
+          "Close other programs or lower the player limit." if pct < 10 else "")
+    checks.sort(key=lambda x: HEALTH_ORDER.get(x["state"], 9))
+    worst = checks[0]["state"] if checks else "pass"
+    return {"t": now(), "server": inst.name, "overall": worst, "checks": checks, "deep": bool(deep),
+            "failed": sum(1 for x in checks if x["state"] == "fail"), "warned": sum(1 for x in checks if x["state"] == "warn")}
+
+
+DIAG_DIR = os.path.join(DATA_DIR, "diagnostics")
+
+
+def save_diagnostic_report(inst_id, text):
+    os.makedirs(DIAG_DIR, exist_ok=True)
+    name = "diagnostics-%s-%s.txt" % (inst_id, time.strftime("%Y%m%d-%H%M%S"))
+    with open(os.path.join(DIAG_DIR, name), "w", encoding="utf-8") as f:
+        f.write(text)
+    old = sorted(n for n in os.listdir(DIAG_DIR) if n.startswith("diagnostics-"))
+    for n in old[:-10]:                      # keep the last 10
+        try:
+            os.remove(os.path.join(DIAG_DIR, n))
+        except OSError:
+            pass
+    return name
+
+
+def list_diagnostic_reports(inst_id):
+    try:
+        names = sorted((n for n in os.listdir(DIAG_DIR) if n.startswith("diagnostics-%s-" % inst_id)), reverse=True)
+    except OSError:
+        return []
+    return [{"file": n, "t": int(os.path.getmtime(os.path.join(DIAG_DIR, n)))} for n in names]
+
+
+_REDACT = [
+    (re.compile(r"https://(?:\w+\.)?discord(?:app)?\.com/api/webhooks/\S+"), "[discord webhook]"),
+    (re.compile(r"[A-Za-z0-9_\-]{20,100}\.[A-Za-z0-9_\-]{4,20}\.[A-Za-z0-9_\-]{20,100}"), "[token]"),
+    (_AUTHKEY_LINE, r'\1"[hidden]"'),
+    (re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.I), "[key]"),
+    (re.compile(r"beammp-(?:wake-)?[A-Za-z0-9_\-]{16,}"), "[topic]"),
+]
+_IPV4 = re.compile(r"(?<![\d.])(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?![\d.])")
+
+
+def redact(text):
+    for rx, rep in _REDACT:
+        text = rx.sub(rep, text)
+
+    def ip(m):
+        try:
+            a = ipaddress.ip_address(m.group(0))
+        except ValueError:
+            return m.group(0)
+        return m.group(0) if (a.is_private or a.is_loopback or a.is_unspecified) else "[public ip]"
+    return _IPV4.sub(ip, text)
+
+
+def diagnostic_report():
+    """A text file to share when asking for help: versions, the health checks, the network test,
+    settings and the end of the log - with keys, tokens and public IP addresses removed."""
+    inst = I()
+    out = []
+    w = out.append
+    w("BeamMP EasyServer diagnostic report")
+    w("Created: %s" % time.strftime("%Y-%m-%d %H:%M:%S %z"))
+    w("EasyServer %s, Python %s, %s" % (EASY_VERSION, sys.version.split()[0], sys.platform))
+    try:
+        import platform
+        w("System: %s %s (%s)" % (platform.system(), platform.release(), platform.machine()))
+    except Exception:
+        pass
+    w("Server: %s (id %s), BeamMP %s" % (inst.name, inst.id, inst.server.installed_version() or "?"))
+    w("")
+    h = health_report(deep=True)
+    w("== Health checks ==")
+    for x in h["checks"]:
+        w("[%s] %s: %s%s" % (x["state"].upper(), x["title"], x["detail"], (" -> " + x["fix"]) if x["fix"] else ""))
+    w("")
+    try:
+        data, _, _ = toml_parse(APP.read_config_text())
+        n = network_check(data, inst.server.status(), False)
+        w("== Network ==")
+        for x in n["checks"]:
+            w("[%s] %s: %s" % (x["state"].upper(), x["name"], x["detail"]))
+        for t in n["tips"]:
+            w("tip: " + t)
+        w("")
+    except Exception as e:
+        w("network check failed: %s" % short_err(e))
+    w("== ServerConfig.toml ==")
+    w(APP.read_config_text())
+    w("")
+    w("== Mods ==")
+    for m in list_mods():
+        w("%s %s %s (%s)%s" % ("ON " if m["enabled"] else "off", m["name"], fmt_bytes(m["size"]), m["safety"],
+                               (" maps: " + ", ".join(m["maps"])) if m["maps"] else ""))
+    w("")
+    s = APP.settings.public()
+    keep = ("port", "https", "remote_enabled", "relay_enabled", "flood_protect", "auto_restart", "auto_update",
+            "discord_bot", "discord_bridge", "discord_status_msg", "backup_on", "sleep_on", "sleep_idle", "ntfy_enabled")
+    w("== Dashboard settings ==")
+    w(json.dumps({k: s.get(k) for k in keep}, sort_keys=True))
+    w("")
+    w("== Recent notifications ==")
+    with LOCK:
+        items = list(APP.notifier.items[:30])
+    for it in items:
+        w("%s [%s] %s - %s" % (time.strftime("%m-%d %H:%M", time.localtime(it["t"])), it["level"], it["title"], it["message"][:300]))
+    w("")
+    w("== Server log (last 500 lines) ==")
+    lines, hints = tail_log(500)
+    for hnt in hints:
+        w("hint: %s - %s" % (hnt["title"], hnt["text"]))
+    out.extend(lines)
+    return redact("\n".join(out)) + "\n"
+
+
+def connection_doctor(player):
+    """Why can't <player> join? Looks at what the server recorded for that name and the usual causes."""
+    inst = I()
+    player = clean_player_name(player or "")[:40] if player else ""
+    findings = []
+
+    def f(state, title, text):
+        findings.append({"state": state, "title": title, "text": text})
+
+    st = inst.server.status()
+    data, _, _ = toml_parse(APP.read_config_text())
+    g = data.get("General", {})
+    port = g.get("Port") if isinstance(g.get("Port"), int) else 30814
+    if st.get("state") != "running":
+        f("fail", "The server isn't running", "Nobody can join until it's started (Overview → Start).")
+    maxp = g.get("MaxPlayers") if isinstance(g.get("MaxPlayers"), int) else 8
+    online = online_names()
+    if len(online) >= maxp:
+        f("fail", "The server is full", "%d of %d players are online. Raise Max players under Config or wait for a free slot." % (len(online), maxp))
+    if isinstance(inst.meta.get("maintenance"), dict) and inst.meta["maintenance"].get("on"):
+        f("warn", "Maintenance mode is on", "Only admins and the players on the maintenance list can join.")
+    reasons = {"banned": ("They're banned", "Unban them under Players → Ban list."),
+               "name": ("Their name was blocked by the chat filter", "Their name contains a link, @everyone or a blocked word."),
+               "guest": ("Guests aren't allowed", "They have to log in with a BeamMP account (or allow guests under Config → Moderation)."),
+               "per_ip": ("Too many players from the same internet connection", "Raise 'players per address' under Config → Moderation."),
+               "maintenance": ("Maintenance mode refused them", "Add them to the maintenance list or end maintenance."),
+               "denied": ("They're not on the allow-list", "Add them under Config → Who can join (or turn the list off)."),
+               "joinflood": ("Join-flood protection was active", "Lots of new players joined at once; it lifts after 2 minutes.")}
+    if player:
+        evs = [e for e in read_events(now() - 7 * 86400)]
+        mine = [e for e in evs if str(e.get("name", "")).lower() == player.lower()]
+        tried = [e for e in mine if e.get("ev") in ("refused", "denied")]
+        joined = [e for e in mine if e.get("ev") == "join"]
+        if tried:
+            last = tried[-1]
+            why = "denied" if last.get("ev") == "denied" else str(last.get("why") or "")
+            title, fix = reasons.get(why, ("The server refused them (%s)" % why, ""))
+            f("fail", title, "Last time %s. %s" % (ago_text(last["t"]), fix))
+        elif joined:
+            f("info", "%s has joined before" % player, "Last join %s - the server lets them in. If they can't now, it's their "
+              "connection or game (see the tips below)." % ago_text(joined[-1]["t"]))
+        else:
+            f("warn", "No attempt from %s reached the server" % player,
+              "The server never saw them in the last 7 days. Their connection doesn't arrive - check the address they use "
+              "and the port forward (below).")
+        hits = []
+        lines, _ = tail_log(2000)
+        for line in lines:
+            if player.lower() in line.lower():
+                hits.append(line.strip()[-220:])
+        if hits:
+            f("info", "Server log lines about %s" % player, "\n".join(hits[-8:]))
+    # common network causes
+    rhost, rport, _ = game_address()
+    if relay_on():
+        f("info", "The address to give friends", "%s (through your relay)." % fmt_addr(rhost, rport))
+    else:
+        pip = public_ip()
+        dom = duck_host()
+        f("info", "The address to give friends", "%s%s. Friends at your home use %s:%d instead." % (
+            fmt_addr(dom or pip or "your public IP", port), (" (or %s)" % fmt_addr(pip, port)) if dom and pip else "", lan_ip(), port))
+        if pip and ipaddress.ip_address(pip) in ipaddress.ip_network("100.64.0.0/10"):
+            f("fail", "Your internet uses CGNAT", "Port forwarding can't work - ask your provider for a public IPv4 address, or use a relay (Settings → Hide your IP).")
+        elif st.get("state") == "running" and pip and not tcp_open(pip, port, timeout=4):
+            f("warn", "Port forwarding not confirmed", "Forward TCP and UDP port %d on your router to %s. (Some routers block this test even when it works.)" % (port, lan_ip()))
+    total = sum(m["size"] for m in list_mods() if m["enabled"])
+    if total > 1024 ** 3:
+        f("info", "Big mod download", "Players download %s of mods before joining. On slow internet the first join can time out - "
+          "they should simply try again; finished downloads are kept." % fmt_bytes(total))
+    f("info", "On their side", "Same BeamMP version as everyone (update the launcher), BeamNG.drive is up to date, and their "
+      "antivirus/firewall isn't blocking BeamMP. Restarting the launcher fixes most 'stuck on loading' problems.")
+    return {"player": player, "findings": findings}
+
+
+def ago_text(t):
+    d = now() - t
+    return "just now" if d < 60 else "%d min ago" % (d // 60) if d < 3600 else "%d h ago" % (d // 3600) if d < 86400 else "%d days ago" % (d // 86400)
+
+
 # ----------------------------------------------------------------------------- updates
 def github_latest(repo):
     req = urllib.request.Request("https://api.github.com/repos/%s/releases/latest" % repo,
@@ -2103,21 +2745,6 @@ def newer(a, b):
 
 
 # ----------------------------------------------------------------------------- logs + hints
-LOG_HINTS = [
-    (r"(?i)authkey.*(invalid|wrong|not|length)|invalid.*auth", "AuthKey problem",
-     "Your AuthKey looks wrong. Get a new one at keymaster.beammp.com and set it under Config → AuthKey."),
-    (r"(?i)address already in use|failed to bind|bind failed", "Port already in use",
-     "Another program uses the server port. Change the port under Config or close the other program."),
-    (r"(?i)backend\.beammp\.com.*(failed|error)|heartbeat failed", "Can't reach BeamMP servers",
-     "The server can't talk to BeamMP's backend (internet or firewall problem). LAN play still works."),
-    (r"(?i)IP_V6ONLY", "IPv6 notice", "Harmless: your system can't share one socket for IPv4 and IPv6."),
-    (r"(?i)\[LUA\].*error|lua error", "Plugin error", "A server plugin (Resources/Server) has a Lua error. Check or remove it."),
-    (r"(?i)permission denied", "Permission problem", "The server couldn't read or write a file. Re-run the installer to fix permissions."),
-    (r"(?i)failed to load|could not load|not a valid zip|corrupt", "Broken mod",
-     "A mod file may be damaged. Re-download it or turn it off on the Mods page."),
-]
-
-
 def tail_log(lines=300):
     try:
         with open(I().SERVER_LOG, "rb") as f:
@@ -2130,10 +2757,10 @@ def tail_log(lines=300):
     out = data.splitlines()[-lines:]
     hints, seen = [], set()
     for line in out:
-        for pat, title, text in LOG_HINTS:
-            if title not in seen and re.search(pat, line):
-                seen.add(title)
-                hints.append({"title": title, "text": text, "line": line[-300:]})
+        x = explain_line(line)
+        if x and x["id"] not in seen and not x["id"].startswith("unknown") and x["level"] != "info":
+            seen.add(x["id"])
+            hints.append({"title": x["title"], "text": x["what"] + " " + x["fix"], "line": line[-300:]})
     return out, hints
 
 
@@ -2717,6 +3344,560 @@ def ntfy_send(title, message, level="info", click=None):
     req = urllib.request.Request("%s/%s" % (server, topic), data=message[:3900].encode("utf-8"), method="POST", headers=hdr)
     with urllib.request.urlopen(req, timeout=20) as r:
         r.read()
+
+
+# ----------------------------------------------------------------------------- in-game tools: /tp and /repair
+TOOLS_MOD = "easyserver_tools.zip"
+TOOLS_DEFAULTS = {"tp": False, "tp_cd": 60, "repair": "free", "repair_cd": 5}
+TOOLS_MODSCRIPT = """-- BeamMP EasyServer: in-game tools (/tp, /repair). Loaded by BeamNG when you join a server that uses it.
+load("easyserverTools")
+setExtensionUnloadMode("easyserverTools", "manual")
+"""
+TOOLS_CLIENT_LUA = r"""-- BeamMP EasyServer in-game tools (client side).
+-- The server decides everything (who may teleport where, cooldowns); this
+-- only moves or repairs YOUR OWN car when the server tells it to, and turns
+-- off the reset keys while the server has "repair with cooldown" or "no
+-- repairs" switched on. It does nothing on other servers or in single player.
+local M = {}
+
+local cfg = { tp = false, repair = "free" }
+local FILTER = "easyserver_noreset"
+local RESET_ACTIONS = { "reset_physics", "reset_all_physics", "recover_vehicle", "recover_vehicle_alt",
+  "recover_to_last_road", "reload_vehicle", "reload_all_vehicles", "loadHome", "saveHome",
+  "dropPlayerAtCamera", "dropPlayerAtCameraNoReset", "goto_checkpoint" }
+local blocking = false
+
+local function setBlock(on)
+  if on == blocking then return end
+  blocking = on
+  pcall(function()
+    core_input_actionFilter.setGroup(FILTER, RESET_ACTIONS)
+    core_input_actionFilter.addAction(0, FILTER, on)
+  end)
+end
+
+local function myVehicle()
+  local v = be:getPlayerVehicle(0)
+  if v and MPVehicleGE and MPVehicleGE.isOwn and not MPVehicleGE.isOwn(v:getID()) then return nil end
+  return v
+end
+
+local function onCfg(data)
+  local ok, d = pcall(jsonDecode, data or "{}")
+  if not ok or type(d) ~= "table" then return end
+  cfg.tp = d.tp == true
+  cfg.repair = (d.repair == "cooldown" or d.repair == "off") and d.repair or "free"
+  setBlock(cfg.repair ~= "free")
+end
+
+local function onTpTo(serverVehId)
+  local mine = myVehicle()
+  if not mine then return end
+  local gid = MPVehicleGE and MPVehicleGE.getGameVehicleID and MPVehicleGE.getGameVehicleID(serverVehId)
+  local target = gid and gid ~= -1 and be:getObjectByID(gid)
+  if not target then pcall(guihooks.trigger, "toastrMsg", { type = "warning", title = "Teleport", msg = "Couldn't find their car." }) return end
+  local pos = vec3(target:getPosition())
+  local dir = vec3(target:getDirectionVector())
+  local up = vec3(target:getDirectionVectorUp())
+  local rot = quatFromDir(dir, up)
+  -- park 8 m behind them, a little above the ground
+  local dest = pos - dir:normalized() * 8 + vec3(0, 0, 0.5)
+  local ok = false
+  if spawn and spawn.safeTeleport then ok = pcall(spawn.safeTeleport, mine, dest, rot) end
+  if not ok then
+    pcall(function() mine:setPositionRotation(dest.x, dest.y, dest.z, rot.x, rot.y, rot.z, rot.w) end)
+  end
+end
+
+local function onRepair()
+  local mine = myVehicle()
+  if not mine then return end
+  pcall(function() mine:resetBrokenFlexMesh() end)
+  pcall(function() mine:queueLuaCommand("obj:requestReset(RESET_PHYSICS)") end)
+end
+
+local registered = false
+local function register()
+  if registered or not AddEventHandler then return end
+  registered = true
+  AddEventHandler("esToolsCfg", onCfg)
+  AddEventHandler("esTpTo", onTpTo)
+  AddEventHandler("esRepair", onRepair)
+end
+
+M.onExtensionLoaded = function() register() end
+M.onWorldReadyState = function(state)
+  if state == 2 then
+    register()
+    if TriggerServerEvent then TriggerServerEvent("esToolsHello", "") end
+  end
+end
+M.onExtensionUnloaded = function() setBlock(false) end
+M.onClientEndMission = function() setBlock(false) end
+
+return M
+"""
+
+
+def tools_mod_bytes():
+    """The client mod, built the same way every time (same bytes -> players only download it once)."""
+    import io
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for name, text in (("scripts/easyserver_tools/modScript.lua", TOOLS_MODSCRIPT),
+                           ("lua/ge/extensions/easyserverTools.lua", TOOLS_CLIENT_LUA)):
+            zi = zipfile.ZipInfo(name, (2026, 1, 1, 0, 0, 0))
+            zi.compress_type = zipfile.ZIP_DEFLATED
+            zi.external_attr = 0o644 << 16
+            z.writestr(zi, text)
+    return buf.getvalue()
+
+
+def read_tools(inst=None):
+    inst = inst or I()
+    d = dict(TOOLS_DEFAULTS)
+    for line in shared_read(inst.TOOLS_FILE, 16384).splitlines():
+        m = re.fullmatch(r"\s*(\w+)\s*=\s*(.*?)\s*", line)
+        if not m:
+            continue
+        k, v = m.groups()
+        if k == "tp":
+            d["tp"] = v.lower() == "on"
+        elif k == "repair" and v in ("free", "cooldown", "off"):
+            d["repair"] = v
+        elif k == "tp_cd" and v.isdigit() and int(v) <= 3600:
+            d["tp_cd"] = int(v)
+        elif k == "repair_cd" and v.isdigit() and 1 <= int(v) <= 120:
+            d["repair_cd"] = int(v)
+    return d
+
+
+def write_tools(d, inst=None):
+    inst = inst or I()
+    shared_write(inst.TOOLS_FILE, "# Managed by the BeamMP EasyServer dashboard (Config -> In-game tools).\n"
+                 "tp=%s\ntp_cd=%d\nrepair=%s\nrepair_cd=%d\n" % ("on" if d["tp"] else "off", d["tp_cd"], d["repair"], d["repair_cd"]))
+
+
+def tools_wanted(d):
+    return bool(d["tp"] or d["repair"] != "free")
+
+
+def ensure_tools_mod(inst=None):
+    """Put the client mod in place when a tool is on, keep it up to date, remove it when everything is off.
+    Returns "added", "updated", "removed" or ""."""
+    inst = inst or I()
+    want = tools_wanted(read_tools(inst))
+    path = os.path.join(inst.CLIENT_DIR, TOOLS_MOD)
+    if not want:
+        if os.path.exists(path):
+            os.remove(path)
+            return "removed"
+        return ""
+    data = tools_mod_bytes()
+    try:
+        with open(path, "rb") as f:
+            if f.read(len(data) + 1) == data:
+                return ""
+        how = "updated"
+    except OSError:
+        how = "added"
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(data)
+    if not IS_WIN:
+        os.chmod(tmp, 0o664)
+    os.replace(tmp, path)
+    modscan.remember(path, hashlib.sha256(data).hexdigest())
+    try:
+        modscan.scan(path)
+    except Exception:
+        pass
+    return how
+
+
+# ----------------------------------------------------------------------------- log explainer
+# (id, pattern, level, title, what it means, what to do). {1} etc. are filled from the match.
+LOG_RULES = [
+    ("authkey_missing", r"(?i)no authkey|authkey (is )?empty|authkey.{0,80}not (set|specified)|missing authkey", "error", "No AuthKey",
+     "The server has no AuthKey, so it can't log in to BeamMP. It won't show up in the server list and players can only join by IP (if at all).",
+     "Get a free key at keymaster.beammp.com (Keys -> +) and paste it under Config -> AuthKey."),
+    ("authkey_bad", r"(?i)authkey.{0,80}(invalid|wrong|length|not valid)|invalid.{0,80}auth.?key|auth.{0,80}(rejected|denied)", "error", "The AuthKey was refused",
+     "BeamMP didn't accept the AuthKey - it's mistyped, deleted on keymaster, or used by another server at the same time.",
+     "Make a new key at keymaster.beammp.com and save it under Config -> AuthKey. Every server needs its own key."),
+    ("port_busy", r"(?i)address already in use|failed to bind|bind\(\) failed|bind failed|only one usage of each socket address", "error", "The port is already in use",
+     "Another program - often a second copy of the server - already uses the game port, so this server can't start.",
+     "Stop the other copy, or pick another port under Config (and forward the new one on your router)."),
+    ("backend_down", r"(?i)backend.{0,80}(fail|error|not respond|timed? ?out|unreachable)|heartbeat.{0,80}fail|failed.{0,80}heartbeat", "warning", "Can't reach the BeamMP backend",
+     "The server couldn't talk to BeamMP's servers for a while. It may disappear from the public list until the connection is back; direct connect still works.",
+     "Usually it fixes itself within minutes. If it keeps happening, check this computer's internet and firewall (Health page -> Check again)."),
+    ("proxy", r"(?i)curl error|connect tunnel failed|proxy|couldn't connect to server|connection refused", "warning", "Internet connection problem",
+     "The server couldn't open a connection to the internet (a firewall, proxy or the internet itself blocked it). Mostly this affects the public server list.",
+     "Check the internet on this computer and any firewall or proxy. Direct connect on your network still works."),
+    ("dns", r"(?i)could not resolve|name or service not known|getaddrinfo|temporary failure in name resolution|no such host", "warning", "Internet name lookup failed",
+     "The computer couldn't look up an internet address - the internet or DNS was down for a moment.",
+     "Check the internet connection. If it lasts, set a DNS server like 1.1.1.1 on the router or the computer."),
+    ("ssl", r"(?i)ssl|certificate verify|tls handshake", "warning", "Secure connection problem",
+     "A secure (HTTPS) connection to BeamMP failed. Usually the computer's clock is wrong or something on the network intercepts HTTPS.",
+     "Check that the date and time on the server computer are correct, then restart the server."),
+    ("lua_error", r"(?i)\[lua error\]|lua error|\[lua\].{0,80}error|attempt to (index|call|perform|compare|concatenate)|stack traceback", "error", "A server plugin crashed",
+     "A plugin in Resources/Server has a Lua error. The plugin (or part of it) stops working; the server keeps running.",
+     "Look at the plugin named in the line. Update or remove it. If it's EasyServerStats, update EasyServer."),
+    ("plugin_load", r"(?i)(plugin|lua state).{0,80}(fail|could not|error).{0,80}load|failed to load plugin", "error", "A plugin didn't load",
+     "A server plugin couldn't be started (missing file or a syntax error).",
+     "Check the plugin's folder in Resources/Server, or remove it."),
+    ("mod_bad", r"(?i)not a valid zip|corrupt|crc (check )?fail|bad zip|failed to (open|read).{0,80}\.zip", "error", "A broken mod file",
+     "A mod .zip is damaged (often an upload that didn't finish). Players may fail to download it and can't join.",
+     "Delete the mod on the Mods page and upload it again."),
+    ("mod_big", r"(?i)mod.{0,80}too (big|large)|exceeds.{0,80}(size|limit)", "warning", "A very big mod",
+     "Players have to download a very large mod before they can join; slow connections may time out.",
+     "Turn off map mods you don't play (or use light mode on the Mods page)."),
+    ("perm", r"(?i)permission denied|access is denied|operation not permitted", "error", "Permission problem",
+     "The server wasn't allowed to read or write a file.",
+     "Run the installer again (it fixes permissions), or check the file named in the line."),
+    ("disk", r"(?i)no space left|disk (is )?full|not enough space", "error", "The disk is full",
+     "The computer ran out of disk space. Logs, uploads and backups fail.",
+     "Delete old mods or backups; the Health page shows the free space."),
+    ("oom", r"(?i)out of memory|bad_alloc|cannot allocate memory|killed process", "error", "Out of memory",
+     "The computer ran out of memory and a program was stopped.",
+     "Lower Max players / Max cars, turn off big map mods, or set a RAM limit on the Servers page."),
+    ("crash", r"(?i)segmentation fault|core dumped|terminate called|unhandled exception|access violation|fatal error", "error", "The server crashed",
+     "BeamMP-Server stopped with an internal error. EasyServer restarts it automatically.",
+     "If it happens again, update BeamMP-Server (Updates page) and remove recently added mods or plugins."),
+    ("config", r"(?i)(serverconfig|toml).{0,80}(error|invalid|parse|unexpected)|failed to parse config", "error", "The config file has an error",
+     "ServerConfig.toml couldn't be read, so the server may use defaults or not start.",
+     "Open Config - it shows the problem. Or restore an earlier version under Config -> What changed?"),
+    ("outdated_client", r"(?i)outdated|version mismatch|incompatible (client|version)|wrong version", "info", "A player has an old BeamMP version",
+     "Someone tried to join with an outdated BeamMP launcher or game version.",
+     "Tell them to update the BeamMP launcher and BeamNG.drive."),
+    ("full", r"(?i)server (is )?full|too many players|max ?players", "info", "The server was full",
+     "A player couldn't join because all slots were taken.",
+     "Raise Max players under Config if the computer and upload can handle it."),
+    ("timeout", r"(?i)timed? ?out|connection (reset|lost|closed)|disconnected.{0,80}(error|timeout)|broken pipe", "info", "A player lost the connection",
+     "A player's connection dropped (slow internet, Wi-Fi or a mod download that took too long).",
+     "Only a problem if it happens to many players: then check your upload speed (Settings -> Computer load) and the mod size."),
+    ("car_limit", r"(?i)(too many|max(imum)?) (cars|vehicles)|vehicle.{0,80}(limit|denied|rejected)", "info", "Car limit reached",
+     "A player tried to spawn more cars than Max cars allows.",
+     "Raise Max cars under Config if you want."),
+    ("ipv6", r"(?i)ip_?v6_?only|ipv6.{0,80}(fail|not supported)", "info", "IPv6 notice",
+     "Harmless: this system can't share one connection for IPv4 and IPv6.", "Nothing to do."),
+    ("update", r"(?i)new (server )?version.{0,80}available|update available|outdated server", "info", "A BeamMP-Server update is out",
+     "There's a newer BeamMP-Server.", "Install it on the Updates page."),
+]
+_LOG_TS = re.compile(r"^\[([^\]]{5,40})\]")
+
+
+_LOG_RX = None
+LOG_LINE_MAX = 400          # longer lines are cut before matching (player chat ends up in the log)
+
+
+def explain_line(line):
+    global _LOG_RX
+    if _LOG_RX is None:
+        _LOG_RX = [(re.compile(r[1]),) + tuple(r[:1]) + tuple(r[2:]) for r in LOG_RULES]
+    line = line[:LOG_LINE_MAX]
+    for rx, rid, lvl, title, what, fix in _LOG_RX:
+        if rx.search(line):
+            return {"id": rid, "level": lvl, "title": title, "what": what, "fix": fix}
+    if re.search(r"\[(ERROR|FATAL)\]", line):
+        return {"id": "unknown_error", "level": "error", "title": "Unknown error",
+                "what": "BeamMP-Server reported an error EasyServer doesn't know yet.",
+                "fix": "Copy the line into a search engine or the BeamMP forum/Discord. A diagnostic report (Health page) helps others help you."}
+    if re.search(r"\[WARN(ING)?\]", line):
+        return {"id": "unknown_warn", "level": "warning", "title": "Warning",
+                "what": "A warning from BeamMP-Server - usually not serious on its own.", "fix": "Only worth a look if it repeats a lot."}
+    return None
+
+
+def explain_log(text, budget=4.0):
+    groups = {}
+    stop = time.monotonic() + budget
+    for i, line in enumerate(text.splitlines()):
+        if i % 256 == 0 and time.monotonic() > stop:
+            groups.setdefault("_partial", {"id": "_partial", "level": "info", "title": "Only part of the log was read",
+                                           "what": "The log is very large, so EasyServer stopped after a few seconds.",
+                                           "fix": "Restart the server to start a fresh log if you need the whole picture.",
+                                           "count": 1, "first": None, "last": None, "example": "", "line_no": i})
+            break
+        x = explain_line(line)
+        if not x:
+            continue
+        g = groups.setdefault(x["id"], dict(x, count=0, first=None, last=None, example="", line_no=0))
+        g["count"] += 1
+        m = _LOG_TS.match(line)
+        ts = m.group(1) if m else ""
+        g["first"] = g["first"] or ts
+        g["last"] = ts or g["last"]
+        g["example"] = line[-300:]
+        g["line_no"] = i + 1
+    order = {"error": 0, "warning": 1, "info": 2}
+    return sorted(groups.values(), key=lambda g: (order.get(g["level"], 3), -g["count"]))
+
+
+# ----------------------------------------------------------------------------- more alert channels
+LEVEL_EMOJI = {"error": "🔴", "warning": "🟠", "success": "🟢", "info": "🔵"}
+
+
+def telegram_send(text, level="info", chat=None):
+    token, chat = APP.secrets.get("TELEGRAM_TOKEN"), chat or APP.settings.get("telegram_chat")
+    if not token or not chat:
+        raise ValueError("Telegram isn't set up")
+    body = urllib.parse.urlencode({"chat_id": chat, "text": (LEVEL_EMOJI.get(level, "") + " " + text).strip()[:4000],
+                                   "disable_web_page_preview": "true"}).encode()
+    req = urllib.request.Request("https://api.telegram.org/bot%s/sendMessage" % token, data=body, method="POST",
+                                 headers={"User-Agent": "BeamMP-EasyServer/" + EASY_VERSION})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            r.read()
+    except urllib.error.HTTPError as e:      # never put the token (it is in the URL) into an error message
+        raise ValueError("Telegram said %d: %s" % (e.code, json.loads(e.read() or b"{}").get("description", "")[:120]))
+    except urllib.error.URLError as e:
+        raise ValueError("can't reach Telegram (%s)" % short_err(e.reason))
+
+
+def telegram_find_chat(token):
+    """The chat of the newest message sent to the bot - the user sends it "hi" once."""
+    req = urllib.request.Request("https://api.telegram.org/bot%s/getUpdates" % token,
+                                 headers={"User-Agent": "BeamMP-EasyServer/" + EASY_VERSION})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            d = json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        raise ValueError("Telegram said %d - check the bot token" % e.code)
+    except urllib.error.URLError as e:
+        raise ValueError("can't reach Telegram (%s)" % short_err(e.reason))
+    for u in reversed(d.get("result") or []):
+        m = u.get("message") or u.get("channel_post") or u.get("my_chat_member") or {}
+        c = m.get("chat") or {}
+        if c.get("id"):
+            return str(c["id"]), c.get("title") or c.get("first_name") or c.get("username") or ""
+    return None, None
+
+
+def valid_custom_webhook(url):
+    try:
+        u = urllib.parse.urlparse(url or "")
+        u.port
+    except ValueError:
+        return False
+    return u.scheme == "https" and bool(u.hostname) and not u.username and len(url) < 1000 and not re.search(r"\s", url)
+
+
+def public_host(host):
+    """True if every address the name points to is on the public internet (not this computer, the home
+    network, link-local / cloud metadata, multicast or reserved). Stops the webhook from being used
+    to probe or poke devices inside the home network."""
+    try:
+        infos = socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)
+    except (socket.gaierror, UnicodeError, OSError):
+        return False
+    if not infos:
+        return False
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0].split("%")[0])
+        except ValueError:
+            return False
+        if getattr(ip, "ipv4_mapped", None):
+            ip = ip.ipv4_mapped
+        if not ip.is_global or ip.is_multicast:
+            return False
+    return True
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *a, **kw):
+        return None
+
+
+def custom_webhook_send(title, message, level="info", kind="", server=""):
+    """Slack-style JSON ("text") plus the fields on their own - Slack, Mattermost, Rocket.Chat, Google Chat,
+    Microsoft Teams workflows, Home Assistant, n8n, Zapier and most others accept it."""
+    url = APP.secrets.get("CUSTOM_WEBHOOK")
+    if not valid_custom_webhook(url):
+        raise ValueError("the webhook address must start with https://")
+    if not public_host(urllib.parse.urlparse(url).hostname):
+        raise ValueError("the webhook must be an internet address - addresses in your home network are not allowed")
+    body = {"text": "%s *%s*\n%s" % (LEVEL_EMOJI.get(level, ""), title, message), "title": title, "message": message,
+            "level": level, "kind": kind or "", "server": server or server_name(), "source": "BeamMP EasyServer", "time": now()}
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
+                                 headers={"Content-Type": "application/json", "User-Agent": "BeamMP-EasyServer/" + EASY_VERSION})
+    opener = urllib.request.build_opener(_NoRedirect)
+    try:
+        with opener.open(req, timeout=20) as r:
+            r.read(65536)
+    except urllib.error.HTTPError as e:
+        raise ValueError("the webhook answered %d" % e.code)
+    except urllib.error.URLError as e:
+        raise ValueError("can't reach the webhook (%s)" % short_err(e.reason))
+
+
+def broadcast(title, text, discord_content=None):
+    """Post an announcement (not an alert) to every community channel that is set up: the Discord webhook channel,
+    Telegram and the custom webhook. Returns where it went."""
+    out = []
+    if webhook_parts()[0]:
+        try:
+            webhook_call("POST", body={"username": "BeamMP events", "content": (discord_content or ("**%s**\n%s" % (title, text)))[:1900],
+                                       "allowed_mentions": {"parse": []}})
+            out.append("Discord")
+        except Exception as e:
+            sys.stderr.write("broadcast discord: %s\n" % short_err(e))
+    if APP.settings.get("telegram_enabled") and APP.secrets.has("TELEGRAM_TOKEN") and APP.settings.get("telegram_chat"):
+        try:
+            telegram_send("%s\n%s" % (title, re.sub(r"<t:(\d+):\w>", lambda m: time.strftime("%a %H:%M", time.localtime(int(m.group(1)))), text)))
+            out.append("Telegram")
+        except Exception as e:
+            sys.stderr.write("broadcast telegram: %s\n" % short_err(e))
+    if APP.settings.get("webhook_enabled") and APP.secrets.has("CUSTOM_WEBHOOK"):
+        try:
+            custom_webhook_send(title, re.sub(r"<t:(\d+):\w>", lambda m: time.strftime("%a %H:%M", time.localtime(int(m.group(1)))), text), "info", "event")
+            out.append("webhook")
+        except Exception as e:
+            sys.stderr.write("broadcast webhook: %s\n" % short_err(e))
+    return out
+
+
+# ----------------------------------------------------------------------------- uptime + public status page
+UPTIME_FILE = os.path.join(DATA_DIR, "uptime.json")
+UPTIME_DAYS = 90
+
+
+def uptime_record(states):
+    """Called once a minute with {server id: running?}: counts up/total minutes per day."""
+    d = read_json(UPTIME_FILE, {})
+    d = d if isinstance(d, dict) else {}
+    day = time.strftime("%Y-%m-%d")
+    for iid, up in states.items():
+        srv = d.setdefault(iid, {})
+        c = srv.setdefault(day, [0, 0])
+        c[0] += 1 if up else 0
+        c[1] += 1
+        for k in sorted(srv)[:-UPTIME_DAYS]:
+            del srv[k]
+    for iid in [k for k in d if k not in states]:
+        del d[iid]
+    write_json(UPTIME_FILE, d)
+
+
+def uptime_summary(iid, days=30):
+    srv = (read_json(UPTIME_FILE, {}) or {}).get(iid) or {}
+    out = []
+    for i in range(days - 1, -1, -1):
+        k = time.strftime("%Y-%m-%d", time.localtime(now() - i * 86400))
+        up, tot = srv.get(k, [0, 0])
+        out.append({"day": k, "pct": round(up * 100.0 / tot, 1) if tot else None})
+    def pct(n):
+        ks = [time.strftime("%Y-%m-%d", time.localtime(now() - i * 86400)) for i in range(n)]
+        up = sum(srv.get(k, [0, 0])[0] for k in ks)
+        tot = sum(srv.get(k, [0, 0])[1] for k in ks)
+        return round(up * 100.0 / tot, 2) if tot else None
+    return {"days": out, "d1": pct(1), "d7": pct(7), "d30": pct(30)}
+
+
+_STATUS_CACHE = {"t": 0, "data": None}
+
+
+def public_status():
+    """What the public status page shows. No addresses, no admin data."""
+    if now() - _STATUS_CACHE["t"] < 20 and _STATUS_CACHE["data"]:
+        return _STATUS_CACHE["data"]
+    with LOCK:
+        insts = sorted(INSTANCES.values(), key=lambda i: (i.id != "main", i.id))
+    show_names = bool(APP.settings.get("statuspage_players"))
+    servers = []
+    for inst in insts:
+        use_server(inst.id)
+        st = inst.server.status()
+        g = toml_parse(APP.read_config_text())[0].get("General", {})
+        players = analytics_online() if st["state"] == "running" else []
+        m = maintenance_cfg(inst)
+        state = "maintenance" if m["on"] and st["state"] == "running" else ("up" if st["state"] == "running" else
+                 "asleep" if APP.sleeping else "down")
+        up = uptime_summary(inst.id)
+        nxt = None
+        for e in events_cfg(inst):
+            if e.get("on", True):
+                t0 = event_next_start(e, now())
+                if t0 and (nxt is None or t0 < nxt["t"]):
+                    nxt = {"name": e["name"], "t": t0, "map": map_name("/levels/%s/info.json" % e["map"]) if e.get("map") else ""}
+        mods = []
+        if APP.settings.get("statuspage_mods"):
+            mods = [{"name": re.sub(r"\.zip$", "", x["name"], flags=re.I), "size": x["size"], "map": bool(x["maps"])}
+                    for x in list_mods() if x["enabled"] and x["name"] != TOOLS_MOD]
+        servers.append({"name": inst.name, "state": state, "note": m["message"] if state == "maintenance" else "",
+                        "mods": mods, "download": sum(x["size"] for x in mods),
+                        "players": len(players), "max": g.get("MaxPlayers"), "names": players[:50] if show_names else [],
+                        "map": map_name(g.get("Map")) or "", "uptime": st.get("uptime") or 0, "history": up, "next_event": nxt})
+    use_server("main")
+    data = {"title": APP.settings.get("statuspage_title") or server_name() or "BeamMP server", "servers": servers,
+            "updated": now(), "version": EASY_VERSION}
+    _STATUS_CACHE.update(t=now(), data=data)
+    return data
+
+
+STATUS_HTML = r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>__TITLE__ - status</title><meta http-equiv="refresh" content="60"><style>
+:root{color-scheme:light dark;--bg:#f6f7f9;--card:#fff;--ink:#16181d;--mute:#5d6470;--line:#e3e6ea;--up:#16a34a;--down:#dc2626;--warn:#d97706;--none:#d4d8de}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#171a20;--ink:#eceff3;--mute:#9aa3ae;--line:#272b33;--none:#30353e}}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:760px;margin:0 auto;padding:28px 16px}h1{font-size:24px;margin:0 0 4px}.mute{color:var(--mute)}.small{font-size:13px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-top:14px}
+.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.sp{flex:1}
+.pill{display:inline-flex;align-items:center;gap:6px;font-weight:600;font-size:13px}.dot{width:10px;height:10px;border-radius:50%;background:var(--none)}
+.up .dot{background:var(--up)}.down .dot{background:var(--down)}.maintenance .dot,.asleep .dot{background:var(--warn)}
+.bars{display:flex;gap:2px;margin-top:10px;height:28px}.bars i{flex:1;border-radius:2px;background:var(--none)}
+.stats{display:flex;gap:18px;margin-top:8px}.stats b{font-size:17px}
+</style></head><body><main>__BODY__<p class="small mute" style="margin-top:22px">Updated __UPDATED__ · refreshes every minute · BeamMP EasyServer</p></main></body></html>"""
+
+
+def render_status_page(d):
+    e = html_escape
+    label = {"up": "Online", "down": "Offline", "maintenance": "Maintenance", "asleep": "Sleeping - wakes up when someone asks"}
+    def bar(p):
+        if p is None:
+            return '<i title="no data"></i>'
+        c = "var(--up)" if p >= 99 else "var(--warn)" if p >= 90 else "var(--down)"
+        return '<i style="background:%s" title="%s%%"></i>' % (c, p)
+    def pct(p):
+        return "-" if p is None else ("%g%%" % p)
+    parts = ['<h1>%s</h1><p class="mute">Server status</p>' % e(d["title"])]
+    for s in d["servers"]:
+        extra = []
+        if s["state"] == "up":
+            extra.append("%d/%s players" % (s["players"], s["max"] or "?"))
+            if s["map"]:
+                extra.append("map " + s["map"])
+        parts.append('<div class="card"><div class="row"><b style="font-size:17px">%s</b><span class="sp"></span><span class="pill %s"><span class="dot"></span>%s</span></div>'
+                     % (e(s["name"]), s["state"], label.get(s["state"], s["state"])))
+        if s["note"]:
+            parts.append('<p class="small" style="margin:6px 0 0">%s</p>' % e(s["note"]))
+        if extra:
+            parts.append('<p class="small mute" style="margin:6px 0 0">%s</p>' % e(" · ".join(extra)))
+        if s["names"]:
+            parts.append('<p class="small" style="margin:4px 0 0">%s</p>' % e(", ".join(s["names"])))
+        if s.get("mods"):
+            parts.append('<details class="small" style="margin-top:8px"><summary>%d mod%s · %s to download before joining</summary><ul style="margin:6px 0 0;padding-left:18px">%s</ul></details>' % (
+                len(s["mods"]), "" if len(s["mods"]) == 1 else "s", e(fmt_bytes(s["download"])),
+                "".join('<li>%s <span class="mute">%s%s</span></li>' % (e(x["name"]), e(fmt_bytes(x["size"])), " · map" if x["map"] else "") for x in s["mods"])))
+        elif s["state"] == "up" and APP.settings.get("statuspage_mods"):
+            parts.append('<p class="small mute" style="margin:6px 0 0">No mods - nothing to download.</p>')
+        if s["next_event"]:
+            ne = s["next_event"]
+            parts.append('<p class="small" style="margin:6px 0 0">📅 Next event: <b>%s</b> %s%s</p>' % (
+                e(ne["name"]), e(time.strftime("%a %d %b %H:%M", time.localtime(ne["t"]))), (" · " + e(ne["map"])) if ne["map"] else ""))
+        h = s["history"]
+        parts.append('<div class="bars">%s</div><div class="row small mute" style="justify-content:space-between"><span>30 days ago</span><span>today</span></div>'
+                     % "".join(bar(x["pct"]) for x in h["days"]))
+        parts.append('<div class="stats small"><span>Last 24 h <b>%s</b></span><span>7 days <b>%s</b></span><span>30 days <b>%s</b></span></div></div>'
+                     % (pct(h["d1"]), pct(h["d7"]), pct(h["d30"])))
+    return STATUS_HTML.replace("__TITLE__", e(d["title"])).replace("__BODY__", "".join(parts)).replace(
+        "__UPDATED__", e(time.strftime("%H:%M", time.localtime(d["updated"]))))
+
+
+# ----------------------------------------------------------------------------- timed announcements (fixed times)
+def timed_msgs(inst):
+    v = inst.meta.get("timed_msgs")
+    return [x for x in v if isinstance(x, dict)] if isinstance(v, list) else []
 
 
 # ----------------------------------------------------------------------------- phone app (installable web app)
@@ -3386,6 +4567,8 @@ def discord_server_status():
                 lines.append("⏱️ up %s" % fmt_uptime(up))
         else:
             lines.append(st.capitalize())
+        if maintenance_cfg(inst)["on"]:
+            lines.insert(0, "🛠️ **Maintenance** - only admins can join")
         fields.append({"name": "%s %s" % (STATE_EMOJI.get(st, "⚪"), discord_escape(inst.name))[:250],
                        "value": "\n".join(lines)[:1000], "inline": False})
     return fields
@@ -3397,7 +4580,9 @@ def fmt_uptime(sec):
 
 
 def discord_escape(s):
-    return re.sub(r"([\\*_~`|>@#<])", r"\\\1", str(s))
+    """Text from players shown in Discord: no formatting, no pings and no masked links like
+    [free mods](https://phishing.example) that hide where they really go."""
+    return re.sub(r"([\\*_~`|>@#<\[\]()-])", r"\\\1", str(s))
 
 
 class DiscordBot:
@@ -3689,6 +4874,7 @@ class DiscordBot:
             if action == "on" and not names:
                 return "Add at least one player first: /whitelist add <name>"
             write_allowlist(action == "on", names)
+            activity(who, "/whitelist %s" % action, "discord", server=inst.id)
             self.app.notifier.add("moderation", "Allow-list turned %s from Discord" % action, "By %s." % who[:60], "info", send=False)
             return ("🔒 **%s** is now invite-only (%d players)." % (label, len(names)) if action == "on"
                     else "🔓 Anyone can join **%s** now." % label)
@@ -3714,6 +4900,7 @@ class DiscordBot:
             real = next(x for x in names if x.lower() == n.lower())
             write_allowlist(on, [x for x in names if x.lower() != n.lower()])
             msg = "➖ Removed **%s** from the allow-list of %s." % (discord_escape(real), label)
+        activity(who, "/whitelist " + msg.replace("*", ""), "discord", server=inst.id)
         self.app.notifier.add("moderation", "Allow-list changed from Discord", "%s by %s." % (msg.replace("*", ""), who[:60]),
                               "info", send=False)
         return msg + ("" if on else " (The list isn't switched on - /whitelist on makes the server invite-only.)")
@@ -3725,6 +4912,7 @@ class DiscordBot:
             return "⏳ Not now: %s." % why
         if not power_status().get("can_sleep"):
             return "❌ This computer can't go to sleep."
+        activity(who, "/sleep", "discord")
         r = app.go_sleep("Sent to sleep from Discord by %s." % who[:60])
         if not r.get("ok"):
             return "❌ %s" % discord_escape(r.get("msg") or "Couldn't go to sleep")
@@ -3761,6 +4949,7 @@ class DiscordBot:
             self.busy.discard(inst.id)
         if not r.get("ok"):
             return "❌ Couldn't %s %s: %s" % (what, label, discord_escape(r.get("msg") or "unknown error"))
+        activity(who, "/%s %s" % (what, inst.name), "discord", server=inst.id)
         self.app.notifier.add("restart", "Server %s from Discord" % {"start": "started", "stop": "stopped",
                                                                       "restart": "restarted"}[what],
                               "%s used /%s in Discord." % (who[:60], what), "info", send=False)
@@ -3773,6 +4962,169 @@ class DiscordBot:
                 return "🟢 %s is %s (by %s)%s." % (label, "running" if what == "start" else "back up",
                                                    discord_escape(who), where)
         return "🟡 %s is starting (by %s) - it can take a minute. Check with /status." % (label, discord_escape(who))
+
+
+# ----------------------------------------------------------------------------- dashboard users + roles
+USERS_FILE = os.path.join(DATA_DIR, "users.json")
+ROLES = {"viewer": 0, "moderator": 1, "admin": 2, "owner": 3}
+USER_RE = re.compile(r"[A-Za-z0-9_.\-]{2,24}")
+# What each role may change (GET pages are open to every role unless listed in ADMIN_GET).
+MOD_WRITE = {"/api/players/act", "/api/bans/add", "/api/bans/remove", "/api/allowlist", "/api/server/action",
+             "/api/notifications/read", "/api/notifications/clear", "/api/security/ack", "/api/logout",
+             "/api/events/stop", "/api/map", "/api/maintenance"}
+VIEWER_WRITE = {"/api/logout", "/api/notifications/read", "/api/logs/explain"}
+OWNER_WRITE = {"/api/users", "/api/password", "/api/2fa/begin", "/api/2fa/confirm", "/api/2fa/disable", "/api/remote",
+               "/api/authkey", "/api/import", "/api/power/helper", "/api/servers/delete", "/api/statuspage"}
+ADMIN_GET = {"/api/export", "/api/backups/download", "/api/phoneapp", "/api/ntfy", "/api/power/offline",
+             "/api/health/report", "/api/health/saved", "/api/users", "/api/activity", "/api/modpack", "/api/integrations", "/api/statuspage"}
+
+
+def required_role(method, path):
+    if method in ("GET", "HEAD"):
+        return "admin" if path in ADMIN_GET else "viewer"
+    if path in OWNER_WRITE:
+        return "owner"
+    if path in VIEWER_WRITE:
+        return "viewer"
+    if path in MOD_WRITE:
+        return "moderator"
+    return "admin"
+
+
+def hash_password(pw, salt=None, rounds=200000):
+    salt = salt or secrets.token_bytes(16)
+    dk = hashlib.pbkdf2_hmac("sha256", pw.encode("utf-8"), salt, rounds)
+    return "pbkdf2-sha256$%d$%s$%s" % (rounds, salt.hex(), dk.hex())
+
+
+def check_password(pw, stored):
+    try:
+        algo, rounds, salt, want = stored.split("$")
+        if algo != "pbkdf2-sha256":
+            return False
+        dk = hashlib.pbkdf2_hmac("sha256", pw.encode("utf-8"), bytes.fromhex(salt), int(rounds))
+        return hmac.compare_digest(dk.hex(), want)
+    except (ValueError, AttributeError):
+        return False
+
+
+def _users_sig(users):
+    key = APP.secrets.get("USERS_KEY") if APP else ""
+    if not key:
+        return ""
+    return hmac.new(key.encode(), json.dumps(users, sort_keys=True).encode(), hashlib.sha256).hexdigest()
+
+
+def load_users():
+    """The extra accounts. The file is signed with a key only the dashboard knows, so a file swapped in
+    by someone else (a rogue server plugin, say) can't create accounts."""
+    d = read_json(USERS_FILE, {})
+    if not isinstance(d, dict) or not isinstance(d.get("users"), list):
+        return []
+    users = [x for x in d["users"] if isinstance(x, dict) and USER_RE.fullmatch(str(x.get("name", ""))) and x.get("role") in ROLES]
+    want = _users_sig(d["users"])
+    if not want or not hmac.compare_digest(want, str(d.get("sig") or "")):
+        if users and APP and not getattr(APP, "users_alerted", False):
+            APP.users_alerted = True
+            try:
+                APP.alerts.raise_("users_tamper", "The list of dashboard accounts was changed outside the dashboard",
+                                  "users.json doesn't carry the dashboard's signature, so all extra accounts are blocked. "
+                                  "If you didn't edit it by hand, something else on this computer did.",
+                                  sig=hashlib.sha256(json.dumps(d, sort_keys=True).encode()).hexdigest()[:16])
+            except Exception:
+                pass
+        return []
+    return users
+
+
+def save_users(users):
+    if not APP.secrets.has("USERS_KEY"):
+        APP.secrets.set("USERS_KEY", secrets.token_hex(32))
+    write_json(USERS_FILE, {"users": users, "sig": _users_sig(users)})
+    if not IS_WIN:
+        try:
+            os.chmod(USERS_FILE, 0o600)
+        except OSError:
+            pass
+
+
+def find_user(name):
+    name = str(name or "").lower()
+    return next((u for u in load_users() if u["name"].lower() == name), None)
+
+
+# ----------------------------------------------------------------------------- activity log
+ACTIVITY_FILE = os.path.join(DATA_DIR, "activity.jsonl")
+_ACT_LOCK = threading.Lock()
+ACTION_LABELS = {
+    "/api/server/action": "Server: {action}", "/api/config/save": "Changed the server settings",
+    "/api/mods/upload": "Uploaded a mod", "/api/mods/action": "Mod {action}: {name}", "/api/mods/update": "Updated mod {name}",
+    "/api/mods/rescan": "Re-checked mods", "/api/bans/add": "Banned {name}", "/api/bans/remove": "Unbanned {name}",
+    "/api/players/act": "Player {action}: {name}", "/api/allowlist": "Changed the allow-list", "/api/settings": "Changed settings",
+    "/api/password": "Changed the password", "/api/remote": "Changed internet access / HTTPS", "/api/authkey": "Changed the AuthKey",
+    "/api/import": "Imported a backup", "/api/map": "Switched the map to {map}", "/api/restarts": "Changed scheduled restarts",
+    "/api/moderation": "Changed moderation settings", "/api/extras": "Changed cars & chat settings",
+    "/api/messages": "Changed chat messages", "/api/rotation": "Changed map rotation", "/api/template": "Applied a template",
+    "/api/backups/now": "Made a backup", "/api/events": "Changed events", "/api/events/stop": "Ended an event early",
+    "/api/discordbot": "Changed the Discord bot", "/api/ntfy": "Changed phone notifications", "/api/power": "Changed sleep settings",
+    "/api/power/sleep": "Put the computer to sleep", "/api/power/wol": "Turned on Wake-on-LAN", "/api/servers/create": "Created a server",
+    "/api/servers/delete": "Deleted a server", "/api/servers/limits": "Changed server limits", "/api/users": "Users: {action} {name}",
+    "/api/2fa/confirm": "Turned on two-step login", "/api/2fa/disable": "Turned off two-step login",
+    "/api/timed": "Changed timed announcements", "/api/tools": "Changed the in-game tools (/tp, /repair)", "/api/mods/light": "Light mode for map mods: {on}", "/api/maintenance": "Maintenance mode {state}", "/api/preset": "Applied the preset {preset}", "/api/servers/clone": "Cloned a server",
+    "/api/config/restore": "Restored an older config", "/api/statuspage": "Changed the status page", "/api/joinalerts": "Changed join alerts",
+    "/api/updates/install": "Installed a BeamMP update", "/api/duckdns": "Changed DuckDNS", "/api/integrations": "Changed notification integrations",
+}
+SAFE_FIELDS = ("action", "name", "player", "map", "state", "preset", "minutes", "reason", "enabled", "role", "on")
+
+
+def activity(who, action, via="dashboard", ip="", server=None, ok=True):
+    """One line in the admin activity log: who did what, from where, and when."""
+    try:
+        srv = server or (I().id if getattr(_TL, "inst", None) else "main")
+    except Exception:
+        srv = "main"
+    line = json.dumps({"t": now(), "who": str(who)[:60], "via": via, "ip": ip, "server": srv,
+                       "action": str(action)[:300], "ok": bool(ok)}, ensure_ascii=False)
+    with _ACT_LOCK:
+        try:
+            if os.path.exists(ACTIVITY_FILE) and os.path.getsize(ACTIVITY_FILE) > 2 * 1024 ** 2:
+                os.replace(ACTIVITY_FILE, ACTIVITY_FILE + ".1")
+            with open(ACTIVITY_FILE, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except OSError:
+            pass
+
+
+def read_activity(limit=300, who="", via=""):
+    rows = []
+    for name in (ACTIVITY_FILE + ".1", ACTIVITY_FILE):
+        try:
+            with open(name, encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        r = json.loads(line)
+                    except ValueError:
+                        continue
+                    if isinstance(r, dict) and (not who or str(r.get("who", "")).lower() == who.lower()) and (not via or r.get("via") == via):
+                        rows.append(r)
+        except OSError:
+            continue
+    return rows[-limit:][::-1]
+
+
+def describe_action(path, body):
+    label = ACTION_LABELS.get(path)
+    vals = {}
+    for k in SAFE_FIELDS:
+        v = body.get(k) if isinstance(body, dict) else None
+        if isinstance(v, (str, int, float, bool)):
+            vals[k] = re.sub(r"[\r\n\t]", " ", str(v))[:60]
+    if label:
+        try:
+            return re.sub(r"\s+", " ", label.format_map(type("D", (dict,), {"__missing__": lambda self, k: ""})(vals))).strip(" :")
+        except (ValueError, KeyError):
+            return label
+    return path
 
 
 class App:
@@ -3823,8 +5175,12 @@ class App:
         except OSError:
             return "[General]\n"
 
-    def write_config_text(self, text):
+    def write_config_text(self, text, why=""):
         text = text if text.endswith("\n") else text + "\n"
+        try:
+            save_config_version(I(), self.read_config_text(), text, why)
+        except Exception as e:
+            sys.stderr.write("config history: %s\n" % short_err(e))
         if IS_WIN:
             tmp = I().CONFIG + ".tmp"
             with open(tmp, "w", encoding="utf-8", newline="\r\n") as f:
@@ -3834,6 +5190,12 @@ class App:
             # in place: the dashboard user may write the file but not the server folder
             with open_shared(I().CONFIG, "w") as f:
                 f.write(text)
+        try:
+            m = map_name(toml_parse(text)[0].get("General", {}).get("Map"))
+            record_map(I(), m)
+            light_sync(I(), m)
+        except Exception as e:
+            sys.stderr.write("map change: %s\n" % short_err(e))
         self.config_changed()
 
     def config_changed(self):
@@ -3926,7 +5288,7 @@ class App:
             for name, fn in (("address check", self.addr_tick), ("backup", self.backup_tick),
                              ("duckdns", self.duck_tick), ("resources", self.resource_tick),
                              ("discord status", self.status_msg_tick), ("mod updates", self.mod_update_tick),
-                             ("sleep", self.sleep_tick)):
+                             ("sleep", self.sleep_tick), ("health", self.health_tick), ("community", self.community_tick)):
                 try:
                     fn()
                 except Exception as e:
@@ -4301,6 +5663,34 @@ class App:
         except Exception as e:
             sys.stderr.write("chat bridge: %s\n" % short_err(e))
 
+    def health_tick(self):
+        """Every 30 minutes: run the health checks. When something newly fails, save a diagnostic report
+        and say so (once per problem, not every half hour)."""
+        t = now()
+        if t < getattr(self, "health_next", t + 600) or self.sleeping:
+            if not hasattr(self, "health_next"):
+                self.health_next = t + 600      # first run 10 minutes after the dashboard starts
+            return
+        self.health_next = t + 1800
+        with LOCK:
+            insts = list(INSTANCES.values())
+        for inst in insts:
+            use_server(inst.id)
+            if inst.server.status()["state"] not in ("running", "failed"):
+                continue                       # a stopped server isn't a problem
+            h = health_report()
+            bad = sorted(x["id"] for x in h["checks"] if x["state"] == "fail")
+            key = "health_fail_" + inst.id
+            if bad and bad != self.state.get(key):
+                name = save_diagnostic_report(inst.id, diagnostic_report())
+                titles = [x["title"] for x in h["checks"] if x["state"] == "fail"]
+                self.notifier.add("crash", "Health check failed: " + ", ".join(titles),
+                                  "; ".join("%s - %s" % (x["title"], x["detail"]) for x in h["checks"] if x["state"] == "fail")[:900] +
+                                  " A diagnostic report was saved (Overview → Health → Reports): " + name, "warning")
+            self.state[key] = bad
+        use_server("main")
+        self.save_state()
+
     # ---------- sleep / wake up
     def sleep_blockers(self):
         """Why the computer must stay awake right now ("" = it may sleep)."""
@@ -4416,6 +5806,70 @@ class App:
         webhook_call("PATCH", "/messages/%s" % mid, {"embeds": [{"title": "💤 BeamMP servers - asleep", "color": 0x64748B,
                                                                   "description": txt}]})
 
+    def community_tick(self):
+        """Once a minute: uptime for the status page, timed announcements, event advertising."""
+        t = now()
+        if t < getattr(self, "community_next", 0):
+            return
+        self.community_next = t + 60 - t % 60 + 2
+        with LOCK:
+            insts = list(INSTANCES.values())
+        states = {}
+        for inst in insts:
+            use_server(inst.id)
+            states[inst.id] = inst.server.status()["state"] == "running"
+        if not self.sleeping:
+            uptime_record(states)
+        lt = time.localtime(t)
+        hm, wd, day = "%02d:%02d" % (lt.tm_hour, lt.tm_min), lt.tm_wday, time.strftime("%Y-%m-%d", lt)
+        sent = self.state.setdefault("timed_sent", {})
+        adv = self.state.setdefault("ev_ads", {})
+        changed = False
+        for inst in insts:
+            use_server(inst.id)
+            # timed announcements: "at 20:00 on Fri + Sat say ..."
+            for i, m in enumerate(timed_msgs(inst)):
+                if not m.get("on", True) or m.get("at") != hm or wd not in (m.get("days") or []):
+                    continue
+                k = "%s:%d:%s" % (inst.id, i, day)
+                if k in sent:
+                    continue
+                sent[k] = t
+                changed = True
+                if states.get(inst.id) and online_names():
+                    for line in str(m.get("text") or "").split("\n")[:3]:
+                        if line.strip():
+                            chat_say(line.strip())
+                if m.get("discord"):
+                    broadcast(inst.name, m.get("text", ""))
+            # event advertising
+            if not self.settings.get("event_ads"):
+                continue
+            for e in events_cfg(inst):
+                if not e.get("on", True):
+                    continue
+                st = event_next_start(e, t)
+                if not st:
+                    continue
+                left = st - t
+                k = "%s:%s:%d" % (inst.id, e.get("id"), st)
+                if 23 * 3600 < left <= 24 * 3600 and k + ":day" not in adv and int(e.get("announce") or 0) != 1440:
+                    adv[k + ":day"] = t
+                    changed = True
+                    broadcast("📅 Tomorrow: %s" % e["name"], "%s starts <t:%d:F> (<t:%d:R>) on %s%s.%s" % (
+                        e["name"], st, st, inst.name, (" - map " + e["map"]) if e.get("map") else "",
+                        (" " + e["text"]) if e.get("text") else ""))
+                # in-game reminder every 30 minutes during the last 3 hours
+                if 0 < left <= 3 * 3600 and lt.tm_min % 30 == 0 and states.get(inst.id) and online_names() \
+                        and left > int(e.get("announce") or 0) * 60:
+                    chat_say("Coming up: %s in %s%s. Don't miss it!" % (e["name"], fmt_secs(left), (" on " + e["map"]) if e.get("map") else ""))
+        for d in (sent, adv):
+            for k in [k for k, v in d.items() if v < t - 8 * 86400]:
+                del d[k]
+                changed = True
+        if changed:
+            self.save_state()
+
     def status_msg_tick(self):
         """A message in the webhook's Discord channel that shows the servers and updates itself every minute."""
         if not self.settings.get("discord_status_msg") or not webhook_parts()[0]:
@@ -4515,6 +5969,18 @@ class App:
 
     def _monitor_one(self, inst, S):
         self._check_tampering(inst, S)
+        if now() >= S.get("maint_next", 0):
+            S["maint_next"] = now() + 300
+            try:
+                if not map_timeline(inst):
+                    record_map(inst, current_map())
+                if not online_names():           # never pull mods away under players' feet
+                    moved = light_sync(inst)
+                    how = ensure_tools_mod(inst)
+                    if moved or how:
+                        self.config_changed()
+            except Exception as e:
+                sys.stderr.write("map/tools upkeep %s: %s\n" % (inst.id, short_err(e)))
         try:
             self._bridge_flag(inst, S)
         except OSError:
@@ -4604,6 +6070,7 @@ class App:
                             denied.append((n, bool(e.get("guest"))))
                     elif e.get("ev") in ("ban", "unban", "kick", "mute"):
                         n, by = clean_player_name(e.get("name")), clean_player_name(e.get("by") or "?")
+                        activity(by, "/%s %s%s" % (e["ev"], n, (" (%s)" % str(e.get("reason"))[:80]) if e.get("reason") else ""), "game", server=inst.id)
                         reason = re.sub(r"[\t\r\n]", " ", str(e.get("reason") or ""))[:200]
                         if e["ev"] == "ban" and isinstance(e.get("until"), int):
                             try:
@@ -4801,12 +6268,12 @@ class App:
                 return True
         return False
 
-    def new_session(self, ip):
+    def new_session(self, ip, user="owner", role="owner"):
         tok = secrets.token_urlsafe(32)
         with LOCK:
             t = now()
             self.sessions = {k: v for k, v in self.sessions.items() if v["last"] > t - 7200 and v["created"] > t - 43200}
-            self.sessions[tok] = {"created": t, "last": t, "ip": ip, "csrf": secrets.token_urlsafe(24)}
+            self.sessions[tok] = {"created": t, "last": t, "ip": ip, "csrf": secrets.token_urlsafe(24), "user": user, "role": role}
         return tok
 
     def session(self, tok):
@@ -4818,8 +6285,16 @@ class App:
             if not s or s["last"] < t - 7200 or s["created"] < t - 43200:
                 self.sessions.pop(tok, None)
                 return None
+        if s.get("user", "owner") != "owner":   # an extra account: still there? role changed?
+            u = find_user(s["user"])
+            if not u or u.get("disabled"):
+                with LOCK:
+                    self.sessions.pop(tok, None)
+                return None
+            s["role"] = u["role"]
+        with LOCK:
             s["last"] = t
-            return s
+        return s
 
 
 APP = None
@@ -4896,6 +6371,7 @@ class Handler(BaseHTTPRequestHandler):
         if pending or self.headers.get("Transfer-Encoding"):
             self.close_connection = True
             extra = dict(extra or {}, Connection="close")
+        self._code = code
         if isinstance(obj, (bytes, bytearray)):
             data = bytes(obj)
         elif ctype == "application/json":
@@ -4923,6 +6399,8 @@ class Handler(BaseHTTPRequestHandler):
         return n
 
     def body_json(self, limit=1024 * 1024):
+        if getattr(self, "_json", None) is not None:
+            return self._json                   # already read - the body can only be read once
         n = self.content_length()
         if n > limit:
             raise ValueError("request too large")
@@ -4930,9 +6408,10 @@ class Handler(BaseHTTPRequestHandler):
         self._body_done = True
         try:
             v = json.loads(raw or b"{}")
-            return v if isinstance(v, dict) else {}
         except ValueError:
             raise ValueError("bad JSON")
+        self._json = v if isinstance(v, dict) else {}
+        return self._json
 
     def body_to_file(self, path, limit):
         n = self.content_length()
@@ -5026,6 +6505,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def dispatch(self, method):
         self._body_done = False
+        self._json = None
+        self._code = 200
         try:
             if not self.gate():
                 return
@@ -5038,6 +6519,8 @@ class Handler(BaseHTTPRequestHandler):
             public = {("GET", "/api/session"), ("POST", "/api/login"), ("POST", "/api/setup")}
             if (method, path) in public:
                 return getattr(self, "api_" + path[5:].replace("/", "_"))(q)
+            if method in ("GET", "HEAD") and path in ("/status", "/status.json"):
+                return self.status_page(path)
             if not path.startswith("/api/"):
                 return self.fail(404, "not found")
             sess = self.authed(method != "GET")
@@ -5047,6 +6530,11 @@ class Handler(BaseHTTPRequestHandler):
             if not fn:
                 return self.fail(404, "not found")
             self.sess = sess
+            _TL.user = sess.get("user", "owner")
+            role = sess.get("role", "owner")
+            need = required_role(method, path)
+            if ROLES.get(role, 0) < ROLES[need]:
+                return self.fail(403, "Your account (%s) can't do that - ask %s." % (role, "the owner" if need == "owner" else "an admin"))
             if method != "GET":
                 APP.last_use = now()
             want = self.headers.get("X-ES-Server") or q.get("srv") or "main"
@@ -5056,6 +6544,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self.fail(404, "That server doesn't exist (any more)")
             use_server(want)
             fn(q)
+            if method in ("POST", "PUT") and path not in ("/api/notifications/read", "/api/security/ack", "/api/logout") \
+                    and not path.startswith("/api/2fa/begin") and not (path == "/api/power/helper" and (self._json or {}).get("action") == "test"):
+                body = self._json or {}
+                if path == "/api/mods/upload":
+                    body = {"name": q.get("name", "")}
+                code = getattr(self, "_code", 200)
+                if code != 409:                  # 409 = "are you sure?" question, nothing happened
+                    activity(sess.get("user", "owner"), describe_action(path, body), "dashboard", self.ip, want, ok=code < 400)
         except ValueError as e:
             self.fail(400, str(e))
         except (TypeError, AttributeError, KeyError):
@@ -5098,12 +6594,23 @@ class Handler(BaseHTTPRequestHandler):
                "frame-ancestors 'none'; base-uri 'none'") % nonce
         self.send(200, html_.encode(), "text/html", {"Content-Security-Policy": csp})
 
+    def status_page(self, path):
+        if not APP.settings.get("statuspage_on"):
+            return self.send(404, "There is no public status page here.", "text/plain")
+        d = public_status()
+        if path.endswith(".json"):
+            return self.send(200, d, extra={"Access-Control-Allow-Origin": "*", "Cache-Control": "max-age=20"})
+        self.send(200, render_status_page(d).encode(), "text/html",
+                  {"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+                   "Cache-Control": "max-age=20"})
+
     # ---------- public endpoints
     def api_session(self, q):
         app = APP
         sess = app.session(self.cookie("es_session"))
         self.send(200, {
             "logged_in": bool(sess), "csrf": sess["csrf"] if sess else None,
+            "user": sess.get("user", "owner") if sess else None, "role": sess.get("role", "owner") if sess else None,
             "needs_setup": not app.secrets.has("MODS_PASSWORD"),
             "setup_allowed": ip_is_loopback(self.ip) and host_name(self.headers.get("Host")) in ("localhost", "127.0.0.1", "::1"),
             "totp": app.secrets.has("TOTP_SECRET"),
@@ -5143,6 +6650,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.fail(429, "Too many wrong attempts. Try again in 15 minutes.")
         b = self.body_json(4096)
         pw = str(b.get("password", ""))
+        uname = str(b.get("user") or "").strip()
+        if uname and uname.lower() != "owner":
+            return self.login_user(uname, pw)
         good = app.secrets.get("MODS_PASSWORD")
         ok_pw = bool(good) and hmac.compare_digest(pw.encode(), good.encode())
         has_totp = app.secrets.has("TOTP_SECRET")
@@ -5153,9 +6663,38 @@ class Handler(BaseHTTPRequestHandler):
         if not (ok_pw and ok_code):
             time.sleep(0.7)
             app.login_failed(self.ip)
+            activity("owner", "Failed login", "dashboard", self.ip, "main", ok=False)
             return self.fail(401, "Wrong password or two-step code" if has_totp else "Wrong password",
                              need_code=has_totp)
         tok = app.new_session(self.ip)
+        activity("owner", "Logged in", "dashboard", self.ip, "main")
+        self.send(200, {"ok": True}, extra={"Set-Cookie": self.cookie_header(tok)})
+
+    def login_user(self, uname, pw):
+        """Extra accounts (admin / moderator / viewer). They only work from the home network:
+        logging in from the internet stays protected by the owner's password + two-step code."""
+        app = APP
+        try:
+            local = not ipaddress.ip_address(self.ip).is_global
+        except ValueError:
+            local = False
+        u = find_user(uname)
+        ok = bool(u) and not u.get("disabled") and check_password(pw, u.get("pw", ""))
+        if not ok:
+            time.sleep(0.7)
+            app.login_failed(self.ip)
+            activity(uname[:24], "Failed login", "dashboard", self.ip, "main", ok=False)
+            return self.fail(401, "Wrong name or password")
+        if not local:
+            activity(u["name"], "Login refused (from the internet)", "dashboard", self.ip, "main", ok=False)
+            return self.fail(403, "Extra accounts can only log in from the home network. From the internet, only the owner can log in.")
+        users = load_users()
+        for x in users:
+            if x["name"].lower() == u["name"].lower():
+                x["last_login"] = now()
+        save_users(users)
+        tok = app.new_session(self.ip, u["name"], u["role"])
+        activity(u["name"], "Logged in", "dashboard", self.ip, "main")
         self.send(200, {"ok": True}, extra={"Set-Cookie": self.cookie_header(tok)})
 
     def post_logout(self, q):
@@ -5207,11 +6746,18 @@ class Handler(BaseHTTPRequestHandler):
         mp = str(b.get("map") or "gridmap_v2")
         if mp not in BUILTIN_MAPS:
             return self.fail(400, "Pick a built-in map (map mods can be added after the server is created)")
-        use_server("main")
+        src = str(b.get("clone_from") or "")
+        with LOCK:
+            src_inst = INSTANCES.get(src) if src else None
+        if src and not src_inst:
+            return self.fail(400, "The server to copy doesn't exist any more")
+        use_server(src_inst.id if src_inst else "main")
         text = APP.read_config_text()
-        for k, v in (("Name", name), ("Port", port), ("MaxPlayers", maxp), ("Map", "/levels/%s/info.json" % mp),
-                     ("AuthKey", ""), ("Description", str(b.get("description") or "")[:300]),
-                     ("Private", bool(b.get("private", False)))):
+        sets = [("Name", name), ("Port", port), ("AuthKey", "")]
+        if not src_inst:
+            sets += [("MaxPlayers", maxp), ("Map", "/levels/%s/info.json" % mp),
+                     ("Description", str(b.get("description") or "")[:300]), ("Private", bool(b.get("private", False)))]
+        for k, v in sets:
             text = toml_set(text, "General", k, v)
         start = bool(b.get("start", True))
         if IS_WIN:
@@ -5230,9 +6776,17 @@ class Handler(BaseHTTPRequestHandler):
             if not r.get("ok") and not os.path.isdir(os.path.join(SERVERS_DIR, iid)):
                 return self.fail(500, r.get("msg") or "Could not create the server")
             note = "Server created. " + (r.get("msg") or "").replace("created. ", "").replace("created, but", "But")
+        meta = {"name": name, "autostart": True}
+        if src_inst:
+            for k in ("events", "restart", "rotation", "limits"):
+                if k in src_inst.meta:
+                    meta[k] = json.loads(json.dumps(src_inst.meta[k]))
         with LOCK:
-            INSTANCES[iid] = Instance(iid, {"name": name, "autostart": True})
+            INSTANCES[iid] = Instance(iid, meta)
         save_servers()
+        if src_inst:
+            copied = clone_server_files(src_inst, INSTANCES[iid])
+            note = note.rstrip(" .") + ". Copied the settings, moderation, bans and messages from %s (%d files)." % (src_inst.name, copied)
         if IS_WIN and start:
             use_server(iid)
             INSTANCES[iid].server._win_start()
@@ -5718,7 +7272,27 @@ class Handler(BaseHTTPRequestHandler):
                         "checks": active_checks(), "auto_apply": not IS_WIN,
                         "download": sum(m["size"] for m in mods if m["enabled"]),
                         "maps_size": sum(m["size"] for m in mods if m["enabled"] and m["maps"]),
-                        "desc_modsize": bool(I().meta.get("desc_modsize"))})
+                        "desc_modsize": bool(I().meta.get("desc_modsize")),
+                        "light": bool(I().meta.get("light_maps")), "current_map": current_map(),
+                        "all_maps_size": sum(m["size"] for m in mods if (m["enabled"] or m.get("parked")) and m["maps"])})
+
+    def post_mods_light(self, q):
+        on = bool(self.body_json().get("on"))
+        inst = I()
+        if on:
+            set_server_meta(inst.id, light_maps=True)
+            moved = light_sync(inst)
+            note = "Light mode is on. %d map mod%s parked - players only download the map being played." % (
+                len([m for m in moved if m[0] == "-"]), "" if len([m for m in moved if m[0] == "-"]) == 1 else "s")
+        else:
+            back = light_off(inst)
+            moved = back
+            note = "Light mode is off - %d map mod%s turned back on." % (len(back), "" if len(back) == 1 else "s")
+        if moved:
+            refresh_mod_desc()
+            APP.config_changed()
+            note += " " + APP.applied_note()
+        self.send(200, {"ok": True, "note": note})
 
     def put_mods_upload(self, q):
         name = safe_zip_name(q.get("name"))
@@ -5759,6 +7333,10 @@ class Handler(BaseHTTPRequestHandler):
         if not name:
             return self.fail(400, "bad name")
         on, off = os.path.join(I().CLIENT_DIR, name), os.path.join(I().DISABLED_DIR, name)
+        if name == TOOLS_MOD and act in ("toggle", "delete"):
+            return self.fail(400, "This is EasyServer's own tools mod - turn /tp and /repair off under Config -> In-game tools to remove it")
+        if name in parked_maps(I()):
+            set_server_meta(I().id, parked_maps=[n for n in parked_maps(I()) if n != name])
         if act == "delete":
             for p in (on, off):
                 if os.path.exists(p):
@@ -6022,6 +7600,358 @@ class Handler(BaseHTTPRequestHandler):
             app.write_config_text(text)
             note += " " + app.applied_note()
         self.send(200, {"ok": True, "note": note})
+
+    # ---------- presets
+    def get_preset(self, q):
+        md, (al_on, al_names) = read_mod(), read_allowlist()
+        data, _, _ = toml_parse(APP.read_config_text())
+        g = data.get("General", {})
+        cur = None
+        for pid, p in PRESETS.items():
+            if all(g.get(k) == v for k, v in p.get("config", {}).items()) and all(md.get(k) == v for k, v in p.get("mod", {}).items()) \
+                    and ("allowlist" not in p or p["allowlist"] == al_on):
+                cur = pid
+                break
+        self.send(200, {"current": cur, "allow_count": len(al_names), "is_win": IS_WIN,
+                        "presets": [{"id": k, "label": v["label"], "about": v["about"]} for k, v in PRESETS.items()]})
+
+    def post_preset(self, q):
+        b = self.body_json()
+        p = PRESETS.get(str(b.get("id") or b.get("preset") or ""))
+        if not p:
+            return self.fail(400, "Pick a preset")
+        notes = []
+        if p.get("mod"):
+            md = read_mod()
+            md.update(p["mod"])
+            write_mod(md)
+        if p.get("extras"):
+            ex = read_extras()
+            ex.update(p["extras"])
+            write_extras(ex)
+        if "allowlist" in p:
+            on, names = read_allowlist()
+            if p["allowlist"] and not names:
+                admins = read_mod()["admins"]
+                names = admins[:]
+                if not names:
+                    notes.append("The invite list is still empty, so it stays off - add your friends in Players → Who can join, then turn it on.")
+            write_allowlist(bool(p["allowlist"] and names), names)
+        if p.get("flood") is not None and not IS_WIN and bool(APP.settings.get("flood_protect")) != p["flood"]:
+            APP.settings.update({"flood_protect": p["flood"]})
+            threading.Thread(target=APP.flood_tick, daemon=True).start()
+        if p.get("config"):
+            text = APP.read_config_text()
+            for k, v in p["config"].items():
+                text = toml_set(text, "General", k, v)
+            APP.write_config_text(text, why="preset " + p["label"])
+            notes.append(APP.applied_note())
+        self.send(200, {"ok": True, "note": ("Applied \"%s\". " % p["label"]) + " ".join(n for n in notes if n)})
+
+    # ---------- maintenance mode
+    def get_maintenance(self, q):
+        self.send(200, maintenance_cfg(I()))
+
+    def post_maintenance(self, q):
+        b = self.body_json()
+        inst = I()
+        cfg = maintenance_cfg(inst)
+        if "message" in b:
+            cfg["message"] = clean_msg(b["message"]) or cfg["message"]
+        if "allow" in b:
+            cfg["allow"] = clean_allow_names(b["allow"])[:200]
+        if "kick" in b:
+            cfg["kick"] = bool(b["kick"])
+        was = cfg["on"]
+        if "state" in b or "on" in b:
+            cfg["on"] = str(b.get("state", b.get("on"))).lower() in ("on", "true", "1")
+        if cfg["on"] and not was:
+            cfg["since"] = now()
+        set_server_meta(inst.id, maintenance=cfg)
+        write_maintenance_file(inst, cfg)
+        note = "Saved."
+        if cfg["on"] and not was:
+            admins = {a.lower() for a in read_mod()["admins"]} | {a.lower() for a in cfg["allow"]}
+            online = online_names()
+            out = [n for n in online if n.lower() not in admins] if cfg["kick"] else []
+            if online:
+                chat_say("Maintenance starting%s: %s" % (" - you'll be disconnected in 10 seconds" if out else "", cfg["message"]))
+            if out:
+                def later(iid=inst.id, names=out, msg=cfg["message"]):
+                    time.sleep(10)
+                    use_server(iid)
+                    for n in names:
+                        queue_action("kick", n, text=msg)
+                threading.Thread(target=later, daemon=True).start()
+            APP.notifier.add("server", "Maintenance mode on", "%s Only admins%s can join." % (
+                inst.name, " and %d listed players" % len(cfg["allow"]) if cfg["allow"] else ""), "info")
+            note = "Maintenance mode is on - only admins%s can join.%s" % (
+                " and the players you listed" if cfg["allow"] else "", " %d player(s) will be disconnected in 10 seconds." % len(out) if out else "")
+        elif was and not cfg["on"]:
+            if online_names():
+                chat_say("Maintenance is over - everyone can join again!")
+            APP.notifier.add("server", "Maintenance mode off", "%s is open to everyone again." % inst.name, "info")
+            note = "Maintenance is over - everyone can join again."
+        self.send(200, {"ok": True, "note": note, "maintenance": cfg})
+
+    # ---------- config history / comparison
+    def get_config_history(self, q):
+        vs = config_versions(I())
+        self.send(200, {"items": [{k: v[k] for k in ("id", "t", "who", "why")} for v in vs], "keep": HIST_KEEP})
+
+    def get_config_diff(self, q):
+        """Compare: a saved version against now (?v=), two versions (?v=&w=) or this server against another (?other=)."""
+        cur = APP.read_config_text()
+        vs = {v["id"]: v for v in config_versions(I())}
+        a_label, b_label = "before", "now"
+        if q.get("other"):
+            with LOCK:
+                o = INSTANCES.get(q["other"])
+            if not o:
+                return self.fail(400, "Unknown server")
+            me = I()
+            use_server(o.id)
+            a = APP.read_config_text()
+            use_server(me.id)
+            a_label, b_label, b_text = o.name, me.name, cur
+        else:
+            v = vs.get(q.get("v", ""))
+            if not v:
+                return self.fail(400, "Pick a saved version")
+            a = v["text"]
+            w = vs.get(q.get("w", ""))
+            b_text = w["text"] if w else cur
+            a_label = time.strftime("%Y-%m-%d %H:%M", time.localtime(v["t"])) + " (" + v["who"] + ")"
+            if w:
+                b_label = time.strftime("%Y-%m-%d %H:%M", time.localtime(w["t"])) + " (" + w["who"] + ")"
+        d = config_diff(a, b_text)
+        d.update({"a": a_label, "b": b_label})
+        self.send(200, d)
+
+    def post_config_restore(self, q):
+        v = {x["id"]: x for x in config_versions(I())}.get(str(self.body_json().get("v", "")))
+        if not v:
+            return self.fail(400, "That version doesn't exist any more")
+        cur = APP.read_config_text()
+        key = re.search(r'(?m)^\s*AuthKey\s*=\s*"([^"]*)"', cur)
+        text = v["text"]
+        if key and key.group(1):
+            text = toml_set(text, "General", "AuthKey", key.group(1))
+        try:
+            toml_parse(text)
+        except Exception:
+            return self.fail(400, "That saved version can't be read")
+        APP.write_config_text(text, why="restored the version from " + time.strftime("%Y-%m-%d %H:%M", time.localtime(v["t"])))
+        self.send(200, {"ok": True, "note": "Restored. " + APP.applied_note()})
+
+    # ---------- in-game tools
+    def get_tools(self, q):
+        d = read_tools()
+        d["installed"] = os.path.exists(os.path.join(I().CLIENT_DIR, TOOLS_MOD))
+        d["size"] = len(tools_mod_bytes())
+        self.send(200, d)
+
+    def post_tools(self, q):
+        b = self.body_json()
+        d = read_tools()
+        if "tp" in b:
+            d["tp"] = bool(b["tp"])
+        if b.get("repair") in ("free", "cooldown", "off"):
+            d["repair"] = b["repair"]
+        try:
+            if "repair_cd" in b:
+                d["repair_cd"] = max(1, min(120, int(b["repair_cd"])))
+            if "tp_cd" in b:
+                d["tp_cd"] = max(0, min(3600, int(b["tp_cd"])))
+        except (TypeError, ValueError):
+            return self.fail(400, "Cooldowns must be numbers")
+        write_tools(d)
+        how = ensure_tools_mod()
+        note = "Saved - works right away."
+        if how in ("added", "removed"):
+            refresh_mod_desc()
+            APP.config_changed()
+            note = ("Saved. Players download a tiny helper mod (%s) when they join. " % fmt_bytes(len(tools_mod_bytes()))
+                    if how == "added" else "Saved. The helper mod was removed. ") + APP.applied_note().replace("Saved. ", "")
+        self.send(200, {"ok": True, "note": note, "tools": d})
+
+    # ---------- per-map statistics
+    def get_players_maps(self, q):
+        try:
+            days = max(1, min(90, int(q.get("days") or 30)))
+        except ValueError:
+            days = 30
+        self.send(200, per_map_stats(I(), days))
+
+    # ---------- log explainer
+    def get_logs_explain(self, q):
+        try:
+            with open(I().SERVER_LOG, "rb") as f:
+                f.seek(0, 2)
+                size = f.tell()
+                f.seek(max(0, size - 4 * 1024 * 1024))
+                text = f.read().decode("utf-8", "replace")
+        except OSError:
+            return self.send(200, {"groups": [], "lines": 0, "note": "There's no server log yet - start the server once."})
+        groups = explain_log(text)
+        self.send(200, {"groups": groups, "lines": text.count("\n"), "size": size,
+                        "note": "Looked at the last %s of the log." % fmt_bytes(min(size, 4 * 1024 * 1024))})
+
+    def post_logs_explain(self, q):
+        line = str(self.body_json().get("line") or "")[:2000]
+        self.send(200, {"explain": explain_line(line)})
+
+    # ---------- public status page
+    def get_statuspage(self, q):
+        s = APP.settings
+        base = dashboard_url().rstrip("/")
+        self.send(200, {"on": bool(s.get("statuspage_on")), "players": bool(s.get("statuspage_players")), "mods": bool(s.get("statuspage_mods")),
+                        "title": s.get("statuspage_title") or "", "url": base + "/status", "lan_url": "http://%s:%s/status" % (lan_ip(), s.get("port")),
+                        "remote": bool(s.get("remote_enabled")), "preview": public_status()})
+
+    def post_statuspage(self, q):
+        b = self.body_json()
+        upd = {}
+        if "on" in b:
+            upd["statuspage_on"] = bool(b["on"])
+        if "players" in b:
+            upd["statuspage_players"] = bool(b["players"])
+        if "title" in b:
+            upd["statuspage_title"] = clean_msg(b["title"])[:80]
+        if "mods" in b:
+            upd["statuspage_mods"] = bool(b["mods"])
+        APP.settings.update(upd)
+        _STATUS_CACHE["t"] = 0
+        self.send(200, {"ok": True, "note": "Saved." + (" The page is public now - anyone with the link can see it." if upd.get("statuspage_on") else "")})
+
+    # ---------- alert channels: Telegram + any webhook, event advertising
+    def get_integrations(self, q):
+        s, sec = APP.settings, APP.secrets
+        self.send(200, {"telegram": {"enabled": bool(s.get("telegram_enabled")), "has_token": sec.has("TELEGRAM_TOKEN"), "chat": s.get("telegram_chat") or ""},
+                        "webhook": {"enabled": bool(s.get("webhook_enabled")), "has_url": sec.has("CUSTOM_WEBHOOK"),
+                                    "host": urllib.parse.urlparse(sec.get("CUSTOM_WEBHOOK") or "").hostname or ""},
+                        "event_ads": bool(s.get("event_ads")), "discord": bool(webhook_parts()[0])})
+
+    def post_integrations(self, q):
+        b = self.body_json()
+        app, upd, notes = APP, {}, []
+        if "telegram_token" in b:
+            tok = str(b["telegram_token"] or "").strip()
+            if tok and not re.fullmatch(r"\d{5,15}:[A-Za-z0-9_-]{30,60}", tok):
+                return self.fail(400, "That doesn't look like a Telegram bot token (it looks like 123456789:ABC...)")
+            app.secrets.set("TELEGRAM_TOKEN", tok)
+            if not tok:
+                upd.update(telegram_enabled=False, telegram_chat="")
+        if "telegram_chat" in b:
+            c = str(b["telegram_chat"] or "").strip()
+            if c and not re.fullmatch(r"-?\d{1,20}|@[A-Za-z0-9_]{4,40}", c):
+                return self.fail(400, "The chat ID is a number (or @channelname)")
+            upd["telegram_chat"] = c
+        if b.get("telegram_find"):
+            if not app.secrets.has("TELEGRAM_TOKEN"):
+                return self.fail(400, "Save the bot token first")
+            try:
+                cid, title = telegram_find_chat(app.secrets.get("TELEGRAM_TOKEN"))
+            except ValueError as e:
+                return self.fail(400, str(e))
+            if not cid:
+                return self.fail(400, "No message found - send your bot a message (e.g. \"hi\") in Telegram, or add it to your group, then try again")
+            upd["telegram_chat"] = cid
+            notes.append("Found the chat %s." % (title or cid))
+        if "telegram_enabled" in b:
+            upd["telegram_enabled"] = bool(b["telegram_enabled"])
+        if "webhook_url" in b:
+            u = str(b["webhook_url"] or "").strip()
+            if u and not valid_custom_webhook(u):
+                return self.fail(400, "The webhook address must start with https://")
+            if u and valid_webhook(u):
+                return self.fail(400, "That's a Discord webhook - put it in the Discord section instead")
+            if u and not public_host(urllib.parse.urlparse(u).hostname):
+                return self.fail(400, "The webhook must be an internet address (https://...). Addresses in your home network, "
+                                      "this computer and cloud-internal addresses aren't allowed")
+            app.secrets.set("CUSTOM_WEBHOOK", u)
+            if not u:
+                upd["webhook_enabled"] = False
+        if "webhook_enabled" in b:
+            upd["webhook_enabled"] = bool(b["webhook_enabled"])
+        if "event_ads" in b:
+            upd["event_ads"] = bool(b["event_ads"])
+        if upd:
+            app.settings.update(upd)
+        test = str(b.get("test") or "")
+        if test == "telegram":
+            try:
+                telegram_send("Test from BeamMP EasyServer - alerts will arrive here.", "success")
+                notes.append("Test message sent to Telegram.")
+            except ValueError as e:
+                return self.fail(400, "Telegram: %s" % e)
+        elif test == "webhook":
+            try:
+                custom_webhook_send("Test from BeamMP EasyServer", "Alerts will arrive here.", "success", "test")
+                notes.append("Test sent to the webhook.")
+            except ValueError as e:
+                return self.fail(400, "Webhook: %s" % e)
+        self.send(200, {"ok": True, "note": " ".join(notes) or "Saved."})
+
+    # ---------- timed announcements
+    def get_timed(self, q):
+        self.send(200, {"items": timed_msgs(I()), "discord": bool(webhook_parts()[0])})
+
+    def post_timed(self, q):
+        raw = self.body_json().get("items")
+        if not isinstance(raw, list) or len(raw) > 20:
+            return self.fail(400, "At most 20 timed messages")
+        out = []
+        for m in raw:
+            if not isinstance(m, dict):
+                return self.fail(400, "bad message")
+            text = "\n".join(clean_msg(x) for x in str(m.get("text") or "").splitlines() if clean_msg(x))[:600]
+            if not text:
+                continue
+            at = str(m.get("at") or "").strip()
+            if not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", at):
+                return self.fail(400, "Enter the time like 20:00")
+            days = sorted({int(d) for d in (m.get("days") or []) if str(d).isdigit() and 0 <= int(d) <= 6})
+            if not days:
+                return self.fail(400, "Pick at least one day for \"%s\"" % text[:30])
+            out.append({"at": "%02d:%s" % (int(at.split(":")[0]), at.split(":")[1]), "days": days, "text": text,
+                        "discord": bool(m.get("discord")), "on": bool(m.get("on", True))})
+        set_server_meta(I().id, timed_msgs=out)
+        self.send(200, {"ok": True, "note": "Saved %d timed message%s." % (len(out), "" if len(out) == 1 else "s")})
+
+    # ---------- modpack
+    def get_modpack(self, q):
+        mods = [m for m in list_mods() if (m["enabled"] or m.get("parked")) and m["name"] != TOOLS_MOD]
+        if not mods:
+            return self.fail(400, "This server has no enabled mods")
+        fd, tmp = tempfile.mkstemp(suffix=".zip", dir=DATA_DIR)
+        os.close(fd)
+        try:
+            man = {"format": "beammp-easyserver-modpack", "version": 1, "server": I().name, "made": now(),
+                   "easy_version": EASY_VERSION, "map": map_name(toml_parse(APP.read_config_text())[0].get("General", {}).get("Map")),
+                   "mods": []}
+            with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED, allowZip64=True) as z:
+                for m in mods:
+                    pth = os.path.join(I().CLIENT_DIR if m["enabled"] else I().DISABLED_DIR, m["name"])
+                    h = hashlib.sha256()
+                    with open(pth, "rb") as f:
+                        for chunk in iter(lambda: f.read(1 << 20), b""):
+                            h.update(chunk)
+                    z.write(pth, "mods/" + m["name"])
+                    man["mods"].append({"name": m["name"], "size": m["size"], "sha256": h.hexdigest(), "maps": m["maps"]})
+                z.writestr("modpack.json", json.dumps(man, indent=1))
+                z.writestr("README.txt", "Modpack from %s (%d mods).\r\n\r\nServer owners: BeamMP EasyServer -> Mods -> Import modpack.\r\n"
+                           "Players: you don't need this - BeamMP downloads the mods when you join. To save time on slow internet,\r\n"
+                           "copy the files from the mods folder into  Documents\\BeamNG.drive\\mods\\multiplayer  before joining.\r\n"
+                           "modpack.json lists every file with its SHA-256 checksum.\r\n" % (I().name, len(mods)))
+            size = os.path.getsize(tmp)
+            fname = "modpack-%s-%s.zip" % (re.sub(r"[^A-Za-z0-9]+", "-", I().name).strip("-")[:30] or "server", time.strftime("%Y%m%d"))
+            self.send_response(200)
+            self.headers_common("application/zip", size, {"Content-Disposition": 'attachment; filename="%s"' % fname})
+            with open(tmp, "rb") as f:
+                shutil.copyfileobj(f, self.wfile)
+        finally:
+            os.remove(tmp)
 
     # ---------- backups
     def get_backups(self, q):
@@ -6328,6 +8258,91 @@ class Handler(BaseHTTPRequestHandler):
             return self.fail(400, r.get("msg"))
         self.send(200, r)
 
+    # ---------- users + activity log
+    def get_users(self, q):
+        self.send(200, {"users": [{k: u.get(k) for k in ("name", "role", "created", "last_login", "disabled")} for u in load_users()],
+                        "roles": ["admin", "moderator", "viewer"]})
+
+    def post_users(self, q):
+        b = self.body_json()
+        act, name = b.get("action"), str(b.get("name") or "").strip()
+        if not USER_RE.fullmatch(name) or name.lower() == "owner":
+            raise ValueError("Names are 2-24 letters, numbers, dots, dashes or underscores (and not 'owner')")
+        users = load_users()
+        u = next((x for x in users if x["name"].lower() == name.lower()), None)
+        role = b.get("role")
+        if act == "add":
+            if u:
+                raise ValueError("That name is taken")
+            if len(users) >= 50:
+                raise ValueError("At most 50 accounts")
+            if role not in ("admin", "moderator", "viewer"):
+                raise ValueError("Pick a role")
+            pw = str(b.get("password") or "")
+            if len(pw) < 10:
+                raise ValueError("Use a password with at least 10 characters")
+            users.append({"name": name, "role": role, "pw": hash_password(pw), "created": now(), "last_login": 0})
+        elif not u:
+            raise ValueError("No such account")
+        elif act == "role":
+            if role not in ("admin", "moderator", "viewer"):
+                raise ValueError("Pick a role")
+            u["role"] = role
+        elif act == "password":
+            pw = str(b.get("password") or "")
+            if len(pw) < 10:
+                raise ValueError("Use a password with at least 10 characters")
+            u["pw"] = hash_password(pw)
+            with LOCK:                           # log them out everywhere
+                APP.sessions = {k: v for k, v in APP.sessions.items() if v.get("user", "").lower() != name.lower()}
+        elif act == "disable":
+            u["disabled"] = not u.get("disabled")
+        elif act == "delete":
+            users = [x for x in users if x is not u]
+            with LOCK:
+                APP.sessions = {k: v for k, v in APP.sessions.items() if v.get("user", "").lower() != name.lower()}
+        else:
+            raise ValueError("unknown action")
+        save_users(users)
+        self.send(200, {"ok": True})
+
+    def get_activity(self, q):
+        try:
+            n = max(20, min(2000, int(q.get("limit", 300))))
+        except ValueError:
+            n = 300
+        self.send(200, {"rows": read_activity(n, str(q.get("who") or ""), str(q.get("via") or ""))})
+
+    # ---------- health report, diagnostics, connection doctor
+    def get_health(self, q):
+        self.send(200, health_report(deep=q.get("deep") == "1"))
+
+    def get_health_report(self, q):
+        body = diagnostic_report().encode("utf-8")
+        fname = "beammp-diagnostics-%s.txt" % time.strftime("%Y%m%d-%H%M")
+        self.send_response(200)
+        self.headers_common("text/plain; charset=utf-8", len(body), {"Content-Disposition": 'attachment; filename="%s"' % fname})
+        self.wfile.write(body)
+
+    def get_health_reports(self, q):
+        self.send(200, {"reports": list_diagnostic_reports(I().id)})
+
+    def get_health_saved(self, q):
+        name = str(q.get("file") or "")
+        if not re.fullmatch(r"diagnostics-[a-z0-9]{1,12}-\d{8}-\d{6}\.txt", name) or not name.startswith("diagnostics-%s-" % I().id):
+            return self.fail(404, "not found")
+        try:
+            with open(os.path.join(DIAG_DIR, name), "rb") as f:
+                body = f.read()
+        except OSError:
+            return self.fail(404, "not found")
+        self.send_response(200)
+        self.headers_common("text/plain; charset=utf-8", len(body), {"Content-Disposition": 'attachment; filename="%s"' % name})
+        self.wfile.write(body)
+
+    def get_health_join(self, q):
+        self.send(200, connection_doctor(q.get("player") or ""))
+
     def get_power_offline(self, q):
         """What the "server is asleep" page (cached by the browser) needs to send a wake-up."""
         topic = APP.secrets.get("WAKE_TOPIC")
@@ -6420,8 +8435,23 @@ class Handler(BaseHTTPRequestHandler):
                         "name": name, "days": days, "at": "%02d:%s" % (int(at.split(":")[0]), at.split(":")[1]),
                         "minutes": minutes, "map": mp, "mods": mods, "announce": ann, "ping": bool(e.get("ping")),
                         "text": clean_msg(e.get("text"))[:200], "on": bool(e.get("on", True))})
+        before = {e.get("id") for e in events_cfg(I())}
         set_server_meta(I().id, events=out)
-        self.send(200, {"ok": True, "note": "Saved %d event%s." % (len(out), "" if len(out) == 1 else "s")})
+        note = "Saved %d event%s." % (len(out), "" if len(out) == 1 else "s")
+        new = [e for e in out if e["id"] not in before and e["on"]]
+        if new and APP.settings.get("event_ads"):
+            inst = I()
+            def post(evs=new, inst=inst):
+                use_server(inst.id)
+                for e in evs:
+                    st = event_next_start(e, now())
+                    days = ", ".join(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][d] for d in e["days"])
+                    broadcast("🎉 New event: %s" % e["name"], "Every %s at %s on %s%s. First one: <t:%d:F>.%s" % (
+                        days, e["at"], inst.name, (" - map " + e["map"]) if e.get("map") else "", st or now(),
+                        (" " + e["text"]) if e.get("text") else ""))
+            threading.Thread(target=post, daemon=True).start()
+            note += " Advertised the new event%s." % ("" if len(new) == 1 else "s")
+        self.send(200, {"ok": True, "note": note})
 
     def post_events_stop(self, q):
         act = I().meta.get("event_active")
@@ -6665,15 +8695,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self.fail(400, "That isn't an export file (.zip)")
             with z:
                 names = z.namelist()
-                if "ServerConfig.toml" not in names:
-                    return self.fail(400, "No ServerConfig.toml in this file")
-                info = z.getinfo("ServerConfig.toml")
-                if info.file_size > 200000:
-                    return self.fail(400, "ServerConfig.toml is too large")
-                text = z.read(info).decode("utf-8", "replace")
-                _, issues = validate_config(text, app.settings.get("port"), I().has_authkey())
-                if any(i["level"] == "error" for i in issues):
-                    return self.send(400, {"ok": False, "error": "The imported config has errors", "issues": issues})
+                only_mods = "ServerConfig.toml" not in names and "modpack.json" in names
+                if not only_mods:
+                    if "ServerConfig.toml" not in names:
+                        return self.fail(400, "No ServerConfig.toml or modpack.json in this file")
+                    info = z.getinfo("ServerConfig.toml")
+                    if info.file_size > 200000:
+                        return self.fail(400, "ServerConfig.toml is too large")
+                    text = z.read(info).decode("utf-8", "replace")
+                    _, issues = validate_config(text, app.settings.get("port"), I().has_authkey())
+                    if any(i["level"] == "error" for i in issues):
+                        return self.send(400, {"ok": False, "error": "The imported config has errors", "issues": issues})
                 if q.get("settings", "1") == "1" and "easyserver-export.json" in names:
                     if z.getinfo("easyserver-export.json").file_size > 1024 * 1024:
                         return self.fail(400, "easyserver-export.json is too large")
@@ -6719,7 +8751,7 @@ class Handler(BaseHTTPRequestHandler):
                     for n in names:
                         m = re.fullmatch(r"(mods|mods-disabled)/([^/]+)", n)
                         if not m:
-                            if n not in ("ServerConfig.toml", "easyserver-export.json") + STATS_EXPORT and not n.endswith("/"):
+                            if n not in ("ServerConfig.toml", "easyserver-export.json", "modpack.json", "README.txt") + STATS_EXPORT and not n.endswith("/"):
                                 report["skipped"].append(n[:120])
                             continue
                         name = safe_zip_name(m.group(2))
@@ -6755,6 +8787,12 @@ class Handler(BaseHTTPRequestHandler):
                             report["mods_added"].append(name)
                         finally:
                             shutil.rmtree(tdir, ignore_errors=True)
+            if only_mods:
+                report["modpack"] = True
+                if report["mods_added"]:
+                    app.config_changed()
+                return self.send(200, {"ok": True, "report": report, "note": "Added %d mod%s from the modpack." % (
+                    len(report["mods_added"]), "" if len(report["mods_added"]) == 1 else "s") + (" " + app.applied_note() if report["mods_added"] else "")})
             old_port = (toml_parse(app.read_config_text())[0].get("General") or {}).get("Port")
             text = app.move_plaintext_authkey(text)
             app.write_config_text(text)
