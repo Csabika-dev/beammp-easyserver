@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.9.0 - Phone app and mod updates
+
+- **Android app**: `BeamMP-EasyServer.apk` is attached to every release (built by GitHub from `android/`). Scan the QR code under Settings -> Phone app with the phone's camera and the app connects to your dashboard. It remembers the dashboard's certificate fingerprint, so it only ever talks to your server - no "unsafe certificate" warnings, and nobody can pretend to be your server.
+- **iPhone (and Android without the .apk)**: the dashboard can be added to the home screen and opens full screen with its own icon, like an app.
+- **Push notifications on the phone** through the free **ntfy** app (Android and iPhone): every notification you turned on, even when the dashboard isn't open. Scan a QR code to subscribe; the private topic is stored encrypted.
+- **Mod update check** (Mods page): mods from the BeamNG repository are checked once a day. When a newer version is out you get a notification and an **Update** button - the new version is downloaded, virus-checked and swapped in. Mods from elsewhere can't be checked.
+
 ## 1.8.0 - Discord chat, events and graphs
 
 - **Discord chat bridge** (Settings -> Discord bot): the game chat shows up in your Discord channel, and messages written there appear in the game as `[Discord] name: text`. Commands, muted players and filtered words are never sent, and nobody can be pinged from the game.
