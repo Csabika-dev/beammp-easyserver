@@ -38,7 +38,7 @@ import zipfile
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-EASY_VERSION = "1.8.0"
+EASY_VERSION = "1.9.0"
 REPO = "Csabika-dev/beammp-easyserver"
 BEAMMP_REPO = "BeamMP/BeamMP-Server"
 IS_WIN = os.name == "nt"
@@ -74,7 +74,7 @@ BUILTIN_MAPS = ["gridmap_v2", "west_coast_usa", "east_coast_usa", "utah", "italy
                 "hirochi_raceway", "johnson_valley", "derby", "driver_training"]
 
 SECRET_NAMES = ("MODS_PASSWORD", "VT_API_KEY", "DISCORD_WEBHOOK", "SMTP_PASSWORD", "TOTP_SECRET",
-                "BEAMMP_AUTH_KEY", "DISCORD_BOT_TOKEN", "DUCKDNS_TOKEN")
+                "BEAMMP_AUTH_KEY", "DISCORD_BOT_TOKEN", "DUCKDNS_TOKEN", "NTFY_TOPIC")
 
 DEFAULT_SETTINGS = {
     "port": 30815,
@@ -83,7 +83,7 @@ DEFAULT_SETTINGS = {
     "notify": {"crash": True, "stopped": True, "update": True, "mod_blocked": True,
                "login_failed": True, "player_join": False, "player_denied": True,
                "moderation": True, "network": True, "restart": False,
-               "resources": True, "backup": True, "rotation": False},
+               "resources": True, "backup": True, "rotation": False, "mod_update": True},
     "discord_enabled": False,
     "email_enabled": False,
     "smtp_host": "", "smtp_port": 587, "smtp_security": "starttls",
@@ -111,6 +111,9 @@ DEFAULT_SETTINGS = {
     "discord_status_msg": False,   # a status message in the webhook channel that updates itself every minute
     "discord_bridge": False,       # game chat <-> Discord channel (the webhook's channel)
     "discord_bridge_server": "main",
+    "ntfy_enabled": False,         # push notifications to phones through the free ntfy app
+    "ntfy_server": "https://ntfy.sh",
+    "mod_update_check": True,      # look for newer versions of repository mods once a day
 }
 SECURITY_FILE = os.path.join(DATA_DIR, "security.json")
 SECURITY_REPEAT = 15 * 60
@@ -1166,6 +1169,12 @@ class Notifier:
         """everywhere=True (security alerts): every channel that is set up, even
         if its "send to ..." switch is off."""
         notes = []
+        if (self.s.get("ntfy_enabled") or everywhere) and self.sec.has("NTFY_TOPIC"):
+            try:
+                ntfy_send(item["title"], item["message"], item["level"], dashboard_url(item.get("server")))
+                item["delivery"].append("phone")
+            except Exception as e:
+                sys.stderr.write("ntfy: %s\n" % short_err(e))
         if (self.s.get("discord_enabled") or everywhere) and self.sec.has("DISCORD_WEBHOOK"):
             try:
                 self.send_discord(item["title"], item["message"], item["level"], footer=item.get("server_name"))
@@ -2608,6 +2617,161 @@ def sys_upload_kbps():
     return round((sent - prev[1]) * 8 / 1000.0 / (t - prev[0]), 1)
 
 
+# ----------------------------------------------------------------------------- mod updates (BeamNG repository)
+# Mods from the BeamNG repository carry mod_info/<id>/info.json with their
+# repository id and version. The public mod page shows the newest version.
+REPO_PAGE = "https://www.beamng.com/resources/%d/"
+REPO_DL = "https://www.beamng.com/resources/%d/download?version=%d"
+
+
+def mod_repo_info(path):
+    try:
+        with zipfile.ZipFile(path) as z:
+            for zi in z.infolist()[:20000]:
+                m = re.fullmatch(r"/?mod_info/([0-9A-Za-z]{1,24})/info\.json", zi.filename)
+                if not m or zi.file_size > 2 * 1024 * 1024:
+                    continue
+                d = json.loads(z.read(zi).decode("utf-8", "replace"))
+                rid = int(d.get("resource_id") or 0)
+                vid = int(d.get("resource_version_id") or d.get("current_version_id") or 0)
+                if rid > 0 and vid > 0:
+                    return {"tagid": m.group(1), "resource_id": rid, "version_id": vid,
+                            "version": clean_msg(d.get("version_string"))[:40],
+                            "title": clean_msg(re.sub(r"\[/?\w+[^\]]*\]", "", str(d.get("title") or "")))[:120]}
+    except (OSError, ValueError, zipfile.BadZipFile, RuntimeError):
+        pass
+    return None
+
+
+def repo_latest(rid):
+    req = urllib.request.Request(REPO_PAGE % rid, headers={"User-Agent": "BeamMP-EasyServer/%s (mod update check)" % EASY_VERSION})
+    with urllib.request.urlopen(req, timeout=25) as r:
+        html = r.read(3 * 1024 * 1024).decode("utf-8", "replace")
+        url = r.geturl()
+    vids = [int(v) for v in re.findall(r"/download\?version=(\d+)", html)]
+    if not vids:
+        return None
+    ver = re.search(r"<h1[^>]*>.*?<span class=\"muted\">\s*([^<]{1,40}?)\s*</span>", html, re.S)
+    return {"version_id": max(vids), "version": clean_msg(ver.group(1)) if ver else "", "url": url.split("?")[0]}
+
+
+def mod_updates_for(inst, force=False):
+    """{mod name: {...}} for this server's repository mods; cached per file and per mod page."""
+    use_server(inst.id)
+    cache = APP.state.setdefault("mod_repo", {})
+    out, t = {}, now()
+    for m in list_mods():
+        p = os.path.join(inst.CLIENT_DIR if m["enabled"] else inst.DISABLED_DIR, m["name"])
+        try:
+            st = os.stat(p)
+        except OSError:
+            continue
+        key = "%s|%d|%d" % (m["name"], st.st_size, int(st.st_mtime))
+        info = cache.get("f:" + key)
+        if info is None:
+            info = mod_repo_info(p) or {}
+            cache["f:" + key] = info
+        if not info:
+            continue
+        rk = "r:%d" % info["resource_id"]
+        lat = cache.get(rk)
+        if force or not lat or t - lat.get("t", 0) > 12 * 3600:
+            try:
+                lat = dict(repo_latest(info["resource_id"]) or {}, t=t)
+            except Exception as e:
+                lat = dict(lat or {}, t=t, err=short_err(e))
+            cache[rk] = lat
+            time.sleep(1)                      # be polite to beamng.com
+        newer_v = lat.get("version_id", 0) > info["version_id"]
+        out[m["name"]] = {"title": info["title"], "have": info["version"], "have_id": info["version_id"],
+                          "latest": lat.get("version") or "", "latest_id": lat.get("version_id"),
+                          "update": bool(newer_v), "page": lat.get("url") or REPO_PAGE % info["resource_id"],
+                          "resource_id": info["resource_id"], "enabled": m["enabled"], "error": lat.get("err")}
+    for k in [k for k in cache if k.startswith("f:") and k[2:].split("|")[0] not in {m["name"] for m in list_mods()}]:
+        cache.pop(k, None)
+    return out
+
+
+# ----------------------------------------------------------------------------- phone push (ntfy)
+NTFY_TOPIC_RE = re.compile(r"[A-Za-z0-9_-]{16,64}")
+
+
+def ntfy_send(title, message, level="info", click=None):
+    s, topic = APP.settings, APP.secrets.get("NTFY_TOPIC")
+    if not topic:
+        raise ValueError("no ntfy topic")
+    server = (s.get("ntfy_server") or "https://ntfy.sh").rstrip("/")
+    prio = {"error": "5", "warning": "4", "success": "3", "info": "3"}.get(level, "3")
+    tags = {"error": "rotating_light", "warning": "warning", "success": "white_check_mark", "info": "racing_car"}.get(level, "racing_car")
+    hdr = {"Title": title.encode("utf-8")[:250].decode("latin-1"), "Priority": prio, "Tags": tags,
+           "User-Agent": "BeamMP-EasyServer/" + EASY_VERSION}
+    if click:
+        hdr["Click"] = click
+    req = urllib.request.Request("%s/%s" % (server, topic), data=message[:3900].encode("utf-8"), method="POST", headers=hdr)
+    with urllib.request.urlopen(req, timeout=20) as r:
+        r.read()
+
+
+# ----------------------------------------------------------------------------- phone app (installable web app)
+APP_FILES = ("/manifest.webmanifest", "/sw.js", "/icon-192.png", "/icon-512.png", "/apple-touch-icon.png")
+# Network first, so the dashboard is always live; the cached page only shows
+# when the server can't be reached. API answers are never cached.
+SW_JS = """const C = "es-shell-v1";
+self.addEventListener("install", e => { self.skipWaiting(); e.waitUntil(caches.open(C).then(c => c.addAll(["/", "/icon-192.png"])).catch(() => {})); });
+self.addEventListener("activate", e => e.waitUntil(self.clients.claim()));
+self.addEventListener("fetch", e => {
+  const u = new URL(e.request.url);
+  if (e.request.method !== "GET" || u.origin !== location.origin || u.pathname.startsWith("/api/")) return;
+  e.respondWith(fetch(e.request).then(r => { if (u.pathname === "/" && r.ok) { const k = r.clone(); caches.open(C).then(c => c.put("/", k)); } return r; })
+    .catch(() => caches.match(u.pathname === "/" ? "/" : e.request)));
+});
+"""
+_ICONS = {}
+
+
+def app_icon_png(size):
+    """The app icon (a steering wheel on blue), drawn in pure Python and cached."""
+    if size in _ICONS:
+        return _ICONS[size]
+    import zlib
+    bg, fg = (42, 120, 214), (255, 255, 255)
+    c, R, w = size / 2.0, size * 0.27, size * 0.055        # inside the 80% "safe zone" for round icons
+    hub, sp = size * 0.075, size * 0.045
+    rows = []
+    for y in range(size):
+        row = bytearray([0])
+        py = y + 0.5 - c
+        for x in range(size):
+            px = x + 0.5 - c
+            d = (px * px + py * py) ** 0.5
+            cov = max(0.0, min(1.0, w / 2 - abs(d - R) + 0.5))                  # the rim
+            cov = max(cov, max(0.0, min(1.0, hub - d + 0.5)))                     # the hub
+            if d < R:                                                            # three spokes: left, right, down
+                if px * px > 0 and abs(py) < sp:
+                    cov = max(cov, max(0.0, min(1.0, sp - abs(py) + 0.5)))
+                if py > 0 and abs(px) < sp:
+                    cov = max(cov, max(0.0, min(1.0, sp - abs(px) + 0.5)))
+            row += bytes(int(bg[i] + (fg[i] - bg[i]) * cov) for i in range(3))
+        rows.append(bytes(row))
+    raw = zlib.compress(b"".join(rows), 9)
+    chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+    png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0)) + \
+        chunk(b"IDAT", raw) + chunk(b"IEND", b"")
+    _ICONS[size] = png
+    return png
+
+
+def cert_sha256():
+    """SHA-256 fingerprint of the dashboard's HTTPS certificate (hex, no colons) - the Android app pins it."""
+    try:
+        with open(os.path.join(TLS_DIR, "cert.pem")) as f:
+            pem = f.read()
+        der = base64.b64decode("".join(l for l in pem.splitlines() if l and not l.startswith("-----")))
+        return hashlib.sha256(der).hexdigest()
+    except (OSError, ValueError):
+        return ""
+
+
 # ----------------------------------------------------------------------------- Discord webhook helpers
 def webhook_parts():
     url = APP.secrets.get("DISCORD_WEBHOOK") if APP else ""
@@ -3339,7 +3503,7 @@ class App:
                 sys.stderr.write("flood protection: %s\n" % short_err(e))
             for name, fn in (("address check", self.addr_tick), ("backup", self.backup_tick),
                              ("duckdns", self.duck_tick), ("resources", self.resource_tick),
-                             ("discord status", self.status_msg_tick)):
+                             ("discord status", self.status_msg_tick), ("mod updates", self.mod_update_tick)):
                 try:
                     fn()
                 except Exception as e:
@@ -3664,6 +3828,40 @@ class App:
             self.state["addr_pub"], changed = pip, True
         if changed:
             self.save_state()
+
+    def mod_update_tick(self):
+        if not self.settings.get("mod_update_check"):
+            return
+        t = now()
+        if t < self.state.get("modupd_next", 0):
+            return
+        self.state["modupd_next"] = t + 24 * 3600
+        self.run_mod_check(False)
+
+    def run_mod_check(self, force):
+        with LOCK:
+            insts = list(INSTANCES.values())
+        found = {}
+        for inst in insts:
+            try:
+                ups = mod_updates_for(inst, force)
+            except Exception as e:
+                sys.stderr.write("mod updates %s: %s\n" % (inst.id, short_err(e)))
+                continue
+            found[inst.id] = ups
+            seen = self.state.setdefault("modupd_told", {})
+            new = [(n, u) for n, u in ups.items() if u["update"] and seen.get("%s/%s" % (inst.id, n)) != u["latest_id"]]
+            for n, u in new:
+                seen["%s/%s" % (inst.id, n)] = u["latest_id"]
+            if new:
+                use_server(inst.id)
+                self.notifier.add("mod_update", "Mod update%s available" % ("s" if len(new) > 1 else ""),
+                                  "\n".join("%s: %s -> %s" % (u["title"] or n, u["have"] or "?", u["latest"] or "new version")
+                                            for n, u in new[:15]) + "\nUpdate them on the Mods page with one click.", "info")
+        self.mod_updates = found
+        self.state["modupd_t"] = now()
+        self.save_state()
+        return found
 
     def bridge_out(self, chat):
         """Chat bridge, game -> Discord: one webhook message per batch, never pinging anyone."""
@@ -4296,6 +4494,8 @@ class Handler(BaseHTTPRequestHandler):
             path, q = self.route()
             if method == "GET" and path == "/":
                 return self.page()
+            if method == "GET" and path in APP_FILES:
+                return self.app_file(path)
             public = {("GET", "/api/session"), ("POST", "/api/login"), ("POST", "/api/setup")}
             if (method, path) in public:
                 return getattr(self, "api_" + path[5:].replace("/", "_"))(q)
@@ -4334,11 +4534,27 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             _TL.inst = None
 
+    def app_file(self, path):
+        """Files that make the dashboard installable as a phone app (no login needed, nothing private)."""
+        if path == "/manifest.webmanifest":
+            body = json.dumps({
+                "name": "BeamMP Dashboard", "short_name": "BeamMP", "id": "/", "start_url": "/", "scope": "/",
+                "display": "standalone", "background_color": "#151514", "theme_color": "#2a78d6",
+                "description": "Manage your BeamMP servers", "orientation": "any",
+                "icons": [{"src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+                          {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}]}).encode()
+            return self.send(200, body, "application/manifest+json", {"Cache-Control": "max-age=3600"})
+        if path == "/sw.js":
+            return self.send(200, SW_JS.encode(), "text/javascript", {"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"})
+        size = {"/icon-192.png": 192, "/icon-512.png": 512, "/apple-touch-icon.png": 180}[path]
+        return self.send(200, app_icon_png(size), "image/png", {"Cache-Control": "max-age=86400"})
+
     def page(self):
         nonce = secrets.token_urlsafe(16)
         html_ = APP.page.replace("__NONCE__", nonce).replace("__VERSION__", EASY_VERSION)
         csp = ("default-src 'none'; script-src 'nonce-%s'; style-src 'unsafe-inline'; img-src 'self' data:; "
-               "connect-src 'self'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'") % nonce
+               "connect-src 'self'; manifest-src 'self'; worker-src 'self'; form-action 'none'; "
+               "frame-ancestors 'none'; base-uri 'none'") % nonce
         self.send(200, html_.encode(), "text/html", {"Content-Security-Policy": csp})
 
     # ---------- public endpoints
@@ -5351,6 +5567,122 @@ class Handler(BaseHTTPRequestHandler):
             return self.fail(400, "Enter your upload speed in Mbit/s, like 20")
         APP.settings.update({"upload_mbit": round(v, 1)})
         self.send(200, {"ok": True, "note": "Saved."})
+
+    # ---------- mod updates
+    def get_mods_updates(self, q):
+        ups = (getattr(APP, "mod_updates", {}) or {}).get(I().id)
+        self.send(200, {"checked": APP.state.get("modupd_t"), "on": bool(APP.settings.get("mod_update_check")),
+                        "mods": ups if ups is not None else {}})
+
+    def post_mods_updates(self, q):
+        b = self.body_json()
+        if "on" in b:
+            APP.settings.update({"mod_update_check": bool(b["on"])})
+            return self.send(200, {"ok": True})
+        if now() - getattr(APP, "modupd_manual", 0) < 30:
+            return self.fail(429, "Just checked - try again in a moment")
+        APP.modupd_manual = now()
+        found = APP.run_mod_check(True).get(I().id, {})
+        n = sum(1 for u in found.values() if u["update"])
+        self.send(200, {"ok": True, "mods": found,
+                        "note": ("%d update%s available." % (n, "" if n == 1 else "s")) if n else
+                                ("All %d repository mods are up to date." % len(found) if found else
+                                 "None of your mods come from the BeamNG repository, so they can't be checked.")})
+
+    def post_mods_update(self, q):
+        """Download the newest version of a repository mod, virus-check it and replace the old file."""
+        name = safe_zip_name(self.body_json().get("name"))
+        ups = (getattr(APP, "mod_updates", {}) or {}).get(I().id) or {}
+        u = ups.get(name or "")
+        if not u or not u.get("update"):
+            return self.fail(400, "No update known for this mod - press Check for updates first")
+        url = REPO_DL % (u["resource_id"], u["latest_id"])
+        tdir = tempfile.mkdtemp(dir=UPLOAD_TMP, prefix=".up-")
+        tmp = os.path.join(tdir, name)
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "BeamMP-EasyServer/%s (mod update)" % EASY_VERSION})
+            try:
+                with urllib.request.urlopen(req, timeout=60) as r, open(tmp, "wb") as f:
+                    total = 0
+                    while True:
+                        chunk = r.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        total += len(chunk)
+                        if total > 4 * 1024 ** 3:
+                            raise ValueError("too big")
+                        f.write(chunk)
+            except Exception as e:
+                return self.fail(502, "Couldn't download it (%s). Get it yourself from %s and upload it here." % (short_err(e), u["page"]))
+            if not zipfile.is_zipfile(tmp):
+                return self.fail(502, "beamng.com didn't send a zip file (it may want you to log in). Download it from %s and upload it here." % u["page"])
+            got = mod_repo_info(tmp)
+            if not got or got["resource_id"] != u["resource_id"]:
+                return self.fail(502, "The downloaded file isn't the same mod - not installed.")
+            result = modscan.scan(tmp)
+            if result["verdict"] == "blocked":
+                APP.alerts.raise_("mod:%s:%s" % (I().id, name), "A mod update failed the virus check: %s" % name,
+                                  "\n".join(result["reasons"]) + "\nThe old version is still installed.")
+                return self.send(422, {"ok": False, "blocked": True, "reasons": result["reasons"]})
+            dest = os.path.join(I().CLIENT_DIR if u["enabled"] else I().DISABLED_DIR, name)
+            if not IS_WIN:
+                os.chmod(tmp, 0o664)
+            os.replace(tmp, dest) if os.path.dirname(tmp) == os.path.dirname(dest) else shutil.move(tmp, dest)
+            modscan.remember(dest, result.get("sha256"))
+            u.update({"update": False, "have": got["version"], "have_id": got["version_id"]})
+            refresh_mod_desc()
+            APP.config_changed()
+            self.send(200, {"ok": True, "note": "Updated %s to %s. %s" % (name, got["version"] or "the newest version", APP.applied_note())})
+        finally:
+            shutil.rmtree(tdir, ignore_errors=True)
+
+    # ---------- phone app
+    def get_phoneapp(self, q):
+        """The link the Android app opens (via a QR code) to connect to this dashboard."""
+        st = APP.settings
+        https_ = bool(st.get("https"))
+        hosts = []
+        if duck_host() and st.get("remote_enabled"):
+            hosts.append(duck_host())
+        hosts.append(lan_ip())
+        base = "%s://%s:%s/" % ("https" if https_ else "http", hosts[-1], st.get("port"))
+        fp = cert_sha256() if https_ else ""
+        link = "easyserver://connect?" + urllib.parse.urlencode({"url": base, "fp": fp})
+        self.send(200, {"https": https_, "url": base, "fingerprint": fp, "link": link, "qr": qr_svg_path(link),
+                        "apk": "https://github.com/%s/releases/latest" % REPO})
+
+    # ---------- phone push (ntfy)
+    def get_ntfy(self, q):
+        s, topic = APP.settings, APP.secrets.get("NTFY_TOPIC")
+        server = (s.get("ntfy_server") or "https://ntfy.sh").rstrip("/")
+        host = re.sub(r"^https?://", "", server)
+        self.send(200, {"enabled": bool(s.get("ntfy_enabled")), "server": server, "has_topic": bool(topic),
+                        "subscribe": ("%s/%s" % (server, topic)) if topic else None,
+                        "app_link": ("ntfy://%s/%s" % (host, topic)) if topic else None,
+                        "qr": qr_svg_path("%s/%s" % (server, topic)) if topic else None})
+
+    def post_ntfy(self, q):
+        app = APP
+        b = self.body_json()
+        upd = {}
+        if b.get("new_topic") or (b.get("enabled") and not app.secrets.has("NTFY_TOPIC")):
+            app.secrets.set("NTFY_TOPIC", "beammp-" + secrets.token_urlsafe(18).replace("-", "x").replace("_", "y"))
+        if "server" in b:
+            srv = str(b["server"] or "").strip().rstrip("/") or "https://ntfy.sh"
+            if not re.fullmatch(r"https://[A-Za-z0-9.\-]{1,253}(:\d{1,5})?", srv):
+                return self.fail(400, "The ntfy server must be an https:// address, like https://ntfy.sh")
+            upd["ntfy_server"] = srv
+        if "enabled" in b:
+            upd["ntfy_enabled"] = bool(b["enabled"])
+        if upd:
+            app.settings.update(upd)
+        if b.get("test"):
+            try:
+                ntfy_send("Test notification", "Your BeamMP dashboard can send notifications to this phone.", "success",
+                          dashboard_url())
+            except Exception as e:
+                return self.fail(400, "Couldn't send it: %s" % short_err(e))
+        self.send(200, {"ok": True})
 
     # ---------- scheduled events
     def get_events(self, q):
