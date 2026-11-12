@@ -34,7 +34,7 @@ import time
 import urllib.error
 import urllib.request
 
-VERSION = "1.10.0"
+VERSION = "1.12.0"
 DISCORD_API = os.environ.get("ES_DISCORD_API") or "https://discord.com/api/v10"
 DISCORD_GATEWAY = os.environ.get("ES_DISCORD_GATEWAY") or "wss://gateway.discord.gg/?v=10&encoding=json"
 TOKEN_RE = re.compile(r"[A-Za-z0-9_\-]{20,100}\.[A-Za-z0-9_\-]{4,20}\.[A-Za-z0-9_\-]{20,100}")
@@ -402,7 +402,8 @@ class Helper:
         say = lambda text, private=False: discord_api("POST", cb, body={"type": 4, "data": dict(
             {"content": text, "allowed_mentions": {"parse": []}}, **({"flags": 64} if private else {}))})
         try:
-            if self.pair["guild"] and str(d.get("guild_id") or "") != self.pair["guild"]:
+            # No Discord server in the pairing code = don't trust any (pair again after picking one in the dashboard)
+            if not self.pair["guild"] or str(d.get("guild_id") or "") != self.pair["guild"]:
                 return say("This bot isn't set up for this Discord server.", True)
             label = self.pair["name"].replace("*", "").replace("_", "").replace("`", "")
             if name == "status":
