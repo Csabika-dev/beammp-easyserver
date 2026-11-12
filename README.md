@@ -17,15 +17,15 @@ Open `http://<server-ip>:30815` from any PC or phone at home, or use the **BeamM
 | **Overview** | Server status, who's online, uptime, start / stop / restart, **switch the map in one click** |
 | **Servers** | Run **several BeamMP servers on one computer**, each with its own port, mods, config and allow-list, and set **CPU, RAM and mod download limits** per server |
 | **Config** | Edit every server setting (max players, cars per player, map, port, private…) in a simple form, or as text, **without touching files**. Every change is checked first (wrong types, bad ports, unknown maps, duplicate lines…) and you get plain-English errors with line numbers. Also **Who can join** (an allow-list that makes the server invite-only), **Map vote** (players type `/vote` in chat), **Join alerts** (Discord ping when your friends join), **Cars & chat** (scheduled car cleanup, abandoned-car removal, chat commands), **Restarts & updates** and **Moderation & anti-bot** - see below |
-| **Mods** | Drag & drop mods, turn them on/off, pick map mods, see the virus check result for each. Shows how much players have to **download before joining**, and can put it in the server description ("\| Mods: 1.2 GB") |
+| **Mods** | Drag & drop mods, turn them on/off, pick map mods, see the virus check result for each, and **update** repository mods in one click. Shows how much players have to **download before joining**, and can put it in the server description ("\| Mods: 1.2 GB") |
 | **Players** | Player analytics: players per day, busiest hours, a week heatmap, top players, sessions, peak and usage, plus **server records** (top speed, distance, longest drive without a reset). **Kick, mute and ban** players, send chat messages, and manage the ban list |
 | **Network** | Port checker: is the server listening, reachable at home, reachable from the internet, listed in the BeamMP server list? Tells you what to fix |
 | **Updates** | Checks for new BeamMP server and EasyServer versions, installs server updates in one click |
 | **Logs** | Live server log, with hints that explain common errors in plain English |
-| **Notifications** | Crashes, unexpected stops, updates, blocked mods, failed logins, player joins. Shown in the dashboard and optionally sent to **Discord** and/or **email** |
-| **Settings** | Notifications, password, **two-step login** (scan a QR code), **access from the internet (HTTPS)**, **hide your IP / DDoS protection**, **backup / import / export** |
+| **Notifications** | Crashes, unexpected stops, updates, blocked mods, failed logins, player joins, **mod updates**, failed backups, high computer load. Shown in the dashboard and optionally sent to **Discord**, **email** and/or your **phone** (ntfy) |
+| **Settings** | Notifications, password, **two-step login** (scan a QR code), **access from the internet (HTTPS)**, **hide your IP / DDoS protection**, **backup / import / export**, nightly backups, **DuckDNS**, computer-load graphs, the **Discord bot** and the **phone app** |
 
-Also: **dark / light mode** (follows your system, or switch with the moon icon), and it works on phones. Before anything changes your network (server port, internet access, HTTPS) the dashboard shows exactly what will change and asks first; the firewall on the server is updated for you, your router never is.
+Also: **dark / light mode** (follows your system, or switch with the moon icon), and it works on phones - there's an **Android app**, and on iPhone you can add it to the home screen. Before anything changes your network (server port, internet access, HTTPS) the dashboard shows exactly what will change and asks first; the firewall on the server is updated for you, your router never is.
 
 ### Several servers on one computer
 
@@ -268,7 +268,7 @@ To turn on VirusTotal, make a free account at [virustotal.com](https://www.virus
 
 ## 🔐 Your keys are encrypted
 
-Your **BeamMP AuthKey**, your **VirusTotal key**, your **Discord bot token**, your **DuckDNS token** and the **mod page password** are never stored in plain text, and never in `ServerConfig.toml`.
+Your **BeamMP AuthKey**, your **VirusTotal key**, your **Discord bot token**, your **DuckDNS token**, your **ntfy topic** and the **mod page password** are never stored in plain text, and never in `ServerConfig.toml`.
 
 - **Windows:** encrypted with Windows' own DPAPI, tied to your Windows account. The file is useless on any other PC or account.
 - **Linux:** AES-256 encrypted (`/var/lib/beammp-easyserver/secrets.enc`). The unlock key is a separate root-only file in `/etc/beammp-easyserver`.
