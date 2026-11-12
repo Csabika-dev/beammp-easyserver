@@ -78,6 +78,12 @@ h2{font-size:15px;margin:0 0 12px;letter-spacing:-.005em}
 .btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
 .btn.primary:hover{filter:brightness(1.08)}
 .btn.danger{color:var(--crit-ink)}.btn.danger:hover{border-color:var(--critical)}
+.ipb{filter:blur(6px);cursor:pointer;user-select:none;transition:filter .15s;border-radius:4px}
+.ipb.shown{filter:none;user-select:text}
+.ipb:not(.shown):hover{filter:blur(4px)}
+.rv-back{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:200;padding:16px}
+.rv{background:var(--surface);border:1px solid var(--line-strong);border-radius:14px;max-width:640px;width:100%;max-height:90vh;overflow:auto;padding:22px}
+.rv table td{padding:6px 4px;border-bottom:1px solid var(--line)}.rv table td:first-child{color:var(--muted);width:46%}
 .btn.ghost{border-color:transparent;background:transparent}.btn.ghost:hover{background:var(--surface-2)}
 .btn.sm{padding:4px 10px;font-size:13px}
 .btn:disabled{opacity:.55;cursor:default}
@@ -177,6 +183,10 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 /* ------------------------------------------------------------------ helpers */
 const $ = (s, el = document) => el.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+/* IP addresses are blurred until clicked, like a password */
+const ipb = html => `<span class="ipb" title="Hidden - click to show">${html}</span>`;
+const blurIPs = html => String(html).replace(/(?<!\d)(?<!\d\.)(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?(?!\d|\.\d)/g, ipb);
+document.addEventListener("click", e => { const t = e.target.closest && e.target.closest(".ipb"); if (t) { t.classList.toggle("shown"); t.title = t.classList.contains("shown") ? "Click to hide" : "Hidden - click to show"; } });
 const h = (strings, ...vals) => strings.reduce((a, s, i) => a + s + (i < vals.length ? (vals[i] && vals[i].__raw !== undefined ? vals[i].__raw : esc(vals[i])) : ""), "");
 const raw = s => ({__raw: s});
 const store = { get(k, d) { try { return localStorage.getItem(k) ?? d; } catch (e) { return d; } }, set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} } };
@@ -361,7 +371,48 @@ function statePill(state) {
   const [cls, label] = map[state] || ["", state || "Unknown"];
   return `<span class="pill ${cls}"><span class="dot"></span>${esc(label)}</span>`;
 }
+/* Before a server's first start: look over the settings once */
+async function reviewGate(id, starting = true) {
+  const hdr = id ? { headers: { "X-ES-Server": id } } : {};
+  const r = await api("/api/review", hdr);
+  if (r.reviewed) return true;
+  const yes = (b, good = true) => `<span class="pill ${b === good ? "good" : "warn"}"><span class="dot"></span>${b ? "On" : "Off"}</span>`;
+  const g = r.game, sc = r.security, p = r.protection, c = r.cars, rs = r.restarts;
+  const every = (on, n, at) => on ? (n === 24 ? "Daily at " + esc(at) : "Every " + n + " h from " + esc(at)) : "Off";
+  return new Promise(resolve => {
+    const back = document.createElement("div");
+    back.className = "rv-back";
+    back.innerHTML = `<div class="rv"><h2 style="margin-top:0">Check the settings before starting "${esc(r.server)}"</h2>
+      <p class="small muted">You only need to do this once per server. Anything you want to change? Open the settings first - nothing is started yet.</p>
+      <table style="width:100%;border-collapse:collapse"><tbody>
+        <tr><td>Server name</td><td><b>${esc(g.name || "-")}</b></td></tr>
+        <tr><td>Map</td><td>${esc(g.map || "-")}</td></tr>
+        <tr><td>Players / cars per player</td><td>${esc(g.max_players ?? "-")} / ${esc(g.max_cars ?? "-")}</td></tr>
+        <tr><td>Server list</td><td>${g.private ? "Private (hidden from the list)" : "Public (anyone can find it)"}</td></tr>
+        <tr><td>Who can join</td><td>${g.allowlist ? "Only players on your allow-list" : "Everyone"}</td></tr>
+        <tr><td>AuthKey</td><td>${g.authkey ? yes(true) : `<span class="pill bad"><span class="dot"></span>Missing - the server can't start</span>`}</td></tr>
+        <tr><td>Two-step login for the dashboard</td><td>${yes(sc.totp)}</td></tr>
+        <tr><td>Dashboard reachable from the internet</td><td>${yes(sc.remote, false)}${sc.remote && !sc.https ? " (without HTTPS!)" : ""}</td></tr>
+        <tr><td>Security alerts / Discord</td><td>${yes(sc.alerts)} ${yes(sc.discord)}</td></tr>
+        <tr><td>Anti-bot / chat filter</td><td>${yes(p.antibot)} ${yes(p.filter)}</td></tr>
+        <tr><td>Admins in game</td><td>${p.admins.length ? esc(p.admins.join(", ")) : "None"}</td></tr>
+        <tr><td>Hide my IP (relay)</td><td>${yes(p.relay)}</td></tr>
+        <tr><td>Remove all cars</td><td>${every(c.clear, c.every, c.at)}</td></tr>
+        <tr><td>Scheduled restart</td><td>${every(rs.on, rs.every, rs.at)}</td></tr>
+      </tbody></table>
+      <div class="row" style="margin-top:18px;gap:8px;justify-content:flex-end">
+        <button class="btn" id="rv_settings">Open Settings</button><button class="btn" id="rv_config">Open Config</button>
+        <button class="btn primary" id="rv_ok" ${g.authkey || !starting ? "" : "disabled"}>${starting ? "Looks good - start" : "Looks good"}</button></div></div>`;
+    document.body.appendChild(back);
+    const done = (v, view) => { back.remove(); if (view) { if (id && id !== SERVER) switchServer(id); show(view); } resolve(v); };
+    back.querySelector("#rv_settings").onclick = () => done(false, "settings");
+    back.querySelector("#rv_config").onclick = () => done(false, "config");
+    back.querySelector("#rv_ok").onclick = async () => { try { await api("/api/review/ok", Object.assign({ json: {} }, hdr)); done(true); } catch (e) { toast(e.message); } };
+    back.addEventListener("click", e => { if (e.target === back) done(false); });
+  });
+}
 async function serverAction(action, btn) {
+  if (action === "start" && !(await reviewGate())) return;
   if (action !== "start" && !confirm(action === "stop" ? "Stop the server? Players will be disconnected." : "Restart the server? Players will be disconnected.")) return;
   if (btn) btn.disabled = true;
   try { await api("/api/server/action", { json: { action } }); toast(action === "stop" ? "Server stopped" : action === "start" ? "Server starting…" : "Server restarting…"); }
@@ -384,7 +435,8 @@ VIEWS.overview = async m => {
   if (d.update_available) banners.push(`<div class="banner info"><b>A BeamMP server update is available.</b><span class="spacer"></span><button class="btn sm" data-go="updates">See update</button></div>`);
   if (d.quarantined) banners.push(`<div class="banner warn"><b>${d.quarantined} mod(s) blocked by the virus check.</b><span class="spacer"></span><button class="btn sm" data-go="mods">Review</button></div>`);
   m.innerHTML = `
-    <div class="row"><div><h1>${esc(d.name || "BeamMP server")}</h1><p class="sub">${esc(d.lan_ip)}:${esc(d.port)} · ${esc(d.map || "?")} · ${d.private ? "Private" : "Public"}${d.relay ? " · players join via " + esc(d.relay) : ""}</p></div><span class="spacer"></span>${statePill(s.state)}</div>
+    <div class="row"><div><h1>${esc(d.name || "BeamMP server")}</h1><p class="sub">${ipb(esc(d.lan_ip) + ":" + esc(d.port))} · ${esc(d.map || "?")} · ${d.private ? "Private" : "Public"}${d.relay ? " · players join via " + ipb(esc(d.relay)) : ""}</p></div><span class="spacer"></span>${statePill(s.state)}</div>
+    ${d.reviewed ? "" : `<div class="banner info" style="margin-top:12px">Before this server goes live, look over its settings once. <a href="#" id="rv_open">Review settings</a></div>`}
     ${banners.join("")}
     <div class="grid g4">
       <div class="card stat"><div class="label">Players online</div><div class="value">${online.length}<span class="muted small"> / ${esc(d.max_players ?? "?")}</span></div><div class="note">${online.length ? esc(online.slice(0, 3).join(", ")) + (online.length > 3 ? "…" : "") : "Nobody right now"}</div></div>
@@ -400,6 +452,7 @@ VIEWS.overview = async m => {
       <div class="card"><h2>Who's online</h2>${online.length ? `<div class="row">${online.map(p => `<span class="pill"><span class="dot"></span>${esc(p)}</span>`).join("")}</div>` : `<p class="muted">Nobody is playing right now.</p>`}</div>
     </div>`;
   m.querySelectorAll("[data-act]").forEach(b => b.onclick = () => serverAction(b.dataset.act, b));
+  if ($("#rv_open")) $("#rv_open").onclick = async e => { e.preventDefault(); if (await reviewGate(undefined, false)) { toast("Thanks - this server is ready to start"); show("overview"); } };
   m.querySelectorAll("[data-go]").forEach(b => b.onclick = () => show(b.dataset.go));
   $("#qmapgo").onclick = async () => {
     const mp = $("#qmap").value;
@@ -467,6 +520,7 @@ VIEWS.servers = async m => {
   m.querySelectorAll("[data-sa]").forEach(b => b.onclick = async () => {
     const x = d.servers.find(y => y.id === b.dataset.id);
     if (b.dataset.sa !== "start" && !confirm((b.dataset.sa === "stop" ? "Stop " : "Restart ") + x.name + "? Players on it are disconnected.")) return;
+    if (b.dataset.sa === "start" && !(await reviewGate(x.id))) return;
     b.disabled = true;
     try { await api("/api/server/action", { json: { action: b.dataset.sa }, headers: { "X-ES-Server": x.id } }); toast(b.dataset.sa === "stop" ? x.name + " stopped" : x.name + " starting…"); } catch (e) { toast(e.message); }
     setTimeout(() => show("servers"), 1500);
@@ -500,7 +554,7 @@ VIEWS.servers = async m => {
 
 /* ---------------- config */
 VIEWS.config = async m => {
-  const [d, al, mv, ja, ex] = await Promise.all([api("/api/config"), api("/api/allowlist"), api("/api/mapvote"), api("/api/joinalerts"), api("/api/extras")]);
+  const [d, al, mv, ja, ex, md, rs] = await Promise.all([api("/api/config"), api("/api/allowlist"), api("/api/mapvote"), api("/api/joinalerts"), api("/api/extras"), api("/api/moderation"), api("/api/restarts")]);
   const mode = store.get("es-config-mode", "form");
   const issuesHtml = list => list.length ? list.map(i => `<div class="issue ${i.level}"><span class="ic">${i.level === "error" ? "!" : i.level === "warning" ? "⚠" : "i"}</span><span>${esc(i.message)}</span>${i.line ? `<span class="ln">line ${i.line}</span>` : ""}</div>`).join("") : `<div class="issue info"><span class="ic">✓</span><span>No problems found.</span></div>`;
   const opts = (cur) => {
@@ -549,6 +603,39 @@ VIEWS.config = async m => {
       <label class="toggle"><input type="checkbox" id="mv_on" ${mv.enabled ? "checked" : ""}><span><b>Let players vote for the map</b><small>Pick at least two maps below</small></span></label>
       <div class="row" style="flex-wrap:wrap;gap:6px;margin-top:8px">${mv.available.map(x => `<label class="badge" style="cursor:pointer"><input type="checkbox" data-vm="${esc(x)}" ${mv.maps.includes(x) || (!mv.maps.length) ? "checked" : ""}> ${esc(x)}</label>`).join("")}</div>
       <div class="row" style="margin-top:14px"><button class="btn primary" id="mv_save">Save map vote</button></div>
+    </div>
+    <div class="card" style="margin-top:16px" id="rscard"><div class="row"><h2 style="margin:0">Restarts &amp; updates</h2><span class="spacer"></span>
+        <span class="pill ${rs.on ? "good" : ""}"><span class="dot"></span>${rs.on ? "Restart " + (rs.every === 24 ? "daily " + esc(rs.at) : "every " + rs.every + " h") : "Off"}</span></div>
+      <p class="small muted">A fresh start now and then keeps a long-running server smooth. Players get a countdown in the chat first and can rejoin right after.</p>
+      <label class="toggle"><input type="checkbox" id="rs_on" ${rs.on ? "checked" : ""}><span><b>Restart the server on a schedule</b><small>Off by default</small></span></label>
+      <div class="grid g3" style="gap:12px;margin:4px 0 8px">
+        <label class="f" style="margin:0"><span>How often</span><select id="rs_every">${rs.every_choices.map(n => `<option value="${n}" ${n === rs.every ? "selected" : ""}>${n === 24 ? "Once a day" : "Every " + n + " hour" + (n === 1 ? "" : "s")}</option>`).join("")}</select></label>
+        <label class="f" style="margin:0"><span>${rs.every === 24 ? "At" : "Starting at"}</span><input type="time" id="rs_at" value="${esc(rs.at)}" style="color-scheme:light dark;color:inherit"><small>This computer's time</small></label>
+        <label class="f" style="margin:0"><span>Countdown in chat</span><select id="rs_warn">${rs.warn_choices.map(n => `<option value="${n}" ${n === rs.warn ? "selected" : ""}>${n ? n + " min before" : "No countdown"}</option>`).join("")}</select></label>
+      </div>
+      <label class="f"><span>If players are online</span><select id="rs_when"><option value="countdown" ${rs.when === "countdown" ? "selected" : ""}>Restart anyway, after the countdown</option><option value="empty" ${rs.when === "empty" ? "selected" : ""}>Wait until nobody is online (up to 2 hours, then skip)</option></select></label>
+      ${rs.next ? `<p class="small muted">Next restart: <b>${esc(new Date(rs.next * 1000).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" }))}</b></p>` : ""}
+      ${SERVER === "main" ? `<label class="toggle"><input type="checkbox" id="rs_auto" ${rs.auto_update ? "checked" : ""}><span><b>Install BeamMP updates automatically</b><small>At the scheduled restart, if a new BeamMP server version is out. All servers use the same BeamMP program, so the others restart too.${rs.update_available ? " <b>An update is available now.</b>" : ""}</small></span></label>` : ""}
+      <div class="row" style="margin-top:12px"><button class="btn primary" id="rs_save">Save restarts</button></div>
+    </div>
+    <div class="card" style="margin-top:16px" id="mdcard"><div class="row"><h2 style="margin:0">Moderation &amp; anti-bot</h2><span class="spacer"></span>
+        <span class="pill ${md.antibot ? "good" : ""}"><span class="dot"></span>${md.antibot ? "Anti-bot on" : "Anti-bot off"}</span></div>
+      <p class="small muted">Kick, mute and ban players on the Players page. Everything here works right away, no restart needed.</p>
+      <label class="f"><span>Admins (comma-separated BeamMP names)</span><input type="text" id="md_admins" value="${esc(md.admins.join(", "))}" placeholder="e.g. Bazsi, Dani"><small>Admins can use <span class="mono">/kick name</span>, <span class="mono">/ban name 1d reason</span>, <span class="mono">/mute name 10</span>, <span class="mono">/unmute</span> and <span class="mono">/unban</span> in the game chat</small></label>
+      <label class="toggle"><input type="checkbox" id="md_filter" ${md.filter ? "checked" : ""}><span><b>Chat filter</b><small>Hides messages with the words below, @everyone and Discord invite links, and refuses player names with links or those words. 3 blocked messages in 10 minutes = 5 minute mute. Off by default</small></span></label>
+      <label class="f"><span>Blocked words (comma-separated)</span><input type="text" id="md_words" value="${esc(md.words.join(", "))}" placeholder="words you don't want in chat"></label>
+      <label class="toggle"><input type="checkbox" id="md_spam" ${md.spam ? "checked" : ""}><span><b>Anti-spam</b><small>More than the number below of messages in 10 seconds = 2 minute mute. Admins are never muted. Off by default</small></span></label>
+      <label class="f" style="max-width:220px"><span>Messages per 10 seconds</span><input type="number" id="md_spamlimit" min="2" max="30" value="${esc(md.spam_limit)}"></label>
+      <h2 style="margin-top:16px">Anti-bot</h2>
+      <p class="small muted">Stops bots from filling your server. Cloudflare can't protect a game server, so this works inside the game instead. Players who passed the check: ${esc(md.verified)}.</p>
+      <label class="toggle"><input type="checkbox" id="md_antibot" ${md.antibot ? "checked" : ""}><span><b>Turn on anti-bot</b><small>Off by default. Turns on the checks below</small></span></label>
+      <label class="toggle"><input type="checkbox" id="md_verify" ${md.verify ? "checked" : ""}><span><b>Join check</b><small>New players must type a code shown in the chat (like <span class="mono">/verify 4821</span>) within 2 minutes, or they're kicked. Each player only does this once</small></span></label>
+      <label class="toggle"><input type="checkbox" id="md_guests" ${md.guests ? "" : "checked"}><span><b>Block guests</b><small>Players without a BeamMP account can't join - bots usually use guest accounts</small></span></label>
+      <div class="grid g2" style="gap:12px">
+        <label class="f" style="margin:0"><span>Max players from one internet connection</span><input type="number" id="md_perip" min="0" max="20" value="${esc(md.per_ip)}"><small>0 = no limit. Your home network is never limited</small></label>
+        <label class="f" style="margin:0"><span>Max new players per minute</span><input type="number" id="md_flood" min="0" max="100" value="${esc(md.join_flood)}"><small>More than this pauses new joins for 2 minutes and alerts you. 0 = no limit</small></label>
+      </div>
+      <div class="row" style="margin-top:14px"><button class="btn primary" id="md_save">Save moderation</button></div>
     </div>
     <div class="card" style="margin-top:16px" id="excard"><div class="row"><h2 style="margin:0">Cars &amp; chat</h2><span class="spacer"></span>
         <span class="pill ${ex.clear ? "good" : ""}"><span class="dot"></span>${ex.clear ? "Cleanup " + (ex.every === 24 ? "daily " + esc(ex.at) : "every " + ex.every + " h") : "Cleanup off"}</span></div>
@@ -622,6 +709,18 @@ VIEWS.config = async m => {
     const body = { enabled: $("#ja_on").checked, players: $("#ja_players").value.split("\n").map(x => x.trim()).filter(Boolean),
                    mention: $("#ja_mention").value, address: $("#ja_addr").checked, test };
     try { const r = await api("/api/joinalerts", { json: body }); toast(r.note); if (!test) show("config"); } catch (e) { toast(e.message); }
+  };
+  $("#rs_save").onclick = async () => {
+    const body = { on: $("#rs_on").checked, every: Number($("#rs_every").value), at: $("#rs_at").value, warn: Number($("#rs_warn").value), when: $("#rs_when").value };
+    if ($("#rs_auto")) body.auto_update = $("#rs_auto").checked;
+    try { const r = await api("/api/restarts", { json: body }); toast(r.note, 6000); show("config"); } catch (e) { toast(e.message); }
+  };
+  $("#md_save").onclick = async () => {
+    const list = id => $(id).value.split(",").map(x => x.trim()).filter(Boolean);
+    const body = { admins: list("#md_admins"), words: list("#md_words"), filter: $("#md_filter").checked, spam: $("#md_spam").checked,
+                   spam_limit: Number($("#md_spamlimit").value), antibot: $("#md_antibot").checked, verify: $("#md_verify").checked,
+                   guests: !$("#md_guests").checked, per_ip: Number($("#md_perip").value), join_flood: Number($("#md_flood").value) };
+    try { const r = await api("/api/moderation", { json: body }); toast(r.note, 5000); show("config"); } catch (e) { toast(e.message); }
   };
   $("#ex_every").onchange = () => { $("#ex_at_label").textContent = $("#ex_every").value === "24" ? "At" : "Starting at"; };
   $("#ex_save").onclick = async () => {
@@ -752,7 +851,7 @@ function barChart(el, values, labels, tipFn, opts = {}) {
 let RESIZE_T;
 window.addEventListener("resize", () => { clearTimeout(RESIZE_T); RESIZE_T = setTimeout(() => { if (TAB === "players") show("players"); }, 400); });
 VIEWS.players = async m => {
-  const d = await api("/api/players");
+  const [d, bn] = await Promise.all([api("/api/players"), api("/api/bans")]);
   const s = d.summary;
   const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   const hm = d.heatmap, hmMax = Math.max(0.0001, ...hm.flat().filter(v => v !== null));
@@ -760,6 +859,21 @@ VIEWS.players = async m => {
   m.innerHTML = `
     <div class="row"><div><h1>Players</h1><p class="sub">Activity over the last 30 days. Recorded by the EasyServerStats plugin on your server.</p></div><span class="spacer"></span><button class="btn sm" id="clear">Clear statistics</button></div>
     ${d.has_data ? "" : `<div class="banner info">No player data yet. Statistics start once the server runs with the stats plugin and someone plays.</div>`}
+    <div class="card" style="margin-bottom:16px" id="modcard"><div class="row"><h2 style="margin:0">Online now &amp; moderation</h2><span class="spacer"></span><span class="small muted">Takes a second to reach the game</span></div>
+      ${bn.online.length ? `<table style="margin-top:8px"><tbody>${bn.online.map(n => `<tr><td><b>${esc(n)}</b></td><td class="num"><div class="row" style="justify-content:flex-end;gap:6px">
+          <button class="btn sm" data-act="mute" data-n="${esc(n)}">Mute 10 min</button><button class="btn sm" data-act="unmute" data-n="${esc(n)}">Unmute</button>
+          <button class="btn sm" data-act="kick" data-n="${esc(n)}">Kick</button><button class="btn sm danger" data-banopen="${esc(n)}">Ban…</button></div></td></tr>`).join("")}</tbody></table>`
+        : `<p class="small muted">Nobody is online right now${d.online.fresh ? "" : " (or the server isn't reporting)"}.</p>`}
+      <div class="row" style="gap:8px;margin-top:12px;flex-wrap:wrap">
+        <input type="text" id="ban_name" placeholder="Player name" style="max-width:180px" maxlength="64">
+        <select id="ban_len" style="max-width:150px"><option value="60">1 hour</option><option value="1440">1 day</option><option value="10080">7 days</option><option value="43200">30 days</option><option value="0" selected>Forever</option></select>
+        <input type="text" id="ban_reason" placeholder="Reason (players see it)" style="max-width:240px" maxlength="200">
+        <button class="btn danger" id="ban_go">Ban</button></div>
+      <div class="row" style="gap:8px;margin-top:10px"><input type="text" id="say_text" placeholder="Send a message to everyone in the game chat" maxlength="300"><button class="btn" id="say_go">Send</button></div>
+      <h2 style="margin-top:18px">Banned players (${bn.bans.length})</h2>
+      ${bn.bans.length ? `<table><thead><tr><th>Player</th><th>Until</th><th>Reason</th><th>By</th><th></th></tr></thead><tbody>${bn.bans.map(b => `<tr><td><b>${esc(b.name)}</b></td><td class="muted">${b.until ? esc(fmtTime(b.until)) : "Forever"}</td><td>${esc(b.reason || "-")}</td><td class="muted">${esc(b.by || "-")}</td><td class="num"><button class="btn sm" data-unban="${esc(b.name)}">Unban</button></td></tr>`).join("")}</tbody></table>`
+        : `<p class="small muted">Nobody is banned. Admins you set under Config → Moderation can also ban from the game chat.</p>`}
+    </div>
     <div class="grid g4">
       <div class="card stat"><div class="label">Online now</div><div class="value">${d.online.players.length}</div><div class="note">${d.online.fresh ? esc(d.online.players.slice(0, 3).join(", ") || "Nobody") : "Server not reporting"}</div></div>
       <div class="card stat"><div class="label">Players (30 days)</div><div class="value">${esc(s.unique_30d)}</div><div class="note">${esc(s.unique_7d)} in the last 7 days</div></div>
@@ -794,6 +908,15 @@ VIEWS.players = async m => {
   barChart($("#hourly"), d.hourly, d.hourly.map((_, i) => String(i).padStart(2, "0")), i => `<b>${String(i).padStart(2, "0")}:00</b><br>${d.hourly[i]} players on average`, { title: "Average players by hour", labelsMax: 8, h: 170 });
   m.querySelectorAll("#heat .c").forEach((c, idx) => { const v = hm[Math.floor(idx / 24)][idx % 24]; c.style.background = shade(v); c.title = c.dataset.tip; });
   m.querySelectorAll("[data-heat]").forEach(i => i.style.background = `var(--heat-${i.dataset.heat})`);
+  const act = async (body) => { try { const r = await api("/api/players/act", { json: body }); toast(r.note); } catch (e) { toast(e.message); } };
+  m.querySelectorAll("[data-act]").forEach(b => b.onclick = () => act({ action: b.dataset.act, name: b.dataset.n, minutes: 10 }));
+  m.querySelectorAll("[data-banopen]").forEach(b => b.onclick = () => { $("#ban_name").value = b.dataset.banopen; $("#ban_reason").focus(); });
+  $("#ban_go").onclick = async () => {
+    const name = $("#ban_name").value.trim(); if (!name) return toast("Type the player's name");
+    try { const r = await api("/api/bans/add", { json: { name, minutes: Number($("#ban_len").value), reason: $("#ban_reason").value } }); toast(r.note); show("players"); } catch (e) { toast(e.message); }
+  };
+  m.querySelectorAll("[data-unban]").forEach(b => b.onclick = async () => { try { const r = await api("/api/bans/remove", { json: { name: b.dataset.unban } }); toast(r.note); show("players"); } catch (e) { toast(e.message); } });
+  $("#say_go").onclick = async () => { const t = $("#say_text").value.trim(); if (!t) return; await act({ action: "say", name: "x", text: t }); $("#say_text").value = ""; };
   $("#clear").onclick = async () => { if (!confirm("Delete all player statistics?")) return; await api("/api/players/clear", { method: "POST" }); show("players"); };
 };
 
@@ -806,13 +929,13 @@ VIEWS.network = async m => {
     m.innerHTML = `<div class="row"><div><h1>Network check</h1><p class="sub">Finds out whether players can reach your server on port ${esc(d.port)}.</p></div><span class="spacer"></span>
       <button class="btn" id="again">Check again</button><button class="btn primary" id="deep">Check server list</button></div>
       <div class="grid g3" style="margin-bottom:16px">
-        <div class="card stat"><div class="label">Home network address</div><div class="value mono">${esc(d.lan_ip)}:${esc(d.port)}</div><div class="note">For friends on your Wi-Fi</div></div>
-        ${d.relay ? `<div class="card stat"><div class="label">Internet address (relay)</div><div class="value mono">${esc(d.relay)}</div><div class="note">Your home address is hidden</div></div>`
-          : `<div class="card stat"><div class="label">Internet address</div><div class="value mono">${esc(d.public_ip || "unknown")}${d.public_ip ? ":" + esc(d.port) : ""}</div><div class="note">For friends anywhere else</div></div>`}
+        <div class="card stat"><div class="label">Home network address</div><div class="value mono">${ipb(esc(d.lan_ip) + ":" + esc(d.port))}</div><div class="note">For friends on your Wi-Fi</div></div>
+        ${d.relay ? `<div class="card stat"><div class="label">Internet address (relay)</div><div class="value mono">${ipb(esc(d.relay))}</div><div class="note">Your home address is hidden</div></div>`
+          : `<div class="card stat"><div class="label">Internet address</div><div class="value mono">${d.public_ip ? ipb(esc(d.public_ip) + ":" + esc(d.port)) : "unknown"}</div><div class="note">For friends anywhere else</div></div>`}
         <div class="card stat"><div class="label">Port</div><div class="value">${esc(d.port)}</div><div class="note">${d.relay ? "No router port forward needed" : "Forward TCP + UDP on your router"}</div></div>
       </div>
-      <div class="card tight">${d.checks.map(c => `<div class="check"><span class="mark ${mk[c.state][0]}">${mk[c.state][1]}</span><div><b>${esc(c.name)}</b><div class="small muted">${esc(c.detail)}</div></div></div>`).join("")}</div>
-      ${d.tips.length ? `<div class="card" style="margin-top:16px"><h2>What to do</h2><ul>${d.tips.map(t => `<li>${esc(t)}</li>`).join("")}</ul></div>` : ""}
+      <div class="card tight">${d.checks.map(c => `<div class="check"><span class="mark ${mk[c.state][0]}">${mk[c.state][1]}</span><div><b>${esc(c.name)}</b><div class="small muted">${blurIPs(esc(c.detail))}</div></div></div>`).join("")}</div>
+      ${d.tips.length ? `<div class="card" style="margin-top:16px"><h2>What to do</h2><ul>${d.tips.map(t => `<li>${blurIPs(esc(t))}</li>`).join("")}</ul></div>` : ""}
       <p class="small muted" style="margin-top:12px">"Check server list" downloads BeamMP's public list (a few MB) to see whether your server shows up - the most reliable test that internet players can find you.</p>`;
     $("#again").onclick = () => run(false);
     $("#deep").onclick = async () => { $("#deep").disabled = true; $("#deep").textContent = "Checking…"; await run(true); };
@@ -857,7 +980,7 @@ VIEWS.logs = async m => {
     const box = $("#log");
     if (!box) return;
     const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
-    box.innerHTML = d.lines.map(l => `<div class="${/\[ERROR\]/.test(l) ? "e" : /\[WARN\]/.test(l) ? "w" : ""}">${esc(l)}</div>`).join("") || `<span class="muted">The log is empty.</span>`;
+    box.innerHTML = d.lines.map(l => `<div class="${/\[ERROR\]/.test(l) ? "e" : /\[WARN\]/.test(l) ? "w" : ""}">${blurIPs(esc(l))}</div>`).join("") || `<span class="muted">The log is empty.</span>`;
     if (follow && atBottom) box.scrollTop = box.scrollHeight;
     $("#hints").innerHTML = d.hints.length ? `<div class="card" style="margin-bottom:16px"><h2>What the log is telling you</h2>${d.hints.map(x => `<div class="issue warning"><span class="ic">⚠</span><span><b>${esc(x.title)}.</b> ${esc(x.text)}<div class="mono muted" style="margin-top:4px">${esc(x.line)}</div></span></div>`).join("")}</div>` : "";
   };
@@ -875,7 +998,7 @@ VIEWS.notifications = async m => {
   const d = await api("/api/notifications");
   m.innerHTML = `<div class="row"><div><h1>Notifications</h1><p class="sub">Crashes, updates, blocked mods and security events. Choose where they're sent under Settings.</p></div><span class="spacer"></span>
     <button class="btn" id="read">Mark all read</button><button class="btn danger" id="clear">Clear</button></div>
-    <div class="card tight">${d.items.length ? d.items.map(n => `<div class="notif ${n.read ? "" : "unread"}"><span class="lv ${esc(n.level)}"></span><div><b>${esc(n.title)}</b><div class="small" style="white-space:pre-wrap">${esc(n.message)}</div><div class="small muted">${esc(fmtTime(n.t))}${n.delivery && n.delivery.length ? " · sent: " + esc(n.delivery.join(", ")) : ""}</div></div></div>`).join("") : `<div class="notif"><span class="muted">Nothing yet.</span></div>`}</div>`;
+    <div class="card tight">${d.items.length ? d.items.map(n => `<div class="notif ${n.read ? "" : "unread"}"><span class="lv ${esc(n.level)}"></span><div><b>${esc(n.title)}</b><div class="small" style="white-space:pre-wrap">${blurIPs(esc(n.message))}</div><div class="small muted">${esc(fmtTime(n.t))}${n.delivery && n.delivery.length ? " · sent: " + esc(n.delivery.join(", ")) : ""}</div></div></div>`).join("") : `<div class="notif"><span class="muted">Nothing yet.</span></div>`}</div>`;
   $("#read").onclick = async () => { await api("/api/notifications/read", { method: "POST" }); setUnread(0); show("notifications"); };
   $("#clear").onclick = async () => { if (!confirm("Delete all notifications?")) return; await api("/api/notifications/clear", { method: "POST" }); setUnread(0); show("notifications"); };
   if (d.items.some(n => !n.read)) { api("/api/notifications/read", { method: "POST" }).then(() => setUnread(0)).catch(() => {}); }
@@ -900,6 +1023,9 @@ VIEWS.settings = async m => {
       ${tg("n_mod_blocked", "Blocked mods", "A mod failed the virus check", N.mod_blocked)}
       ${tg("n_player_join", "Player joins", "Every time someone joins (can be a lot)", N.player_join)}
       ${tg("n_player_denied", "Refused players", "Someone not on the allow-list tried to join", N.player_denied)}
+      ${tg("n_moderation", "Moderation", "Bans, kicks and mutes made in game by your admins", N.moderation)}
+      ${tg("n_network", "Address changes", "This computer's home address or your public IP changed", N.network)}
+      ${tg("n_restart", "Scheduled restarts", "A scheduled restart or update ran", N.restart)}
       ${s.platform === "windows" ? tg("auto_restart", "Restart after a crash", "Start the server again automatically", s.auto_restart) : ""}
       ${tg("update_check", "Check for updates", "Every 6 hours", s.update_check)}
       <p class="small muted" style="margin-top:12px">Notifications always appear on the Notifications page. Also send them to:</p>
@@ -979,7 +1105,7 @@ VIEWS.settings = async m => {
   m.querySelectorAll("[data-test]").forEach(b => b.onclick = async () => { b.disabled = true; try { await saveNotif(true); await api("/api/notifications/test", { json: { channel: b.dataset.test } }); toast("Test sent"); } catch (e) { toast(e.message); } b.disabled = false; });
   async function saveNotif(quiet) {
     const body = { notify: {} };
-    ["crash", "stopped", "update", "mod_blocked", "player_join", "player_denied"].forEach(k => body.notify[k] = $("#n_" + k).checked);
+    ["crash", "stopped", "update", "mod_blocked", "player_join", "player_denied", "moderation", "network", "restart"].forEach(k => body.notify[k] = $("#n_" + k).checked);
     ["discord_enabled", "email_enabled", "update_check", "security_alerts", "security_reminders"].forEach(k => body[k] = $("#" + k).checked);
     if ($("#auto_restart")) body.auto_restart = $("#auto_restart").checked;
     ["smtp_host", "smtp_port", "smtp_user", "smtp_to", "smtp_security"].forEach(k => body[k] = $("#" + k).value);
@@ -1009,7 +1135,7 @@ VIEWS.settings = async m => {
       const body = relayBody(); delete body.relay_enabled;
       await api("/api/settings", { json: body });
       const r = await api("/api/relay-check");
-      $("#relayres").innerHTML = `<div class="card tight" style="margin-top:12px">${r.results.map(x => `<div class="check"><span class="mark ${x.ok ? "ok" : "bad"}">${x.ok ? "✓" : "✕"}</span><div><b>${esc(x.name)} - ${esc(x.address)}</b><div class="small muted">${x.ok ? "Reachable (about " + esc(x.ms) + " ms from here to the relay and back). UDP can't be tested from here - join once to be sure." : "Nothing answers. Is the relay running, and does it forward TCP and UDP to this computer?"}</div></div></div>`).join("") || `<p class="small muted">No servers to test.</p>`}</div>`;
+      $("#relayres").innerHTML = `<div class="card tight" style="margin-top:12px">${r.results.map(x => `<div class="check"><span class="mark ${x.ok ? "ok" : "bad"}">${x.ok ? "✓" : "✕"}</span><div><b>${esc(x.name)} - ${blurIPs(esc(x.address))}</b><div class="small muted">${x.ok ? "Reachable (about " + esc(x.ms) + " ms from here to the relay and back). UDP can't be tested from here - join once to be sure." : "Nothing answers. Is the relay running, and does it forward TCP and UDP to this computer?"}</div></div></div>`).join("") || `<p class="small muted">No servers to test.</p>`}</div>`;
     } catch (e) { toast(e.message); }
     b.disabled = false; b.textContent = "Test the relay";
   };
