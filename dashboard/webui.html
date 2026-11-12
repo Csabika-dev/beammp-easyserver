@@ -618,6 +618,7 @@ VIEWS.config = async m => {
       ${SERVER === "main" ? `<label class="toggle"><input type="checkbox" id="rs_auto" ${rs.auto_update ? "checked" : ""}><span><b>Install BeamMP updates automatically</b><small>At the scheduled restart, if a new BeamMP server version is out. All servers use the same BeamMP program, so the others restart too.${rs.update_available ? " <b>An update is available now.</b>" : ""}</small></span></label>` : ""}
       <div class="row" style="margin-top:12px"><button class="btn primary" id="rs_save">Save restarts</button></div>
     </div>
+    <div id="cfg17"></div>
     <div class="card" style="margin-top:16px" id="mdcard"><div class="row"><h2 style="margin:0">Moderation &amp; anti-bot</h2><span class="spacer"></span>
         <span class="pill ${md.antibot ? "good" : ""}"><span class="dot"></span>${md.antibot ? "Anti-bot on" : "Anti-bot off"}</span></div>
       <p class="small muted">Kick, mute and ban players on the Players page. Everything here works right away, no restart needed.</p>
@@ -710,6 +711,7 @@ VIEWS.config = async m => {
                    mention: $("#ja_mention").value, address: $("#ja_addr").checked, test };
     try { const r = await api("/api/joinalerts", { json: body }); toast(r.note); if (!test) show("config"); } catch (e) { toast(e.message); }
   };
+  loadCfg17();
   $("#rs_save").onclick = async () => {
     const body = { on: $("#rs_on").checked, every: Number($("#rs_every").value), at: $("#rs_at").value, warn: Number($("#rs_warn").value), when: $("#rs_when").value };
     if ($("#rs_auto")) body.auto_update = $("#rs_auto").checked;
@@ -1004,6 +1006,101 @@ VIEWS.notifications = async m => {
   if (d.items.some(n => !n.read)) { api("/api/notifications/read", { method: "POST" }).then(() => setUnread(0)).catch(() => {}); }
 };
 
+/* ---------------- 1.7: templates, map rotation, welcome & announcements (Config) */
+async function loadCfg17() {
+  const el = $("#cfg17"); if (!el) return;
+  let tp, ro, ms;
+  try { [tp, ro, ms] = await Promise.all([api("/api/templates"), api("/api/rotation"), api("/api/messages")]); }
+  catch (e) { el.innerHTML = `<div class="card" style="margin-top:16px"><p class="small muted">${esc(e.message)}</p></div>`; return; }
+  const pill = (on, txt) => `<span class="pill ${on ? "good" : ""}"><span class="dot"></span>${esc(txt)}</span>`;
+  const everyOpt = (list, cur, day) => list.map(n => `<option value="${n}" ${n === cur ? "selected" : ""}>${n === 24 && day ? "Once a day" : "Every " + n + (day ? " hour" + (n === 1 ? "" : "s") : " minutes")}</option>`).join("");
+  el.innerHTML = `
+    <div class="card" style="margin-top:16px" id="tplcard"><h2>Quick setup: server templates</h2>
+      <p class="small muted">One click sets the player limit, car cleanup, AFK removal, chat tags, chat rules, a welcome message and tips for the kind of server you want. You can change everything afterwards.</p>
+      <div class="grid g2" style="gap:10px">${tp.templates.map(t => `<div class="card tight" style="padding:12px 14px"><div class="row"><b>${esc(t.label)}</b><span class="spacer"></span><button class="btn sm" data-tpl="${esc(t.id)}">Use</button></div>
+        <div class="small muted">${esc(t.about)}</div><div class="small" style="margin-top:4px">Map ${esc(t.map)} · ${t.max_players} players · tags ${esc(t.tags.join(", "))}</div></div>`).join("")}</div>
+      <label class="toggle" style="margin-top:8px"><input type="checkbox" id="tpl_map" checked><span><b>Also switch to the template's map</b><small>Restarts the server if it's running</small></span></label>
+    </div>
+    <div class="card" style="margin-top:16px" id="rotcard"><div class="row"><h2 style="margin:0">Map rotation</h2><span class="spacer"></span>${pill(ro.on, ro.on ? "On" : "Off")}</div>
+      <p class="small muted">Switch to the next map in the list every few hours, so the server doesn't get boring. Players get a countdown in the chat. Now playing: <b>${esc(ro.current || "?")}</b>${ro.next ? " · next change " + esc(fmtTime(ro.next)) : ""}.</p>
+      <label class="toggle"><input type="checkbox" id="ro_on" ${ro.on ? "checked" : ""}><span><b>Rotate the map</b><small>Off by default. Pick at least two maps, in order</small></span></label>
+      <div class="row" style="flex-wrap:wrap;gap:6px;margin:8px 0">${ro.available.map(x => `<label class="badge" style="cursor:pointer"><input type="checkbox" data-rm="${esc(x)}" ${ro.maps.includes(x) ? "checked" : ""}> ${esc(x)}</label>`).join("")}</div>
+      <div class="grid g3" style="gap:12px;margin:4px 0 8px">
+        <label class="f" style="margin:0"><span>How often</span><select id="ro_every">${everyOpt(ro.every_choices, ro.every, true)}</select></label>
+        <label class="f" style="margin:0"><span>Starting at</span><input type="time" id="ro_at" value="${esc(ro.at)}" style="color-scheme:light dark;color:inherit"></label>
+        <label class="f" style="margin:0"><span>Countdown in chat</span><select id="ro_warn">${ro.warn_choices.map(n => `<option value="${n}" ${n === ro.warn ? "selected" : ""}>${n ? n + " min before" : "No countdown"}</option>`).join("")}</select></label>
+      </div>
+      <label class="toggle"><input type="checkbox" id="ro_empty" ${ro.empty_only ? "checked" : ""}><span><b>Only change the map when nobody is online</b><small>Waits up to 2 hours, then skips that change</small></span></label>
+      <div class="row" style="margin-top:12px"><button class="btn primary" id="ro_save">Save rotation</button></div>
+    </div>
+    <div class="card" style="margin-top:16px" id="msgcard"><div class="row"><h2 style="margin:0">Welcome message &amp; announcements</h2><span class="spacer"></span>${pill(ms.welcome || ms.announce, ms.welcome && ms.announce ? "Both on" : ms.welcome ? "Welcome on" : ms.announce ? "Announcements on" : "Off")}</div>
+      <p class="small muted">Use <span class="mono">{name}</span> for the player's name and <span class="mono">{players}</span> for how many are online. Works right away, no restart needed.${ms.plugin ? "" : " <b>Start the server once</b> so the stats plugin is installed."}</p>
+      <label class="toggle"><input type="checkbox" id="ms_welcome" ${ms.welcome ? "checked" : ""}><span><b>Greet players when they join</b><small>Only the new player sees it. One line per chat message (up to 5)</small></span></label>
+      <textarea id="ms_wtext" rows="2" spellcheck="false" style="min-height:60px">${esc(ms.welcome_text.join("\n"))}</textarea>
+      <label class="toggle" style="margin-top:10px"><input type="checkbox" id="ms_announce" ${ms.announce ? "checked" : ""}><span><b>Post announcements in the chat</b><small>One message to everyone, in turn - only while someone is online</small></span></label>
+      <label class="f"><span>Every</span><select id="ms_every" style="max-width:220px">${everyOpt(ms.every_choices, ms.every, false)}</select></label>
+      <label class="f"><span>Announcements (one per line, up to 30)</span><textarea id="ms_list" rows="4" spellcheck="false" placeholder="Join our Discord: discord.gg/...&#10;Type /help for the commands&#10;No ramming - be nice!" style="min-height:90px">${esc(ms.messages.join("\n"))}</textarea></label>
+      <div class="row" style="margin-top:12px"><button class="btn primary" id="ms_save">Save messages</button></div>
+    </div>`;
+  el.querySelectorAll("[data-tpl]").forEach(b => b.onclick = async () => {
+    const t = tp.templates.find(x => x.id === b.dataset.tpl);
+    if (!confirm(`Use the ${t.label} template? It changes the player limit, car cleanup, AFK removal, chat tags, chat rules and the welcome message${$("#tpl_map").checked ? ", and switches the map to " + t.map : ""}.`)) return;
+    try { const r = await api("/api/template", { json: { id: t.id, map: $("#tpl_map").checked } }); toast(r.note, 6000); show("config"); } catch (e) { toast(e.message, 6000); }
+  });
+  $("#ro_save").onclick = async () => {
+    const order = [...el.querySelectorAll("[data-rm]")].filter(x => x.checked).map(x => x.dataset.rm);
+    const body = { on: $("#ro_on").checked, maps: order, every: Number($("#ro_every").value), at: $("#ro_at").value, warn: Number($("#ro_warn").value), empty_only: $("#ro_empty").checked };
+    try { const r = await api("/api/rotation", { json: body }); toast(r.note, 6000); loadCfg17(); } catch (e) { toast(e.message, 6000); }
+  };
+  $("#ms_save").onclick = async () => {
+    const body = { welcome: $("#ms_welcome").checked, welcome_text: $("#ms_wtext").value, announce: $("#ms_announce").checked, every: Number($("#ms_every").value), messages: $("#ms_list").value };
+    try { const r = await api("/api/messages", { json: body }); toast(r.note); loadCfg17(); } catch (e) { toast(e.message, 6000); }
+  };
+}
+
+/* ---------------- 1.7: backups, DuckDNS, computer load (Settings) */
+async function loadSet17() {
+  const el = $("#set17"); if (!el) return;
+  let bk, st, rs;
+  try { [bk, st, rs] = await Promise.all([api("/api/backups"), api("/api/settings"), api("/api/resources")]); }
+  catch (e) { el.innerHTML = `<p class="small muted">${esc(e.message)}</p>`; return; }
+  const n = rs.now || {};
+  const fmtUp = k => k == null ? "-" : k >= 1000 ? (k / 1000).toFixed(1) + " Mbit/s" : Math.round(k) + " kbit/s";
+  el.innerHTML = `
+  <div class="grid g2" style="margin-top:16px">
+    <div class="card"><div class="row"><h2 style="margin:0">Automatic backups</h2><span class="spacer"></span><span class="pill ${bk.on ? "good" : ""}"><span class="dot"></span>${bk.on ? "Nightly " + esc(bk.at) : "Off"}</span></div>
+      <p class="small muted">Every night the settings of all servers (config, allow-list, bans, moderation, messages, rotation) are saved. The last ${bk.keep} are kept. Restore one with Import below.</p>
+      <label class="toggle"><input type="checkbox" id="bk_on" ${bk.on ? "checked" : ""}><span><b>Back up every night</b><small>On by default. Keys and passwords are never in a backup</small></span></label>
+      <label class="toggle"><input type="checkbox" id="bk_mods" ${bk.mods ? "checked" : ""}><span><b>Include the mods</b><small>Can use a lot of disk space</small></span></label>
+      <label class="f"><span>At</span><input type="time" id="bk_at" value="${esc(bk.at)}" style="max-width:160px;color-scheme:light dark;color:inherit"></label>
+      <div class="row"><button class="btn primary" id="bk_save">Save</button><button class="btn" id="bk_now">Back up now</button></div>
+      ${bk.items.length ? `<div style="margin-top:10px">${bk.items.map(b => `<div class="row small" style="padding:3px 0"><span>${esc(fmtTime(b.t))}${b.mods ? " · with mods" : ""} · ${esc(fmtSize(b.size))}</span><span class="spacer"></span><a href="/api/backups/download?file=${encodeURIComponent(b.file)}&srv=${encodeURIComponent(SERVER)}" download>Download</a></div>`).join("")}</div>` : `<p class="small muted" style="margin-top:8px">No backups of this server yet.</p>`}
+    </div>
+    <div class="card"><div class="row"><h2 style="margin:0">Fixed address (DuckDNS)</h2><span class="spacer"></span><span class="pill ${st.duckdns_domain ? (st.duck_err ? "warn" : "good") : ""}"><span class="dot"></span>${st.duckdns_domain ? esc(st.duckdns_domain) + ".duckdns.org" : "Off"}</span></div>
+      <p class="small muted">Most home internet gets a new IP address now and then, and your friends' saved address stops working. With a free DuckDNS name they always use <b>yourname.duckdns.org</b> - the dashboard keeps it pointing at your home.</p>
+      ${st.duck_err ? `<div class="issue warning"><span class="ic">⚠</span><span>Last update failed: ${esc(st.duck_err)}</span></div>` : ""}
+      <ol class="small" style="margin:6px 0 10px"><li>Sign in at <a href="https://www.duckdns.org" target="_blank" rel="noopener noreferrer">duckdns.org</a> (free, with Google, GitHub, Reddit...).</li><li>Type a name under "sub domain" and click <b>add domain</b>.</li><li>Copy the <b>token</b> from the top of the page and paste both below.</li></ol>
+      <label class="f"><span>DuckDNS name</span><input type="text" id="dk_dom" value="${esc(st.duckdns_domain || "")}" placeholder="myserver" autocomplete="off" spellcheck="false"><small>Just the name - .duckdns.org is added. Empty + Save turns it off</small></label>
+      <label class="f"><span>Token</span><input type="password" id="dk_tok" placeholder="${st.has_duck ? "Saved (encrypted) - paste a new one to replace" : "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"}" autocomplete="off"></label>
+      <button class="btn primary" id="dk_save">Save</button>
+      ${st.duckdns_domain ? `<p class="small" style="margin-top:8px">Friends join at <span class="mono">${esc(st.duckdns_domain)}.duckdns.org:${esc(st.port_main || 30814)}</span> (the game port still has to be forwarded on your router).</p>` : ""}
+    </div>
+  </div>
+  <div class="card" style="margin-top:16px"><h2>Computer load</h2>
+    <p class="small muted">You get a warning when this computer runs out of memory, the processor is maxed out for 5 minutes, or the server uses almost all of your upload - with a suggested player limit.</p>
+    <div class="grid g3" style="gap:10px;margin:8px 0">
+      <div class="card tight stat" style="padding:10px 14px"><div class="label">Processor</div><div class="value">${n.cpu == null ? "-" : esc(Math.round(n.cpu)) + "%"}</div><div class="note">${rs.cpus} cores</div></div>
+      <div class="card tight stat" style="padding:10px 14px"><div class="label">Free memory</div><div class="value">${n.mem_free == null ? "-" : esc(fmtSize(n.mem_free * 1048576))}</div><div class="note">of ${n.mem_total == null ? "?" : esc(fmtSize(n.mem_total * 1048576))}</div></div>
+      <div class="card tight stat" style="padding:10px 14px"><div class="label">Upload used</div><div class="value">${esc(fmtUp(n.up_kbps))}</div><div class="note">${rs.upload_mbit ? "of " + esc(rs.upload_mbit) + " Mbit/s" : "set your speed below"}</div></div>
+    </div>
+    <label class="f"><span>Your upload speed (Mbit/s)</span><div class="row"><input type="number" id="up_mbit" min="0" step="0.1" value="${esc(rs.upload_mbit || "")}" placeholder="e.g. 20" style="max-width:160px"><button class="btn" id="up_save">Save</button></div><small>Run a speed test (for example speedtest.net) on this computer and enter the <b>upload</b> number. Without it you only get memory and processor warnings.</small></label>
+  </div>`;
+  $("#bk_save").onclick = async () => { try { const r = await api("/api/backups", { json: { on: $("#bk_on").checked, mods: $("#bk_mods").checked, at: $("#bk_at").value } }); toast(r.note); loadSet17(); } catch (e) { toast(e.message); } };
+  $("#bk_now").onclick = async () => { $("#bk_now").disabled = true; try { const r = await api("/api/backups/now", { json: { mods: $("#bk_mods").checked } }); toast(r.note); loadSet17(); } catch (e) { toast(e.message, 6000); $("#bk_now").disabled = false; } };
+  $("#dk_save").onclick = async () => { $("#dk_save").disabled = true; try { const r = await api("/api/duckdns", { json: { domain: $("#dk_dom").value, token: $("#dk_tok").value } }); toast(r.note, 7000); loadSet17(); } catch (e) { toast(e.message, 7000); $("#dk_save").disabled = false; } };
+  $("#up_save").onclick = async () => { try { const r = await api("/api/resources", { json: { upload_mbit: $("#up_mbit").value } }); toast(r.note); loadSet17(); } catch (e) { toast(e.message); } };
+}
+
 /* ---------------- Discord bot (Settings) */
 async function loadBot(keepOpen) {
   const el = $("#botcard"); if (!el) return;
@@ -1060,6 +1157,9 @@ VIEWS.settings = async m => {
       ${tg("n_moderation", "Moderation", "Bans, kicks and mutes made in game by your admins", N.moderation)}
       ${tg("n_network", "Address changes", "This computer's home address or your public IP changed", N.network)}
       ${tg("n_restart", "Scheduled restarts", "A scheduled restart or update ran", N.restart)}
+      ${tg("n_rotation", "Map rotation", "The map was changed by the rotation", N.rotation)}
+      ${tg("n_resources", "Computer overloaded", "Out of memory, processor maxed out, or upload almost used up", N.resources)}
+      ${tg("n_backup", "Backup problems", "A nightly backup failed", N.backup)}
       ${s.platform === "windows" ? tg("auto_restart", "Restart after a crash", "Start the server again automatically", s.auto_restart) : ""}
       ${tg("update_check", "Check for updates", "Every 6 hours", s.update_check)}
       <p class="small muted" style="margin-top:12px">Notifications always appear on the Notifications page. Also send them to:</p>
@@ -1131,6 +1231,7 @@ VIEWS.settings = async m => {
       : `<p class="small muted"><b>Flood protection</b> (per-address limits on the game port) is only available on Linux. On Windows, hiding your IP is the protection that matters.</p>`}
   </div>
 
+  <div id="set17"></div>
   <div class="card" style="margin-top:16px"><h2>Backup / move to another computer</h2>
     <p class="small muted">Export your server settings (and optionally all mods) into one file, then import it on another server. Keys and passwords are never exported.</p>
     <div class="row"><a class="btn" href="/api/export?srv=${encodeURIComponent(SERVER)}" download>Export settings</a><a class="btn" href="/api/export?mods=1&srv=${encodeURIComponent(SERVER)}" download>Export settings + mods</a>
@@ -1141,7 +1242,7 @@ VIEWS.settings = async m => {
   m.querySelectorAll("[data-test]").forEach(b => b.onclick = async () => { b.disabled = true; try { await saveNotif(true); await api("/api/notifications/test", { json: { channel: b.dataset.test } }); toast("Test sent"); } catch (e) { toast(e.message); } b.disabled = false; });
   async function saveNotif(quiet) {
     const body = { notify: {} };
-    ["crash", "stopped", "update", "mod_blocked", "player_join", "player_denied", "moderation", "network", "restart"].forEach(k => body.notify[k] = $("#n_" + k).checked);
+    ["crash", "stopped", "update", "mod_blocked", "player_join", "player_denied", "moderation", "network", "restart", "rotation", "resources", "backup"].forEach(k => body.notify[k] = $("#n_" + k).checked);
     ["discord_enabled", "email_enabled", "update_check", "security_alerts", "security_reminders"].forEach(k => body[k] = $("#" + k).checked);
     if ($("#auto_restart")) body.auto_restart = $("#auto_restart").checked;
     ["smtp_host", "smtp_port", "smtp_user", "smtp_to", "smtp_security"].forEach(k => body[k] = $("#" + k).value);
@@ -1154,6 +1255,7 @@ VIEWS.settings = async m => {
   }
   $("#savenotif").onclick = () => saveNotif(false).catch(e => toast(e.message));
   loadBot();
+  loadSet17();
   ["security_alerts", "security_reminders"].forEach(k => $("#" + k).onchange = () => saveNotif(false).catch(e => toast(e.message)));
   const popNote = () => { $("#popupnote").textContent = !window.Notification ? (window.isSecureContext ? "This browser has no pop-ups" : "Pop-ups need HTTPS (turn it on below) or http://localhost") : Notification.permission === "granted" ? "On for this browser" : Notification.permission === "denied" ? "Blocked - allow notifications for this site in the browser settings" : ""; };
   popNote();
