@@ -35,8 +35,17 @@ jobs:
           cp LICENSE wake/
           (cd wake && zip -r ../dist/BeamMP-EasyServer-WakeHelper.zip . -x '__pycache__/*')
 
+      - name: Release notes from CHANGELOG.md
+        run: |
+          # The section of CHANGELOG.md for this version ("## 1.12.0 - ..." up to the next "## ")
+          v="${GITHUB_REF_NAME#v}"
+          awk -v v="$v" '/^## /{p = index($0, "## " v " ") == 1 || $0 == "## " v} p' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then echo "See CHANGELOG.md" > notes.md; fi
+          printf '\n---\n**Downloads:** Windows → `BeamMP-EasyServer-Windows.zip` · Linux → `BeamMP-EasyServer-Linux.zip` (or the one-line install in the README) · Wake helper → `BeamMP-EasyServer-WakeHelper.zip`\n' >> notes.md
+          cat notes.md
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*.zip
-          generate_release_notes: true
+          body_path: notes.md
