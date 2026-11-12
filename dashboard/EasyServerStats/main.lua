@@ -14,6 +14,7 @@
 --   actions.txt    written by the dashboard: kick / mute / chat messages to run now
 --   verified.txt   players who passed the anti-bot check (one name per line)
 --   messages.txt   written by the dashboard: welcome message + timed announcements
+--   bridge.txt     written by the dashboard: "bridge=on" sends the game chat to Discord (via events.log)
 
 local DIR = "Resources/Server/EasyServerStats/"
 local EVENTS = DIR .. "events.log"
@@ -27,6 +28,7 @@ local BANS = DIR .. "bans.txt"
 local ACTIONS = DIR .. "actions.txt"
 local VERIFIED = DIR .. "verified.txt"
 local MSGFILE = DIR .. "messages.txt"
+local BRIDGEFILE = DIR .. "bridge.txt"
 local MAX_LOG = 20 * 1024 * 1024   -- roll the log over at 20 MB
 
 local function jsonEscape(s)
@@ -861,17 +863,26 @@ local VALID_MSG_EVERY = { [5] = true, [10] = true, [15] = true, [20] = true, [30
 local function readMsgs(now)
   if now - msgRead < 10 then return end
   msgRead = now
+  local c = { welcome = false, welcome_text = {}, announce = false, every = 15, list = {}, bridge = false }
   local f = io.open(MSGFILE, "r")
-  if not f then msgs = { welcome = false, welcome_text = {}, announce = false, every = 15, list = {} } return end
-  local c = { welcome = false, welcome_text = {}, announce = false, every = 15, list = {} }
-  for line in f:lines() do
-    local k, v = trim(line):match("^([%w_]+)%s*=%s*(.-)$")
-    if k == "welcome" or k == "announce" then c[k] = v:lower() == "on"
-    elseif k == "every" then local n = tonumber(v); if n and VALID_MSG_EVERY[n] then c.every = n end
-    elseif k == "welcome_text" and v ~= "" and #c.welcome_text < 5 then c.welcome_text[#c.welcome_text + 1] = v:sub(1, 200)
-    elseif k == "msg" and v ~= "" and #c.list < 30 then c.list[#c.list + 1] = v:sub(1, 200) end
+  if f then
+    for line in f:lines() do
+      local k, v = trim(line):match("^([%w_]+)%s*=%s*(.-)$")
+      if k == "welcome" or k == "announce" then c[k] = v:lower() == "on"
+      elseif k == "every" then local n = tonumber(v); if n and VALID_MSG_EVERY[n] then c.every = n end
+      elseif k == "welcome_text" and v ~= "" and #c.welcome_text < 5 then c.welcome_text[#c.welcome_text + 1] = v:sub(1, 200)
+      elseif k == "msg" and v ~= "" and #c.list < 30 then c.list[#c.list + 1] = v:sub(1, 200) end
+    end
+    f:close()
   end
-  f:close()
+  local b = io.open(BRIDGEFILE, "r")
+  if b then
+    for line in b:lines() do
+      local k, v = trim(line):match("^([%w_]+)%s*=%s*(.-)$")
+      if k == "bridge" then c.bridge = v:lower() == "on" end
+    end
+    b:close()
+  end
   if c.every ~= msgs.every or c.announce ~= msgs.announce then annNext = nil end
   msgs = c
 end
@@ -884,6 +895,22 @@ local function fill(text, pid)
 end
 
 function esMsgLeft(id) welcomeQ[id] = nil end
+
+-- Chat bridge: normal chat messages (not commands, not hidden by the filter or
+-- a mute) are logged for the dashboard, which posts them in Discord. Only while
+-- the bridge is switched on in the dashboard.
+local chatOrig = esOnChat
+function esOnChat(id, name, message)
+  local r = chatOrig(id, name, message)
+  if r ~= 1 then
+    readMsgs(os.time())
+    local m = tostring(message or "")
+    if msgs.bridge and m ~= "" and not m:match("^%s*/") then
+      event("chat", string.format(',"name":"%s","msg":"%s"', jsonEscape(name), jsonEscape(m:sub(1, 300))))
+    end
+  end
+  return r
+end
 
 function esOnJoined(id)
   readMsgs(os.time())
