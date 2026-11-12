@@ -28,7 +28,7 @@ SERVER_DIR = "/opt/beammp-server"
 INSTALL_ENV = "/etc/beammp-easyserver/install.env"
 SERVERS = SERVER_DIR + "/servers"              # extra servers: servers/<id>/
 LIMITS_DIR = "/etc/beammp-easyserver/limits"   # upload limits, re-applied when a server starts
-SECRET_NAMES = {"MODS_PASSWORD", "VT_API_KEY", "DISCORD_WEBHOOK", "SMTP_PASSWORD", "TOTP_SECRET", "BEAMMP_AUTH_KEY", "DISCORD_BOT_TOKEN", "DUCKDNS_TOKEN", "NTFY_TOPIC", "WAKE_TOPIC"}
+SECRET_NAMES = {"MODS_PASSWORD", "VT_API_KEY", "DISCORD_WEBHOOK", "SMTP_PASSWORD", "TOTP_SECRET", "BEAMMP_AUTH_KEY", "DISCORD_BOT_TOKEN", "DUCKDNS_TOKEN", "NTFY_TOPIC", "WAKE_TOPIC", "USERS_KEY", "TELEGRAM_TOKEN", "CUSTOM_WEBHOOK"}
 ID_RE = re.compile(r"[a-z0-9]{1,12}")
 RELEASE_BASE = "https://github.com/BeamMP/BeamMP-Server/releases/latest/download/"
 
@@ -41,7 +41,7 @@ def unit_for(server):
     server = server or "main"
     if server == "main":
         return "beammp-server"
-    if not ID_RE.fullmatch(str(server)) or not os.path.isdir(os.path.join(SERVERS, server)):
+    if not isinstance(server, str) or not ID_RE.fullmatch(server) or not os.path.isdir(os.path.join(SERVERS, server)):
         raise ValueError("unknown server")
     return "beammp-server@%s" % server
 
@@ -92,7 +92,7 @@ def open_servers_dir():
 
 
 def create_server(server, config, start):
-    if not ID_RE.fullmatch(str(server or "")) or server == "main":
+    if not isinstance(server, str) or not ID_RE.fullmatch(server) or server == "main":
         return {"ok": False, "msg": "bad server id"}
     if not isinstance(config, str) or not 10 < len(config) < 60000 or "[General]" not in config:
         return {"ok": False, "msg": "bad config"}
@@ -148,7 +148,7 @@ def _create_server(server, config, start, base):
 
 
 def delete_server(server):
-    if not ID_RE.fullmatch(str(server or "")) or server == "main":
+    if not isinstance(server, str) or not ID_RE.fullmatch(server) or server == "main":
         return {"ok": False, "msg": "bad server id"}
     try:
         sfd, base = open_servers_dir()
