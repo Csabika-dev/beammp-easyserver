@@ -39,7 +39,7 @@ import zipfile
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-EASY_VERSION = "1.12.0"
+EASY_VERSION = "1.12.1"
 REPO = "Csabika-dev/beammp-easyserver"
 BEAMMP_REPO = "BeamMP/BeamMP-Server"
 IS_WIN = os.name == "nt"
@@ -4972,7 +4972,7 @@ USER_RE = re.compile(r"[A-Za-z0-9_.\-]{2,24}")
 MOD_WRITE = {"/api/players/act", "/api/bans/add", "/api/bans/remove", "/api/allowlist", "/api/server/action",
              "/api/notifications/read", "/api/notifications/clear", "/api/security/ack", "/api/logout",
              "/api/events/stop", "/api/map", "/api/maintenance"}
-VIEWER_WRITE = {"/api/logout", "/api/notifications/read", "/api/logs/explain"}
+VIEWER_WRITE = {"/api/logout", "/api/notifications/read", "/api/logs/explain", "/api/devices"}
 OWNER_WRITE = {"/api/users", "/api/password", "/api/2fa/begin", "/api/2fa/confirm", "/api/2fa/disable", "/api/remote",
                "/api/authkey", "/api/import", "/api/power/helper", "/api/servers/delete", "/api/statuspage"}
 ADMIN_GET = {"/api/export", "/api/backups/download", "/api/phoneapp", "/api/ntfy", "/api/power/offline",
@@ -5053,6 +5053,130 @@ def find_user(name):
     return next((u for u in load_users() if u["name"].lower() == name), None)
 
 
+# ----------------------------------------------------------------------------- remembered devices ("stay logged in")
+# A browser or the phone app can stay logged in for DEVICE_DAYS after the last visit (DEVICE_MAX_DAYS at most).
+# Only a hash of each device token is stored, and the file is signed like users.json, so a token can't be read
+# back from the file and a file written by something else can't add a device.
+DEVICES_FILE = os.path.join(DATA_DIR, "devices.json")
+DEVICE_COOKIE = "es_device"
+DEVICE_DAYS = 30
+DEVICE_MAX_DAYS = 90
+DEVICES_PER_USER = 10
+_DEV_LOCK = threading.Lock()
+
+
+def _devices_sig(devs):
+    # signed with its own key derived from the accounts key (no extra secret to store)
+    base = APP.secrets.get("USERS_KEY") if APP else ""
+    if not base:
+        return ""
+    key = hmac.new(base.encode(), b"remembered-devices", hashlib.sha256).digest()
+    return hmac.new(key, json.dumps(devs, sort_keys=True).encode(), hashlib.sha256).hexdigest()
+
+
+def _device_ok(d, t):
+    try:
+        return _device_ok_(d, t)
+    except (TypeError, ValueError):
+        return False
+
+
+def _device_ok_(d, t):
+    return (isinstance(d, dict) and re.fullmatch(r"[0-9a-f]{64}", str(d.get("hash", ""))) and str(d.get("id", ""))
+            and float(d.get("last", 0)) > t - DEVICE_DAYS * 86400 and float(d.get("created", 0)) > t - DEVICE_MAX_DAYS * 86400)
+
+
+def load_devices():
+    d = read_json(DEVICES_FILE, {})
+    if not isinstance(d, dict) or not isinstance(d.get("devices"), list):
+        return []
+    want = _devices_sig(d["devices"])
+    if not want or not hmac.compare_digest(want, str(d.get("sig") or "")):
+        return []                       # not written by the dashboard: trust none of it
+    t = now()
+    return [x for x in d["devices"] if _device_ok(x, t)]
+
+
+def save_devices(devs):
+    if not APP.secrets.has("USERS_KEY"):
+        APP.secrets.set("USERS_KEY", secrets.token_hex(32))
+    write_json(DEVICES_FILE, {"devices": devs, "sig": _devices_sig(devs)})
+    if not IS_WIN:
+        try:
+            os.chmod(DEVICES_FILE, 0o600)
+        except OSError:
+            pass
+
+
+def device_label(ua):
+    """'Firefox on Windows', 'EasyServer app on Android' ... from the User-Agent (only for the list)."""
+    ua = str(ua or "")
+    if "EasyServerApp" in ua:
+        return "EasyServer app on Android"
+    osn = next((n for k, n in (("Android", "Android"), ("iPhone", "iPhone"), ("iPad", "iPad"), ("Windows", "Windows"),
+                                ("Mac OS", "Mac"), ("CrOS", "Chromebook"), ("Linux", "Linux")) if k in ua), "")
+    br = next((n for k, n in (("Edg/", "Edge"), ("OPR/", "Opera"), ("Firefox/", "Firefox"), ("SamsungBrowser", "Samsung Internet"),
+                               ("Chrome/", "Chrome"), ("Safari/", "Safari")) if k in ua), "Browser")
+    return br + (" on " + osn if osn else "")
+
+
+def _dev_hash(tok):
+    return hashlib.sha256(str(tok).encode()).hexdigest()
+
+
+def remember_device(user, ip, ua):
+    tok = secrets.token_urlsafe(32)
+    t = now()
+    with _DEV_LOCK:
+        devs = load_devices()
+        mine = sorted([d for d in devs if d.get("user", "owner").lower() == user.lower()], key=lambda d: d["last"])
+        drop = {id(d) for d in mine[:max(0, len(mine) - DEVICES_PER_USER + 1)]}
+        devs = [d for d in devs if id(d) not in drop]
+        devs.append({"id": secrets.token_hex(6), "hash": _dev_hash(tok), "user": user, "name": device_label(ua)[:60],
+                     "created": t, "last": t, "ip": str(ip)[:45]})
+        save_devices(devs)
+    return tok
+
+
+def device_login(tok, ip):
+    """The account a remembered-device token belongs to, or None. Extra accounts only from the home network."""
+    if not tok or not re.fullmatch(r"[\w-]{20,100}", tok):
+        return None
+    h = _dev_hash(tok)
+    with _DEV_LOCK:
+        devs = load_devices()
+        d = next((x for x in devs if hmac.compare_digest(x["hash"], h)), None)
+        if not d:
+            return None
+        user = d.get("user", "owner")
+        role = "owner"
+        if user.lower() != "owner":
+            u = find_user(user)
+            try:
+                local = not ipaddress.ip_address(ip).is_global
+            except ValueError:
+                local = False
+            if not u or u.get("disabled") or not local:
+                return None
+            user, role = u["name"], u["role"]
+        t = now()
+        if t - d["last"] > 3600 or d.get("ip") != ip:     # don't rewrite the file on every page load
+            d["last"], d["ip"] = t, str(ip)[:45]
+            save_devices(devs)
+        return {"user": user, "role": role, "device": d["id"]}
+
+
+def forget_devices(user=None, dev_id=None):
+    """Forget one device (dev_id), every device of one account (user) or all of them (neither)."""
+    with _DEV_LOCK:
+        devs = load_devices()
+        keep = [d for d in devs if not ((dev_id is None or d["id"] == dev_id) and
+                                        (user is None or d.get("user", "owner").lower() == user.lower()))]
+        if len(keep) != len(devs):
+            save_devices(keep)
+        return len(devs) - len(keep)
+
+
 # ----------------------------------------------------------------------------- activity log
 ACTIVITY_FILE = os.path.join(DATA_DIR, "activity.jsonl")
 _ACT_LOCK = threading.Lock()
@@ -5061,7 +5185,7 @@ ACTION_LABELS = {
     "/api/mods/upload": "Uploaded a mod", "/api/mods/action": "Mod {action}: {name}", "/api/mods/update": "Updated mod {name}",
     "/api/mods/rescan": "Re-checked mods", "/api/bans/add": "Banned {name}", "/api/bans/remove": "Unbanned {name}",
     "/api/players/act": "Player {action}: {name}", "/api/allowlist": "Changed the allow-list", "/api/settings": "Changed settings",
-    "/api/password": "Changed the password", "/api/remote": "Changed internet access / HTTPS", "/api/authkey": "Changed the AuthKey",
+    "/api/password": "Changed the password", "/api/devices": "Forgot remembered devices", "/api/remote": "Changed internet access / HTTPS", "/api/authkey": "Changed the AuthKey",
     "/api/import": "Imported a backup", "/api/map": "Switched the map to {map}", "/api/restarts": "Changed scheduled restarts",
     "/api/moderation": "Changed moderation settings", "/api/extras": "Changed cars & chat settings",
     "/api/messages": "Changed chat messages", "/api/rotation": "Changed map rotation", "/api/template": "Applied a template",
@@ -6357,7 +6481,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.https:
             self.send_header("Strict-Transport-Security", "max-age=31536000")
         for k, v in (extra or {}).items():
-            self.send_header(k, v)
+            for one in (v if isinstance(v, (list, tuple)) else [v]):
+                self.send_header(k, one)
         self.end_headers()
 
     def send(self, code, obj=None, ctype="application/json", extra=None):
@@ -6608,6 +6733,18 @@ class Handler(BaseHTTPRequestHandler):
     def api_session(self, q):
         app = APP
         sess = app.session(self.cookie("es_session"))
+        extra = None
+        if not sess and self.cookie(DEVICE_COOKIE) and app.secrets.has("MODS_PASSWORD"):
+            who = None if app.is_locked(self.ip) else device_login(self.cookie(DEVICE_COOKIE), self.ip)
+            if who:
+                tok = app.new_session(self.ip, who["user"], who["role"])
+                sess = app.session(tok)
+                sess["device"] = who["device"]
+                extra = {"Set-Cookie": [self.cookie_header(tok),
+                                        self.cookie_header(self.cookie(DEVICE_COOKIE), name=DEVICE_COOKIE, max_age=DEVICE_DAYS * 86400)]}
+                activity(who["user"], "Logged in (remembered device)", "dashboard", self.ip, "main")
+            else:                       # forgotten or expired: drop the cookie
+                extra = {"Set-Cookie": self.cookie_header("", clear=True, name=DEVICE_COOKIE)}
         self.send(200, {
             "logged_in": bool(sess), "csrf": sess["csrf"] if sess else None,
             "user": sess.get("user", "owner") if sess else None, "role": sess.get("role", "owner") if sess else None,
@@ -6616,7 +6753,7 @@ class Handler(BaseHTTPRequestHandler):
             "totp": app.secrets.has("TOTP_SECRET"),
             "version": EASY_VERSION, "platform": "windows" if IS_WIN else "linux",
             "https": self.https,
-        })
+        }, extra=extra)
 
     def api_setup(self, q):
         app = APP
@@ -6636,13 +6773,22 @@ class Handler(BaseHTTPRequestHandler):
         tok = app.new_session(self.ip)
         self.send(200, {"ok": True}, extra={"Set-Cookie": self.cookie_header(tok)})
 
-    def cookie_header(self, tok, clear=False):
-        c = "es_session=%s; Path=/; HttpOnly; SameSite=Strict" % ("" if clear else tok)
+    def cookie_header(self, tok, clear=False, name="es_session", max_age=None):
+        c = "%s=%s; Path=/; HttpOnly; SameSite=Strict" % (name, "" if clear else tok)
         if self.https:
             c += "; Secure"
         if clear:
             c += "; Max-Age=0"
+        elif max_age:
+            c += "; Max-Age=%d" % max_age
         return c
+
+    def login_cookies(self, tok, user, remember):
+        """Set-Cookie for a fresh login: the session, plus a remembered-device cookie when asked for."""
+        if not remember:
+            return [self.cookie_header(tok)]
+        dev = remember_device(user, self.ip, self.headers.get("User-Agent"))
+        return [self.cookie_header(tok), self.cookie_header(dev, name=DEVICE_COOKIE, max_age=DEVICE_DAYS * 86400)]
 
     def api_login(self, q):
         app = APP
@@ -6668,7 +6814,7 @@ class Handler(BaseHTTPRequestHandler):
                              need_code=has_totp)
         tok = app.new_session(self.ip)
         activity("owner", "Logged in", "dashboard", self.ip, "main")
-        self.send(200, {"ok": True}, extra={"Set-Cookie": self.cookie_header(tok)})
+        self.send(200, {"ok": True}, extra={"Set-Cookie": self.login_cookies(tok, "owner", b.get("remember") is True)})
 
     def login_user(self, uname, pw):
         """Extra accounts (admin / moderator / viewer). They only work from the home network:
@@ -6695,12 +6841,44 @@ class Handler(BaseHTTPRequestHandler):
         save_users(users)
         tok = app.new_session(self.ip, u["name"], u["role"])
         activity(u["name"], "Logged in", "dashboard", self.ip, "main")
-        self.send(200, {"ok": True}, extra={"Set-Cookie": self.cookie_header(tok)})
+        b = self._json or {}
+        self.send(200, {"ok": True}, extra={"Set-Cookie": self.login_cookies(tok, u["name"], b.get("remember") is True)})
 
     def post_logout(self, q):
         with LOCK:
             APP.sessions.pop(self.cookie("es_session"), None)
-        self.send(200, {"ok": True}, extra={"Set-Cookie": self.cookie_header("", clear=True)})
+        dev = self.cookie(DEVICE_COOKIE)
+        if dev:                         # logging out also forgets this device
+            with _DEV_LOCK:
+                devs = load_devices()
+                keep = [d for d in devs if not hmac.compare_digest(d["hash"], _dev_hash(dev))]
+                if len(keep) != len(devs):
+                    save_devices(keep)
+        self.send(200, {"ok": True}, extra={"Set-Cookie": [self.cookie_header("", clear=True),
+                                                           self.cookie_header("", clear=True, name=DEVICE_COOKIE)]})
+
+    # ---------- remembered devices
+    def get_devices(self, q):
+        me = self.sess.get("user", "owner")
+        owner = self.sess.get("role") == "owner"
+        cur = self.cookie(DEVICE_COOKIE)
+        h = _dev_hash(cur) if cur else ""
+        out = [{"id": d["id"], "user": d.get("user", "owner"), "name": d.get("name", ""), "created": d["created"],
+                "last": d["last"], "ip": d.get("ip", ""), "this": bool(h) and hmac.compare_digest(d["hash"], h)}
+               for d in load_devices() if owner or d.get("user", "owner").lower() == me.lower()]
+        self.send(200, {"devices": sorted(out, key=lambda d: -d["last"]), "days": DEVICE_DAYS})
+
+    def post_devices(self, q):
+        b = self.body_json()
+        me = self.sess.get("user", "owner")
+        owner = self.sess.get("role") == "owner"
+        if b.get("action") == "forget":
+            n = forget_devices(None if owner else me, str(b.get("id") or "")[:20])
+        elif b.get("action") == "forget_all":
+            n = forget_devices(None if owner else me)
+        else:
+            raise ValueError("unknown action")
+        self.send(200, {"ok": True, "forgotten": n})
 
     # ---------- overview
     # ---------- several servers
@@ -8295,12 +8473,14 @@ class Handler(BaseHTTPRequestHandler):
             u["pw"] = hash_password(pw)
             with LOCK:                           # log them out everywhere
                 APP.sessions = {k: v for k, v in APP.sessions.items() if v.get("user", "").lower() != name.lower()}
+            forget_devices(name)
         elif act == "disable":
             u["disabled"] = not u.get("disabled")
         elif act == "delete":
             users = [x for x in users if x is not u]
             with LOCK:
                 APP.sessions = {k: v for k, v in APP.sessions.items() if v.get("user", "").lower() != name.lower()}
+            forget_devices(name)
         else:
             raise ValueError("unknown action")
         save_users(users)
@@ -8597,7 +8777,8 @@ class Handler(BaseHTTPRequestHandler):
         with LOCK:
             mine = self.cookie("es_session")
             app.sessions = {k: v for k, v in app.sessions.items() if k == mine}
-        self.send(200, {"ok": True})
+        forget_devices()                # a new password logs out every remembered device
+        self.send(200, {"ok": True}, extra={"Set-Cookie": self.cookie_header("", clear=True, name=DEVICE_COOKIE)})
 
     # ---------- two-step login
     def post_2fa_begin(self, q):
@@ -8962,20 +9143,57 @@ class Server(ThreadingHTTPServer):
                 else:
                     self.conns.pop(ip, None)
 
-    def get_request(self):
-        sock, addr = self.socket.accept()
-        if self.tls_ctx:
-            sock = self.tls_ctx.wrap_socket(sock, server_side=True, do_handshake_on_connect=False)
-        return sock, addr
-
     def finish_request(self, request, client_address):
         request.settimeout(30)
-        if isinstance(request, ssl.SSLSocket):
+        if not self.tls_ctx:
+            return super().finish_request(request, client_address)
+        # HTTPS is on. A browser that still opens http:// (an old shortcut or bookmark) gets sent to
+        # https:// instead of a "connection reset". Done here, in the request's own thread, so a slow
+        # client can't hold up the others.
+        try:
+            request.settimeout(10)
+            first = request.recv(1, socket.MSG_PEEK)
+        except OSError:
+            return
+        if not first:
+            return
+        if first != b"\x16":                 # not a TLS handshake: plain HTTP
+            return self.redirect_to_https(request)
+        try:
+            tls = self.tls_ctx.wrap_socket(request, server_side=True, do_handshake_on_connect=False)
+        except (ssl.SSLError, OSError):
+            return
+        try:
+            tls.settimeout(30)
+            tls.do_handshake()
+            super().finish_request(tls, client_address)
+        except (ssl.SSLError, OSError):
+            pass
+        finally:
             try:
-                request.do_handshake()
-            except (ssl.SSLError, OSError):
-                return
-        super().finish_request(request, client_address)
+                tls.close()
+            except OSError:
+                pass
+
+    def redirect_to_https(self, sock):
+        data = b""
+        try:
+            while b"\r\n\r\n" not in data and len(data) < 8192:
+                part = sock.recv(2048)
+                if not part:
+                    break
+                data += part
+        except OSError:
+            return
+        m = re.search(rb"(?im)^host:[ \t]*([A-Za-z0-9.\-]{1,100}|\[[0-9A-Fa-f:.]{2,60}\])(?::\d{1,5})?[ \t]*\r?$", data)
+        port = self.server_address[1]
+        host = m.group(1).decode() if m else "localhost"
+        body = b"This dashboard uses HTTPS - open https://%s:%d/" % (host.encode(), port)
+        try:
+            sock.sendall(b"HTTP/1.1 301 Moved Permanently\r\nLocation: https://%s:%d/\r\nContent-Type: text/plain\r\n"
+                         b"Content-Length: %d\r\nConnection: close\r\n\r\n%s" % (host.encode(), port, len(body), body))
+        except OSError:
+            pass
 
     def handle_error(self, request, client_address):
         pass
