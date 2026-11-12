@@ -23,7 +23,7 @@ Open `http://<server-ip>:30815` from any PC or phone at home, or use the **BeamM
 | **Updates** | Checks for new BeamMP server and EasyServer versions, installs server updates in one click |
 | **Logs** | Live server log, with hints that explain common errors in plain English |
 | **Notifications** | Crashes, unexpected stops, updates, blocked mods, failed logins, player joins, **mod updates**, failed backups, high computer load. Shown in the dashboard and optionally sent to **Discord**, **email** and/or your **phone** (ntfy) |
-| **Settings** | Notifications, password, **two-step login** (scan a QR code), **access from the internet (HTTPS)**, **hide your IP / DDoS protection**, **backup / import / export**, nightly backups, **DuckDNS**, computer-load graphs, the **Discord bot** and the **phone app** |
+| **Settings** | Notifications, password, **two-step login** (scan a QR code), **access from the internet (HTTPS)**, **hide your IP / DDoS protection**, **backup / import / export**, nightly backups, **DuckDNS**, computer-load graphs, the **Discord bot**, the **phone app** and **sleep & wake-up** |
 
 Also: **dark / light mode** (follows your system, or switch with the moon icon), and it works on phones - there's an **Android app**, and on iPhone you can add it to the home screen. Before anything changes your network (server port, internet access, HTTPS) the dashboard shows exactly what will change and asks first; the firewall on the server is updated for you, your router never is.
 
@@ -106,11 +106,20 @@ Mods from the BeamNG repository are checked once a day. When there's a new versi
 
 Weekly events like "Friday 20:00 drift night": announced in Discord and the game chat, then the server switches to the event's map and mods, and back when it's over.
 
+### Sleep & wake-up: don't run the computer 24/7 (Settings page)
+
+- **Auto-sleep** (off by default): the computer goes to sleep after nobody has played for a while - never while someone is online, an event runs or starts soon, or the dashboard is in use. Optionally only between certain hours. Also a **Sleep now** button and `/sleep` in Discord.
+- **Wakes up by itself** 10 minutes before every scheduled event, and optionally every day at a set time (built-in alarm clock, no other device needed).
+- **Wake-on-LAN setup**: finds the network cable adapter and turns Wake-on-LAN on (Linux and Windows), with BIOS tips. Wake-on-LAN needs a **network cable** - it doesn't work over Wi-Fi - and laptops must stay plugged in.
+- **Router guide** with the steps for FRITZ!Box (it even wakes the computer when a friend tries to join), ASUS, TP-Link, Ubiquiti, MikroTik, OpenWrt, Netgear and others, with your MAC address filled in.
+- **Wake helper** (optional): a tiny program for a device at home that's always on (Raspberry Pi, NAS, another PC). While the computer sleeps, it answers `/start` in Discord and the **Wake up** button in the phone app and on the "server is asleep" page - from anywhere, without port forwarding. It can only send wake-up signals. Linux/Raspberry Pi: `curl -fsSLO https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/main/wake/install-wake-helper.sh && sudo bash install-wake-helper.sh`. Windows: `BeamMP-EasyServer-WakeHelper.zip` from the latest release → `Install-Wake-Helper.bat`.
+- The **Android app** wakes the computer itself when you're on the home Wi-Fi, and through the wake helper when you're not.
+
 ### Discord commands (optional, off by default)
 
 **Settings → Discord bot** adds slash commands to your Discord: `/status` shows every server with online players, map, CPU and memory (anyone can use it), and `/start`, `/stop` and `/restart` let people with **Manage Server** (or the Discord users you allow) control the servers. You make a free bot in the Discord Developer Portal and paste its token; the dashboard walks you through it. The bot only answers in the Discord server you choose and needs no port forwarding.
 
-Also: `/top` (most played), `/events` and `/whitelist add|remove|list|on|off`; a **live status message** in your channel that updates every minute; and a **chat bridge** between the game chat and your Discord channel.
+Also: `/top` (most played), `/events`, `/sleep` and `/whitelist add|remove|list|on|off`; a **live status message** in your channel that updates every minute; and a **chat bridge** between the game chat and your Discord channel.
 
 ### Invite-only servers (allow-list)
 
@@ -268,7 +277,7 @@ To turn on VirusTotal, make a free account at [virustotal.com](https://www.virus
 
 ## 🔐 Your keys are encrypted
 
-Your **BeamMP AuthKey**, your **VirusTotal key**, your **Discord bot token**, your **DuckDNS token**, your **ntfy topic** and the **mod page password** are never stored in plain text, and never in `ServerConfig.toml`.
+Your **BeamMP AuthKey**, your **VirusTotal key**, your **Discord bot token**, your **DuckDNS token**, your **ntfy topics** and the **mod page password** are never stored in plain text, and never in `ServerConfig.toml`.
 
 - **Windows:** encrypted with Windows' own DPAPI, tied to your Windows account. The file is useless on any other PC or account.
 - **Linux:** AES-256 encrypted (`/var/lib/beammp-easyserver/secrets.enc`). The unlock key is a separate root-only file in `/etc/beammp-easyserver`.
