@@ -2831,7 +2831,8 @@ def win_power_status():
           "magic=\"$($pm.WakeOnMagicPacket)\";ip=\"$($ip.IPAddress)\";prefix=[int]$ip.PrefixLength}};"
           "$armed=(powercfg /devicequery wake_armed) -join \"`n\";"
           "$hib=(powercfg /a) -join \"`n\";"
-          "[pscustomobject]@{adapters=$r;armed=$armed;sleep=$hib}|ConvertTo-Json -Depth 4 -Compress")
+          "$bat=(Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue|Select-Object -First 1);"
+          "[pscustomobject]@{adapters=$r;armed=$armed;sleep=$hib;battery=($null -ne $bat);bstatus=[int]$bat.BatteryStatus}|ConvertTo-Json -Depth 4 -Compress")
     try:
         raw = json.loads(_ps(ps).stdout or "{}")
     except (OSError, subprocess.TimeoutExpired, ValueError):
@@ -2866,8 +2867,15 @@ def win_power_status():
                     "mac": str(a.get("mac") or "").replace("-", ":").lower(), "wifi": bool(a.get("wifi")),
                     "cable": bool(a.get("up")), "ip": ip, "prefix": prefix, "brd": brd, "wol": wol})
     sl = str(raw.get("sleep") or "")
-    can = bool(re.search(r"Standby \((S3|S0 Low Power Idle)\)", sl.split("not available")[0])) if sl else True
-    return {"ok": True, "adapters": out, "can_sleep": can, "rtc": True, "persist": True}
+    avail = sl.split("not available")[0] if sl else ""
+    can = bool(re.search(r"Standby \((S3|S0 Low Power Idle)\)", avail)) if sl else True
+    kind = "deep" if "Standby (S3)" in avail else ("s2idle" if "S0 Low Power Idle" in avail else "")
+    for a in out:
+        a["os_wake"] = "enabled" if a["wol"] == "on" else "unknown"
+    laptop = bool(raw.get("battery"))
+    return {"ok": True, "adapters": out, "can_sleep": can, "rtc": True, "persist": True, "sleep_kind": kind,
+            "deep_available": kind == "deep",
+            "power": {"laptop": laptop, "ac": (int(raw.get("bstatus") or 0) == 2) if laptop else None}}
 
 
 def power_status(force=False):
@@ -2902,6 +2910,119 @@ def power_status(force=False):
     with LOCK:
         _POWER.update(t=time.time(), data=d)
     return d
+
+
+def wol_score(st):
+    """How ready this computer is to be woken up over the network: 0-100 with every reason and its fix.
+    Checks: [id, title, state (pass/warn/fail/unknown), weight, what it means, what to do]."""
+    app = APP
+    ads = st.get("adapters") or []
+    main = next((a for a in ads if a.get("name") == st.get("main")), None)
+    pw = st.get("power") or {}
+    win = IS_WIN
+    checks = []
+
+    def add(cid, title, state, weight, why, fix=""):
+        checks.append({"id": cid, "title": title, "state": state, "weight": weight, "why": why, "fix": fix})
+
+    # 1. a network cable
+    if main and main.get("cable"):
+        add("cable", "Network cable", "pass", 20, "The computer is connected to the router with a cable (%s)." % main["name"])
+    elif main:
+        add("cable", "Network cable", "fail", 20, "The cable adapter (%s) has no cable plugged in%s." % (
+            main["name"], " - the computer uses Wi-Fi" if st.get("on_wifi") else ""),
+            "Plug a network cable into the computer and the router (or a switch), then press Refresh. "
+            "Wake-on-LAN doesn't work over Wi-Fi.")
+    else:
+        add("cable", "Network cable", "fail", 20, "This computer has no built-in network cable port that was found.",
+            "Wake-on-LAN needs a built-in network port. Most USB network adapters can't wake a computer up.")
+    # 2. the network chip can do it
+    if not main:
+        add("support", "Network chip supports Wake-on-LAN", "fail", 15, "No cable adapter to check.", "See above.")
+    elif main.get("wol") == "unsupported":
+        add("support", "Network chip supports Wake-on-LAN", "fail", 15,
+            "The network chip (%s) says it can't wake the computer with a magic packet." % main["name"],
+            "Check the BIOS first (it can hide the feature). If it's still unsupported, the network port can't do it - "
+            "a different (built-in or PCIe) network card is needed.")
+    elif main.get("wol") in ("on", "off"):
+        add("support", "Network chip supports Wake-on-LAN", "pass", 15, "The network chip can wake the computer up.")
+    else:
+        add("support", "Network chip supports Wake-on-LAN", "unknown", 15,
+            "Couldn't ask the network chip%s." % (" (the ethtool program is missing)" if main.get("wol") == "no-ethtool" else ""),
+            "Press Turn on next to the adapter - it installs what's missing and checks again.")
+    # 3. switched on in the operating system
+    if main and main.get("wol") == "on":
+        add("enabled", "Wake-on-LAN switched on", "pass", 20, "Wake-on-LAN is on for %s." % main["name"])
+    elif main and main.get("wol") in ("no-ethtool", "unknown"):
+        add("enabled", "Wake-on-LAN switched on", "unknown", 20, "Couldn't check whether it's on.",
+            "Press Turn on next to the adapter%s." % (" and click Yes on the Windows permission prompt" if win else ""))
+    elif main and main.get("wol") != "unsupported":
+        add("enabled", "Wake-on-LAN switched on", "fail", 20, "Wake-on-LAN is off for %s." % main["name"],
+            "Press Turn on next to the adapter%s." % (" and click Yes on the Windows permission prompt" if win else ""))
+    # 4. stays on after a reboot (Linux)
+    if not win and main and main.get("wol") == "on":
+        if st.get("persist"):
+            add("persist", "Stays on after a restart", "pass", 5, "It's switched on again every time the computer starts.")
+        else:
+            add("persist", "Stays on after a restart", "warn", 5, "Wake-on-LAN is on now but may switch off after a restart.",
+                "Press Turn on once more - that also keeps it on after restarts.")
+    # 5. the system lets the card wake it
+    if main and main.get("os_wake") == "disabled":
+        add("oswake", "Allowed to wake the computer", "fail", 10, "The system doesn't let the network card wake the computer.",
+            "Press Turn on next to the adapter - it allows this too.")
+    # 6. can sleep, and which kind
+    if not st.get("can_sleep"):
+        add("sleep", "Can go to sleep", "fail", 10, "This computer has no sleep mode that was found.",
+            "Turn on sleep (S3 / Suspend to RAM) in the BIOS, and update the graphics/chipset drivers.")
+    elif st.get("sleep_kind") == "s2idle":
+        add("sleep", "Sleep mode", "warn", 10,
+            "The computer uses the modern 'S0 / s2idle' sleep. Many network chips can't wake it from that%s." % (
+                " - the classic 'deep' sleep is also available" if st.get("deep_available") else ""),
+            ("Switch to deep sleep: in Linux add mem_sleep_default=deep to the kernel options, or" if not win else "If waking doesn't work,") +
+            " look in the BIOS for 'Sleep state' / 'S3' / 'Linux sleep' and pick S3.")
+    else:
+        add("sleep", "Can go to sleep", "pass", 10, "The computer supports sleep%s." % (" (S3 / deep)" if st.get("sleep_kind") == "deep" else ""))
+    # 7. laptops on mains power
+    if pw.get("laptop"):
+        if pw.get("ac") is False:
+            add("ac", "Plugged into power", "fail", 10, "This laptop is running on battery. Most laptops only wake up over the network when plugged in.",
+                "Plug in the charger and leave it plugged in.")
+        else:
+            add("ac", "Plugged into power", "pass", 10, "The laptop is plugged in. Keep it plugged in - most laptops only wake up over the network on mains power.")
+    # 8. a way to wake it from outside the house
+    h = app.secrets.has("WAKE_TOPIC")
+    seen = app.state.get("helper_seen") or 0
+    if h and now() - seen < 7 * 86400:
+        add("remote", "Can be woken from anywhere", "pass", 5, "The wake helper answered %s." % ("today" if now() - seen < 86400 else "this week"))
+    elif h:
+        add("remote", "Can be woken from anywhere", "warn", 5, "A wake helper is set up but hasn't answered a test recently.",
+            "Press Test the helper. If it doesn't answer, check that the helper device is on and online.")
+    else:
+        add("remote", "Can be woken from anywhere", "warn", 5,
+            "Only from home (phone on the Wi-Fi, or your router) - not from Discord or when you're away.",
+            "Set up the wake helper below, or check the router guide (a FRITZ!Box can do it by itself).")
+    # 9. BIOS - can't be read from here
+    proven = (app.state.get("woke_at") or 0) > (app.state.get("slept_at") or 0) > 0 and \
+        not (app.state.get("wake_at") and abs((app.state.get("woke_at") or 0) - app.state["wake_at"]) < 600)
+    if proven:
+        add("bios", "BIOS setting", "pass", 5, "The computer has already woken up from sleep without its alarm clock - the BIOS allows it.")
+    else:
+        add("bios", "BIOS setting", "unknown", 5, "The BIOS setting can't be read from here.",
+            "Test it: Sleep now, then wake it from your phone or router. If nothing happens, turn on 'Wake on LAN' / "
+            "'Power On By PCI-E' and turn off 'ErP' / 'Deep Sleep' in the BIOS.")
+    total = sum(c["weight"] for c in checks)
+    got = sum(c["weight"] * (1 if c["state"] == "pass" else 0.5 if c["state"] in ("warn", "unknown") else 0) for c in checks)
+    score = int(round(100 * got / total)) if total else 0
+    fails = [c for c in checks if c["state"] == "fail"]
+    if fails:
+        verdict = "Won't work yet - fix the red items"
+    elif score >= 90:
+        verdict = "Ready"
+    else:
+        verdict = "Should work - test it once"
+    if fails:
+        score = min(score, 40)              # anything red means it won't wake up yet
+    return {"score": score, "verdict": verdict, "blocking": len(fails), "checks": checks}
 
 
 def wol_target():
@@ -6130,6 +6251,7 @@ class Handler(BaseHTTPRequestHandler):
             "mac": mac, "brd": brd, "ip": ip, "busy": why, "idle_for": max(0, t - app.idle_since),
             "sleeps_at": sleeps_at, "in_window": in_time_window(s.get("sleep_from"), s.get("sleep_to"), t),
             "next_wake": next_wake_at(), "slept_at": app.state.get("slept_at") or 0, "woke_at": app.state.get("woke_at") or 0,
+            "wol_score": wol_score(st),
             "helper": {"paired": app.secrets.has("WAKE_TOPIC"), "last_seen": app.state.get("helper_seen") or 0,
                        "version": app.state.get("helper_version") or "", "bot": bool(s.get("discord_bot"))},
             "ntfy_server": (s.get("ntfy_server") or "https://ntfy.sh").rstrip("/"),
