@@ -39,7 +39,7 @@ import zipfile
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-EASY_VERSION = "1.12.1"
+EASY_VERSION = "1.13.0"
 REPO = "Csabika-dev/beammp-easyserver"
 BEAMMP_REPO = "BeamMP/BeamMP-Server"
 IS_WIN = os.name == "nt"
@@ -3348,7 +3348,7 @@ def ntfy_send(title, message, level="info", click=None):
 
 # ----------------------------------------------------------------------------- in-game tools: /tp and /repair
 TOOLS_MOD = "easyserver_tools.zip"
-TOOLS_DEFAULTS = {"tp": False, "tp_cd": 60, "repair": "free", "repair_cd": 5}
+TOOLS_DEFAULTS = {"tp": False, "tp_cd": 60, "repair": "free", "repair_cd": 5, "suggest": True}
 TOOLS_MODSCRIPT = """-- BeamMP EasyServer: in-game tools (/tp, /repair). Loaded by BeamNG when you join a server that uses it.
 load("easyserverTools")
 setExtensionUnloadMode("easyserverTools", "manual")
@@ -3357,8 +3357,155 @@ TOOLS_CLIENT_LUA = r"""-- BeamMP EasyServer in-game tools (client side).
 -- The server decides everything (who may teleport where, cooldowns); this
 -- only moves or repairs YOUR OWN car when the server tells it to, and turns
 -- off the reset keys while the server has "repair with cooldown" or "no
--- repairs" switched on. It does nothing on other servers or in single player.
+-- repairs" switched on. It also shows the server's chat commands as you type
+-- "/" in the chat. It does nothing on other servers or in single player.
 local M = {}
+
+-- Command suggestions in the BeamMP chat box: the server sends the commands this
+-- player can use; this adds a small list above the chat input (Tab completes).
+local SUGGEST_JS = [==[(function (list) {
+  var S = window.__esSuggest;
+  if (!S) {
+    S = window.__esSuggest = { list: [], rows: [], sel: 0, moved: false, input: null, box: null };
+    var css = document.createElement("style");
+    css.textContent = "#es-suggest{position:fixed;z-index:2147483000;min-width:280px;max-width:560px;background:rgba(18,20,26,.96);" +
+      "border:1px solid rgba(255,255,255,.14);border-radius:6px;padding:4px 0;font:14px/1.4 'Noto Sans',sans-serif;color:#e8e8e8;" +
+      "box-shadow:0 8px 22px rgba(0,0,0,.55);pointer-events:auto}" +
+      "#es-suggest .r{padding:4px 12px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}" +
+      "#es-suggest .r.on{background:rgba(255,102,0,.38)}#es-suggest .c{color:#fff;font-weight:700}" +
+      "#es-suggest .a{color:#ffb070;margin-left:6px}#es-suggest .d{color:#a9a9a9;margin-left:10px}" +
+      "#es-suggest .h{color:#8a8a8a;font-size:11px;padding:3px 12px 1px;border-top:1px solid rgba(255,255,255,.08);margin-top:3px}";
+    document.head.appendChild(css);
+    var isChat = function (el) {
+      return !!el && el.tagName === "INPUT" && (el.id === "chat-input" || (el.classList && el.classList.contains("chat2-message-input")));
+    };
+    var dist = function (a, b) {          // edit distance, a swapped pair counts as one typo
+      if (Math.abs(a.length - b.length) > 2) return 9;
+      var d = [], i, j;
+      for (i = 0; i <= a.length; i++) { d[i] = [i]; }
+      for (j = 0; j <= b.length; j++) { d[0][j] = j; }
+      for (i = 1; i <= a.length; i++) for (j = 1; j <= b.length; j++) {
+        var c = a[i - 1] === b[j - 1] ? 0 : 1;
+        d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + c);
+        if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
+      }
+      return d[a.length][b.length];
+    };
+    S.hide = function () { if (S.box) S.box.style.display = "none"; S.rows = []; S.moved = false; };
+    S.match = function (word) {
+      var w = word.toLowerCase(), pre = [], mid = [], near = [];
+      S.list.forEach(function (x) {
+        if (x.c.indexOf(w) === 0) pre.push(x);
+        else if (w.length > 1 && x.c.indexOf(w) > 0) mid.push(x);
+        else if (w.length > 1) { var k = dist(w, x.c); if (k <= (w.length <= 4 ? 1 : 2)) near.push([k, x]); }
+      });
+      near.sort(function (p, q) { return p[0] - q[0]; });
+      return pre.concat(mid, near.map(function (p) { return p[1]; }));
+    };
+    S.draw = function (input, rows, hintOnly) {
+      if (!S.box) {
+        S.box = document.createElement("div");
+        S.box.id = "es-suggest";
+        S.box.addEventListener("mousedown", function (e) {
+          var r = e.target.closest && e.target.closest(".r");
+          e.preventDefault();
+          if (r && S.input) S.complete(S.input, +r.getAttribute("data-i"));
+        });
+        document.body.appendChild(S.box);
+      }
+      S.box.textContent = "";
+      rows.forEach(function (x, i) {
+        var r = document.createElement("div");
+        r.className = "r" + (!hintOnly && i === S.sel ? " on" : "");
+        r.setAttribute("data-i", i);
+        var c = document.createElement("span"); c.className = "c"; c.textContent = "/" + x.c; r.appendChild(c);
+        if (x.a) { var a = document.createElement("span"); a.className = "a"; a.textContent = x.a; r.appendChild(a); }
+        if (x.d) { var d = document.createElement("span"); d.className = "d"; d.textContent = x.d; r.appendChild(d); }
+        S.box.appendChild(r);
+      });
+      if (!hintOnly) {
+        var h = document.createElement("div"); h.className = "h";
+        h.textContent = "Tab to complete · ↑↓ to choose · Esc to close";
+        S.box.appendChild(h);
+      }
+      var b = input.getBoundingClientRect();
+      S.box.style.display = "block";
+      S.box.style.left = Math.max(4, b.left) + "px";
+      S.box.style.minWidth = Math.max(280, b.width) + "px";
+      if (b.top > S.box.offsetHeight + 12) { S.box.style.top = ""; S.box.style.bottom = (window.innerHeight - b.top + 6) + "px"; }
+      else { S.box.style.bottom = ""; S.box.style.top = (b.bottom + 6) + "px"; }
+    };
+    S.update = function (input) {
+      S.input = input;
+      var v = input.value || "";
+      var m = /^\/([A-Za-z]*)(\s.*)?$/.exec(v);
+      if (!m || !S.list.length) { S.hide(); return; }
+      if (m[2] !== undefined) {                       // already typing the rest: show how to use that command
+        var hit = S.list.filter(function (x) { return x.c === m[1].toLowerCase(); });
+        S.rows = [];
+        if (hit.length) S.draw(input, hit, true); else S.hide();
+        return;
+      }
+      var rows = (m[1] ? S.match(m[1]) : S.list).slice(0, 7);
+      if (!rows.length) { S.hide(); return; }
+      if (rows.length === 1 && rows[0].c === m[1].toLowerCase() && !rows[0].a) { S.hide(); return; }
+      if (S.sel >= rows.length || !S.moved) S.sel = 0;
+      S.rows = rows;
+      S.draw(input, rows, false);
+    };
+    S.complete = function (input, i) {
+      var x = S.rows[i];
+      if (!x) return;
+      var v = "/" + x.c + (x.a ? " " : "");
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, v);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      try { input.setSelectionRange(v.length, v.length); } catch (e) {}
+      input.focus();
+      S.moved = false;
+      S.update(input);
+    };
+    document.addEventListener("input", function (e) { if (isChat(e.target)) { S.moved = false; S.update(e.target); } }, true);
+    document.addEventListener("focusin", function (e) { if (isChat(e.target)) S.update(e.target); }, true);
+    document.addEventListener("focusout", function (e) { if (isChat(e.target)) setTimeout(function () { if (document.activeElement !== e.target) S.hide(); }, 150); }, true);
+    document.addEventListener("keydown", function (e) {
+      if (!isChat(e.target) || !S.box || S.box.style.display === "none") return;
+      var k = e.key;
+      if (k === "Escape") { S.hide(); return; }
+      if (!S.rows.length) return;
+      if (k === "Tab" || (k === "Enter" && S.moved)) {
+        e.preventDefault(); e.stopPropagation(); S.complete(e.target, S.sel);
+      } else if (k === "ArrowDown" || k === "ArrowUp") {
+        e.preventDefault(); e.stopPropagation();
+        S.sel = (S.sel + (k === "ArrowDown" ? 1 : S.rows.length - 1)) % S.rows.length;
+        S.moved = true;
+        S.draw(e.target, S.rows, false);
+      }
+    }, true);
+  }
+  S.list = (Array.isArray(list) ? list : []).filter(function (x) { return x && typeof x.c === "string" && /^[a-z]{1,20}$/.test(x.c); })
+    .map(function (x) { return { c: x.c, a: String(x.a || "").slice(0, 40), d: String(x.d || "").slice(0, 90) }; });
+  if (!S.list.length) S.hide();
+  else if (S.input && document.activeElement === S.input) S.update(S.input);
+})]==]
+local cmdList = "[]"
+local function pushCmds()
+  pcall(function() be:queueJS(SUGGEST_JS .. "(" .. cmdList .. ")") end)
+end
+local function onCmds(data)
+  local ok, d = pcall(jsonDecode, data or "[]")
+  if not ok or type(d) ~= "table" then return end
+  local clean = {}
+  for _, x in ipairs(d) do
+    if type(x) == "table" and type(x.c) == "string" and #x.c <= 20 and x.c:match("^%l+$") then
+      clean[#clean + 1] = { c = x.c, a = tostring(x.a or ""):sub(1, 40), d = tostring(x.d or ""):sub(1, 90) }
+    end
+  end
+  cmdList = #clean > 0 and jsonEncode(clean) or "[]"
+  pushCmds()
+end
+local function clearCmds()
+  if cmdList ~= "[]" then cmdList = "[]" pushCmds() end
+end
 
 local cfg = { tp = false, repair = "free" }
 local FILTER = "easyserver_noreset"
@@ -3423,6 +3570,7 @@ local function register()
   AddEventHandler("esToolsCfg", onCfg)
   AddEventHandler("esTpTo", onTpTo)
   AddEventHandler("esRepair", onRepair)
+  AddEventHandler("esCmds", onCmds)
 end
 
 M.onExtensionLoaded = function() register() end
@@ -3432,8 +3580,9 @@ M.onWorldReadyState = function(state)
     if TriggerServerEvent then TriggerServerEvent("esToolsHello", "") end
   end
 end
-M.onExtensionUnloaded = function() setBlock(false) end
-M.onClientEndMission = function() setBlock(false) end
+M.onUiReady = function() if cmdList ~= "[]" then pushCmds() end end
+M.onExtensionUnloaded = function() setBlock(false) clearCmds() end
+M.onClientEndMission = function() setBlock(false) clearCmds() end
 
 return M
 """
@@ -3465,6 +3614,8 @@ def read_tools(inst=None):
             d["tp"] = v.lower() == "on"
         elif k == "repair" and v in ("free", "cooldown", "off"):
             d["repair"] = v
+        elif k == "suggest":
+            d["suggest"] = v.lower() != "off"
         elif k == "tp_cd" and v.isdigit() and int(v) <= 3600:
             d["tp_cd"] = int(v)
         elif k == "repair_cd" and v.isdigit() and 1 <= int(v) <= 120:
@@ -3475,11 +3626,12 @@ def read_tools(inst=None):
 def write_tools(d, inst=None):
     inst = inst or I()
     shared_write(inst.TOOLS_FILE, "# Managed by the BeamMP EasyServer dashboard (Config -> In-game tools).\n"
-                 "tp=%s\ntp_cd=%d\nrepair=%s\nrepair_cd=%d\n" % ("on" if d["tp"] else "off", d["tp_cd"], d["repair"], d["repair_cd"]))
+                 "tp=%s\ntp_cd=%d\nrepair=%s\nrepair_cd=%d\nsuggest=%s\n" % ("on" if d["tp"] else "off", d["tp_cd"], d["repair"],
+                                                                       d["repair_cd"], "on" if d.get("suggest", True) else "off"))
 
 
 def tools_wanted(d):
-    return bool(d["tp"] or d["repair"] != "free")
+    return bool(d["tp"] or d["repair"] != "free" or d.get("suggest", True))
 
 
 def ensure_tools_mod(inst=None):
@@ -7934,6 +8086,8 @@ class Handler(BaseHTTPRequestHandler):
         d = read_tools()
         if "tp" in b:
             d["tp"] = bool(b["tp"])
+        if "suggest" in b:
+            d["suggest"] = bool(b["suggest"])
         if b.get("repair") in ("free", "cooldown", "off"):
             d["repair"] = b["repair"]
         try:
