@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.13.0 - Command suggestions in the chat
+
+- **Command suggestions**: when players type `/` in the game chat, a list of this server's commands appears above the chat box with what each one does. It narrows down as you type and also finds typos (`/rpeair` shows `/repair`). **Tab** completes, **↑ ↓** choose, **Esc** closes. Admins also see the admin commands. On by default (Config → In-game tools); players get it through the same tiny helper mod as /tp and /repair (about 4.5 KB).
+- **"Did you mean ...?"**: a mistyped command (`/tpacept`, `/hlep`, `/kik`) gets a private hint with the right command instead of being posted in the chat for everyone. Commands that aren't close to any EasyServer command are left alone, so other plugins' commands keep working.
+- **/help** now lists every command that's switched on, one per line with what it does.
+
 ## 1.12.1 - Stay logged in
 
 - **Stay logged in on this device** (login page): your own phone or computer logs in by itself for 30 days after the last visit - also after the dashboard or the computer restarts. On by default in the Android app, off in browsers. Only a fingerprint of each device is stored, never the login itself.
