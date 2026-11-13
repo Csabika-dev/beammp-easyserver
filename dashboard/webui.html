@@ -1179,8 +1179,9 @@ async function loadCfg111() {
   const others = SERVERS.filter(x => x.id !== SERVER);
   let tl = null; try { tl = await api("/api/tools"); } catch (e) {}
   el.innerHTML = `
-    ${tl ? `<div class="card" style="margin-top:16px" id="toolscard"><div class="row"><h2 style="margin:0">In-game tools: teleport &amp; repair</h2><span class="spacer"></span><span class="pill ${tl.installed ? "good" : ""}"><span class="dot"></span>${tl.installed ? "On" : "Off"}</span></div>
-      <p class="small muted">Chat commands players can use. They need a tiny helper mod (${fmtSize(tl.size)}) that players download automatically when they join - EasyServer adds and removes it for you. It only moves or repairs the player's own car when the server allows it.</p>
+    ${tl ? `<div class="card" style="margin-top:16px" id="toolscard"><div class="row"><h2 style="margin:0">In-game tools: commands, teleport &amp; repair</h2><span class="spacer"></span><span class="pill ${tl.installed ? "good" : ""}"><span class="dot"></span>${tl.installed ? "On" : "Off"}</span></div>
+      <p class="small muted">Chat commands players can use. They need a tiny helper mod (${fmtSize(tl.size)}) that players download automatically when they join - EasyServer adds and removes it for you. It only shows this server's commands, and moves or repairs the player's own car when the server allows it.</p>
+      <label class="toggle"><input type="checkbox" id="tl_sug" ${tl.suggest ? "checked" : ""}><span><b>Command suggestions in the chat</b><small>When players type "/" in the chat they see the commands of this server and can press Tab to complete them. A mistyped command gets a "did you mean ...?" answer either way.</small></span></label>
       <label class="toggle"><input type="checkbox" id="tl_tp" ${tl.tp ? "checked" : ""}><span><b>/tp name - teleport to another player</b><small>The other player has to type /tpaccept, so nobody can be followed against their will</small></span></label>
       <label class="f" style="max-width:260px"><span>Wait between teleports (seconds)</span><input type="number" id="tl_tpcd" min="0" max="3600" value="${esc(tl.tp_cd)}"></label>
       <label class="f" style="max-width:420px"><span>Repairing cars</span><select id="tl_rep">
@@ -1209,7 +1210,7 @@ async function loadCfg111() {
       <div id="h_out"></div>
     </div>`;
   if ($("#tl_save")) $("#tl_save").onclick = async () => {
-    try { const r = await api("/api/tools", { json: { tp: $("#tl_tp").checked, tp_cd: $("#tl_tpcd").value, repair: $("#tl_rep").value, repair_cd: $("#tl_repcd").value } }); toast(r.note, 8000); loadCfg111(); } catch (e) { toast(e.message, 6000); }
+    try { const r = await api("/api/tools", { json: { suggest: $("#tl_sug").checked, tp: $("#tl_tp").checked, tp_cd: $("#tl_tpcd").value, repair: $("#tl_rep").value, repair_cd: $("#tl_repcd").value } }); toast(r.note, 8000); loadCfg111(); } catch (e) { toast(e.message, 6000); }
   };
   let rows = tm.items.map(x => ({ ...x }));
   const drawTm = () => {
