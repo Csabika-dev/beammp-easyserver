@@ -277,6 +277,8 @@ In the game:
 - `/repair` (or `/fix`) repairs your car in place.
 - `/help` lists the commands that are on.
 
+**Command suggestions:** when a player types `/` in the chat, the commands of your server appear above the chat box - **Tab** completes, **↑ ↓** choose. Typos get a "did you mean ...?" hint. On by default; switch it off under **Config → In-game tools** (it uses the same tiny helper mod).
+
 The helper only moves or repairs the player's own car, and only when the server says so. Turning every tool off removes it again.
 </details>
 
