@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Help &amp; community - BeamMP EasyServer</title>
+<meta name="description" content="Answers to the most common BeamMP EasyServer questions: friends can't join, port forwarding, mods, slow joining, forgotten password, Discord bot, crashes. Ask the community if yours isn't here.">
+<meta property="og:title" content="BeamMP EasyServer - Help &amp; community">
+<meta property="og:description" content="Common questions with ready answers, and a community forum for everything else.">
+<meta property="og:image" content="https://csabika-dev.github.io/beammp-easyserver/img/overview-dark.webp">
+<meta name="color-scheme" content="light dark">
+<style>
+:root{--bg:#f6f7f9;--bg2:#fff;--ink:#14161b;--mute:#5b6370;--line:#e2e5ea;--accent:#2a78d6;--accent2:#e3eefb;--good:#127a3a;--good2:#e2f4e8;--shadow:0 18px 50px -20px rgba(20,30,50,.35)}
+@media (prefers-color-scheme:dark){:root{--bg:#0e1014;--bg2:#171a20;--ink:#eceff3;--mute:#9aa3ae;--line:#262a32;--accent:#3d8bea;--accent2:#16263b;--good:#4cc97a;--good2:#132a1c;--shadow:0 18px 60px -18px rgba(0,0,0,.8)}}
+*{box-sizing:border-box}html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--accent)}
+.wrap{max-width:900px;margin:0 auto;padding:0 22px}
+nav{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+nav .wrap{display:flex;align-items:center;gap:18px;height:60px;max-width:1120px}
+.logo{display:flex;align-items:center;gap:10px;font-weight:700;color:var(--ink);text-decoration:none}
+.logo i{width:30px;height:30px;border-radius:8px;background:var(--accent);color:#fff;display:grid;place-items:center;font-style:normal;font-weight:800}
+nav .links{margin-left:auto;display:flex;gap:18px;font-size:15px}nav .links a{color:var(--mute);text-decoration:none}nav .links a:hover,nav .links a.on{color:var(--ink)}
+@media (max-width:640px){nav .links a.opt{display:none}}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:11px 18px;border-radius:10px;font-weight:600;text-decoration:none;border:1px solid var(--line);color:var(--ink);background:var(--bg2);font-size:15.5px}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}.btn:hover{filter:brightness(1.08)}
+header{padding:54px 0 26px;text-align:center}
+h1{font-size:clamp(30px,4.6vw,46px);line-height:1.1;margin:0 0 12px;letter-spacing:-.02em}
+.lead{color:var(--mute);margin:0 auto 26px;max-width:620px}
+.search{position:relative;max-width:620px;margin:0 auto}
+.search input{width:100%;font:inherit;padding:14px 16px 14px 46px;border-radius:12px;border:1px solid var(--line);background:var(--bg2);color:var(--ink);box-shadow:var(--shadow)}
+.search input:focus{outline:2px solid var(--accent);outline-offset:1px}
+.search svg{position:absolute;left:16px;top:50%;transform:translateY(-50%);color:var(--mute)}
+.chips{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin:22px 0 6px}
+.chips button{font:inherit;font-size:14px;padding:6px 14px;border-radius:99px;border:1px solid var(--line);background:var(--bg2);color:var(--mute);cursor:pointer}
+.chips button.on{background:var(--accent2);color:var(--accent);border-color:transparent;font-weight:600}
+.chips button span{opacity:.7;margin-left:4px}
+.board{background:var(--bg2);border:1px solid var(--line);border-radius:14px;overflow:hidden;margin:18px 0 10px}
+.board-head{display:flex;justify-content:space-between;align-items:center;padding:12px 18px;border-bottom:1px solid var(--line);font-size:14px;color:var(--mute)}
+details.t{border-bottom:1px solid var(--line);scroll-margin-top:72px}details.t:last-of-type{border-bottom:0}
+details.t summary{list-style:none;cursor:pointer;display:grid;grid-template-columns:38px 1fr auto;gap:12px;align-items:center;padding:14px 18px}
+details.t summary::-webkit-details-marker{display:none}
+details.t summary:hover{background:color-mix(in srgb,var(--accent2) 45%,transparent)}
+.av{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;background:var(--accent2);font-size:18px}
+.q{font-weight:600;line-height:1.35}
+.meta{display:block;font-weight:400;font-size:13.5px;color:var(--mute);margin-top:2px}
+.tag{display:inline-block;font-size:12px;padding:1px 8px;border-radius:99px;border:1px solid var(--line);margin-right:6px}
+.ok{font-size:12.5px;font-weight:600;color:var(--good);background:var(--good2);padding:3px 10px;border-radius:99px;white-space:nowrap}
+@media (max-width:560px){.ok,.board-head .legend{display:none}details.t summary{grid-template-columns:34px 1fr}}
+.answer{margin:0 18px 18px 68px;padding:14px 16px;border-left:3px solid var(--good);background:var(--bg);border-radius:0 10px 10px 0;font-size:16px}
+@media (max-width:560px){.answer{margin-left:18px}}
+.answer .by{display:flex;align-items:center;gap:8px;font-size:13.5px;color:var(--mute);margin-bottom:6px}
+.answer .by b{color:var(--ink)}.answer .by i{font-style:normal;width:22px;height:22px;border-radius:6px;background:var(--accent);color:#fff;display:grid;place-items:center;font-size:12px;font-weight:800}
+.answer p{margin:6px 0}.answer ol,.answer ul{margin:6px 0;padding-left:22px}.answer li{margin:3px 0}
+.answer code{font:14px ui-monospace,Menlo,Consolas,monospace;background:var(--bg2);border:1px solid var(--line);border-radius:6px;padding:1px 6px}
+.tools{display:flex;gap:14px;margin-top:10px;font-size:13.5px}
+.tools button{font:inherit;background:none;border:0;padding:0;color:var(--accent);cursor:pointer}
+.empty{padding:34px 18px;text-align:center;color:var(--mute)}
+mark{background:color-mix(in srgb,#f5c542 45%,transparent);color:inherit;border-radius:3px}
+.ask{display:grid;grid-template-columns:1fr auto;gap:18px;align-items:center;background:var(--accent2);border-radius:14px;padding:22px 24px;margin:26px 0 0}
+@media (max-width:640px){.ask{grid-template-columns:1fr}}
+.ask h3{margin:0 0 4px;font-size:20px}.ask p{margin:0;color:var(--mute);font-size:15.5px}
+.ask .cta{display:flex;gap:10px;flex-wrap:wrap}
+footer{padding:46px 0 60px;color:var(--mute);font-size:14px;text-align:center}
+</style>
+</head>
+<body>
+<nav><div class="wrap">
+  <a class="logo" href="./"><i>B</i>BeamMP EasyServer</a>
+  <div class="links"><a class="opt" href="./#start">Get started</a><a class="opt" href="./#features">Features</a><a class="on" href="help.html">Help</a>
+    <a href="https://github.com/Csabika-dev/beammp-easyserver">GitHub</a></div>
+</div></nav>
+
+<header><div class="wrap">
+  <h1>Help &amp; community</h1>
+  <p class="lead">The questions server owners ask most, with answers. Not here? Ask in the community forum.</p>
+  <div class="search">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <input id="q" type="search" placeholder="Search, e.g. &quot;friends can't join&quot; or &quot;mods&quot;" autocomplete="off" aria-label="Search questions">
+  </div>
+  <div class="chips" id="chips"></div>
+</div></header>
+
+<main class="wrap">
+<div class="board">
+  <div class="board-head"><span id="count"></span><span class="legend">✓ = answered by the EasyServer team</span></div>
+
+  <!-- ===== Getting started ===== -->
+  <details class="t" id="what-do-i-need" data-cat="start"><summary><span class="av">🧰</span><span class="q">What do I need to host a server?<span class="meta"><span class="tag">Getting started</span></span></span><span class="ok">✓ Answered</span></summary>
+    <div class="answer"><div class="by"><i>B</i><b>EasyServer team</b></div>
+      <ul><li>A computer that stays on while you play: any 64-bit Windows 10/11 PC, or Linux (Ubuntu, Linux Mint, Debian, also a Raspberry Pi 4/5 with a 64-bit system). An old laptop is fine for a group of friends.</li>
+        <li>A free BeamMP <b>AuthKey</b> (see the next question).</li>
+        <li>Your own copy of BeamNG.drive to play. The server itself is free.</li></ul>
+      <p>Upload speed matters more than the processor: every player downloads your mods from you.</p></div></details>
+
+  <details class="t" id="authkey" data-cat="start"><summary><span class="av">🔑</span><span class="q">Where do I get the AuthKey?<span class="meta"><span class="tag">Getting started</span></span></span><span class="ok">✓ Answered</span></summary>
+    <div class="answer"><div class="by"><i>B</i><b>EasyServer team</b></div>
+      <ol><li>Go to <a href="https://keymaster.beammp.com">keymaster.beammp.com</a> and log in with Discord.</li>
+        <li>Click <b>Keys</b>, then <b>+</b>, and give it any name.</li>
+        <li>Copy the key and paste it into the installer, or later under <b>Config → AuthKey</b>.</li></ol>
+      <p>Without a key the server still works on your home network, it just isn't in the public server list. One key per public server.</p></div></details>
+
+  <details class="t" id="windows-or-linux" data-cat="start"><summary><span class="av">🖥️</span><span class="q">Should I use Windows or Linux?<span class="meta"><span class="tag">Getting started</span></span></span><span class="ok">✓ Answered</span></summary>
+    <div class="answer"><div class="by"><i>B</i><b>EasyServer team</b></div>
+      <p><b>Playing on the same PC you host on?</b> Windows is the easiest: download the zip, double-click <b>Install-BeamMP-Server.bat</b>.</p>
+      <p><b>A spare computer just for the server?</b> Linux is better. The server runs in the background, starts by itself when the computer boots, restarts after a crash, and with <b>laptop mode</b> keeps running with the lid closed. One command installs everything.</p></div></details>
+
+  <details class="t" id="update" data-cat="start"><summary><span class="av">⬆️</span><span class="q">How do I update EasyServer and the BeamMP server?<span class="meta"><span class="tag">Getting started</span></span></span><span class="ok">✓ Answered</span></summary>
+    <div class="answer"><div class="by"><i>B</i><b>EasyServer team</b></div>
+      <ul><li><b>EasyServer itself:</b> the dashboard's <b>Updates</b> page. On Windows you can also run the newest installer over the old one; your settings are kept.</li>
+        <li><b>The BeamMP server:</b> <b>Config → Restarts &amp; updates → install BeamMP updates</b> updates it automatically at the scheduled restart. By hand: <code>beammp update</code> on Linux, <b>Update-BeamMP-Server.bat</b> on Windows.</li></ul></div></details>
+
+  <!-- ===== Joining ===== -->
+  <details class="t" id="not-in-server-list" data-cat="join"><summary><span class="av">🔍</span><span class="q">My server doesn't show up in the BeamMP server list<span class="meta"><span class="tag">Joining &amp; network</span></span></span><span class="ok">✓ Answered</span></summary>
+    <div class="answer"><div class="by"><i>B</i><b>EasyServer team</b></div>
+      <ol><li><b>Config → AuthKey</b> must be filled in.</li>
+        <li><b>Config → Private</b> must be off. The "Most secure" and "Friends only" presets hide the server on purpose.</li>
+        <li>The port must be reachable from the internet (see the next question).</li>
+        <li>Give it a minute or two after starting.</li></ol>
+      <p><b>Health → Check again</b> checks all of this and says which one is wrong.</p></div></details>
+
+  <details class="t" id="friends-cant-join" data-cat="join"><summary><span class="av">🌍</span><span class="q">Friends on my Wi-Fi can join, but friends outside my home can't<span class="meta"><span class="tag">Joining &amp; network</span> most asked</span></span><span class="ok">✓ Answered</span></summary>
+    <div class="answer"><div class="by"><i>B</i><b>EasyServer team</b></div>
+      <p>Your router has to let them in. This is a one-time setting:</p>
+      <ol><li>In your router, give the server computer a fixed address (often called <i>DHCP reservation</i> or <i>static lease</i>).</li>
+        <li><b>Forward port 30814, TCP and UDP</b>, to that computer. Search for "<i>your router model</i> port forwarding" for the exact menu.</li>
+        <li>In the dashboard: <b>Health → Full check</b>. "Reachable from the internet" should be green.</li></ol>
+      <p>Still red? Some internet providers share one address between many homes (CGNAT), so port forwarding can't work. The Health page tells you when that's the case: ask your provider for a public IPv4 address, or use a relay (<b>Settings → Hide your IP</b>).</p></div></details>
+
+  <details class="t" id="one-player-cant-join" data-cat="join"><summary><span class="av">🚫</span><span class="q">One specific player can't join<span class="meta"><span class="tag">Joining &amp; network</span></span></span><span class="ok">✓ Answered</span></summary>
+    <div class="answer"><div class="by"><i>B</i><b>EasyServer team</b></div>
+      <p><b>Health → Someone can't join?</b> → type their BeamMP name → <b>Check</b>. It reads their last attempt and says why it failed: banned, not on the invite list, maintenance, guests blocked, anti-bot code, too many players from one connection, server full, and so on, with the fix.</p>
+      <p>Refused players also show up under <b>Config → Who can join → Recently refused</b> with a <b>+ allow</b> button.</p></div></details>
+
+  <details class="t" id="password" data-cat="join"><summary><span class="av">🔒</span><span class="q">How do I put a password on my server / make it friends-only?<span class="meta"><span class="tag">Joining &amp; network</span></span></span><span class="ok">✓ Answered</span></summary>
+    <div class="answer"><div class="by"><i>B</i><b>EasyServer team</b></div>
+      <p>BeamMP has no join password, so EasyServer uses an <b>invite list</b> instead:</p>
+      <ol><li><b>Config → Who can join</b>: turn on the list and type your friends' BeamMP usernames, one per line.</li>
+        <li><b>Save list</b>. It works right away, no restart.</li></ol>
+      <p>Everyone else gets an "invite-only" message. The quickest way is the <b>Most secure</b> or <b>Friends only</b> preset under <b>Config → Security presets</b>. With the Discord bot: <code>/whitelist add name</code>.</p></div></details>
+
+  <details class="t" id="ip-changes" data-cat="join"><summary><span class="av">🔁</span><span class="q">My home IP address keeps changing<span class="meta"><span class="tag">Joining &amp; network</span></span></span><span class="ok">✓ Answered</span></summary>
+    <div class="answer"><div class="by"><i>B</i><b>EasyServer team</b></div>
+      <p>Set up a free fixed name: <b>Settings → Fixed address (DuckDNS)</b>. Friends then connect to <code>yourname.duckdns.org</code>, and it keeps working when the address changes. Public servers don't need this: the server list always has the current address.</p></div></details>
+
+  <details class="t" id="hide-ip" data-cat="join"><summary><span class="av">🛡️</span><span class="q">Can players see my home IP? What about DDoS?<span class="meta"><span class="tag">Joining &amp; network</span></span></span><span class="ok">✓ Answered</span></summary>
+    <div class="answer"><div class="by"><i>B</i><b>EasyServer team</b></div>
+      <p>Players connect to your server, so yes, they can find the address, like with any self-hosted game server. If that worries you, <b>Settings → Hide your IP</b> sends players through a relay, and flood protection is part of the <b>Most secure</b> and <b>Public but safe</b> presets. See <a href="https://github.com/Csabika-dev/beammp-easyserver/blob/main/PROTECT-YOUR-IP.md">Protect your IP</a>.</p></div></details>
+
+  <!-- ===== Mods ===== -->
+  <details class="t" id="add-mods" data-cat="mods"><summary><span class="av">📦</span><span class="q">How do I add mods?<span class="meta"><span class="tag">Mods &amp; maps</span></span></span><span class="ok">✓ Answered</span></summary>
+    <div class="answer"><div class="by"><i>B</i><b>EasyServer team</b></div>
+      <ol><li>Open <b>Mods</b> in the dashboard and drag the mod <b>.zip</b> files onto the page.</li>
+        <li>Each one is virus-checked first. The server restarts about 15 seconds later (on Windows, press Restart). That disconnects players, so add mods when it's quiet.</li>
+        <li>Map mods get a <b>map:</b> badge. Click <b>Use map</b> to play it.</li></ol>
+      <p>Players don't install anything: BeamMP downloads the mods for them when they join. Also possible: the <b>Drop BeamMP Mods Here</b> desktop icon (Windows), the <code>BeamMP-Mods</code> folder or <code>beammp addmod file.zip</code> (Linux).</p></div></details>
+
+  <details class="t" id="slow-joining" data-cat="mods"><summary><span class="av">🐢</span><span class="q">Joining takes forever because of the mod download<span class="meta"><span class="tag">Mods &amp; maps</span></span></span><span class="ok">✓ Answered</span></summary>
+    <div class="answer"><div class="by"><i>B</i><b>EasyServer team</b></div>
+      <ul><li>Turn on <b>Light mode</b> on the Mods page: players only download the map that's being played. Other map mods come back by themselves when you switch to their map.</li>
+        <li>Remove mods nobody uses. The card at the top of the Mods page shows the total download.</li>
+        <li>Friends on slow internet can get a <b>modpack</b> (Mods → Modpack) and copy the files into <code>Documents\BeamNG.drive\mods\multiplayer</code> before joining.</li></ul>
+      <p>Your upload speed is the limit here, so a big modpack is slow on any home connection.</p></div></details>
+
+  <details class="t" id="mod-blocked" data-cat="mods"><summary><span class="av">🦠</span><span class="q">A mod was blocked by the virus check. Is it really dangerous?<span class="meta"><span class="tag">Mods &amp; maps</span></span></span><span class="ok">✓ Answered</span></summary>
+    <div class="answer"><div class="by"><i>B</i><b>EasyServer team</b></div>
+      <p>EasyServer blocks mods that contain programs, disguised files or zip bombs, or that Microsoft Defender, ClamAV or VirusTotal flag. A normal BeamNG mod is only car, map and script files, so a blocked mod contains something a mod shouldn't. The reason is shown next to it.</p>
+      <p>Blocked files never reach the server or your players. Download the mod again from the official BeamNG repository instead of a reupload site.</p></div></details>
+
+  <details class="t" id="change-map" data-cat="mods"><summary><span class="av">🗺️</span><span class="q">How do I change the map, or let players vote?<span class="meta"><span class="tag">Mods &amp; maps</span></span></span><span class="ok">✓ Answered</span></summary>
+    <div class="answer"><div class="by"><i>B</i><b>EasyServer team</b></div>
+      <ul><li><b>Now:</b> <b>Overview → Map</b>, pick one, confirm. The server restarts on the new map.</li>
+        <li><b>Vote:</b> <b>Config → Map vote</b>, tick the allowed maps. Players type <code>/vote</code> in the game chat.</li>
+        <li><b>Automatically:</b> <b>Config → Map rotation</b> (every 1-24 hours) or <b>Config → Events</b> ("Friday drift night").</li></ul></div></details>
+
+  <!-- ===== Dashboard ===== -->
+  <details class="t" id="forgot-password" data-cat="dash"><summary><span class="av">🔐</span><span class="q">I forgot the dashboard password / lost my phone for two-step login<span class="meta"><span class="tag">Dashboard &amp; login</span></span></span><span class="ok">✓ Answered</span></summary>
+    <div class="answer"><div class="by"><i>B</i><b>EasyServer team</b></div>
+      <ul><li><b>Windows:</b> double-click <b>Reset-Dashboard-Login.bat</b> in the EasyServer folder.</li>
+        <li><b>Linux:</b> <code>sudo beammp reset-login</code></li></ul>
+      <p>Then open the dashboard <b>on the server computer</b> and choose a new password. Two-step login is turned off, so set it up again with your new phone.</p></div></details>
+
+  <details class="t" id="connection-reset" data-cat="dash"><summary><span class="av">⚠️</span><span class="q">The browser says "connection reset" or "not secure"<span class="meta"><span class="tag">Dashboard &amp; login</span></span></span><span class="ok">✓ Answered</span></summary>
+    <div class="answer"><div class="by"><i>B</i><b>EasyServer team</b></div>
+      <p><b>"Connection reset":</b> HTTPS is on, but you opened an <code>http://</code> address. Use <code>https://</code>, or update to 1.12.1 or newer, which sends you there automatically.</p>
+      <p><b>"Not secure" / certificate warning:</b> normal the first time. Your dashboard makes its own certificate, so the browser doesn't know it yet. Compare the fingerprint shown in <b>Settings</b> with the one in the browser warning, then continue. The Android app remembers it for you.</p></div></details>
+
+  <details class="t" id="phone" data-cat="dash"><summary><span class="av">📱</span><span class="q">Can I manage the server from my phone, or from outside my home?<span class="meta"><span class="tag">Dashboard &amp; login</span></span></span><span class="ok">✓ Answered</span></summary>
+    <div class="answer"><div class="by"><i>B</i><b>EasyServer team</b></div>
+      <p><b>At home:</b> open <code>http://&lt;server-ip&gt;:30815</code> on your phone, or install the Android app (<b>BeamMP-EasyServer.apk</b> from the <a href="https://github.com/Csabika-dev/beammp-easyserver/releases/latest">latest release</a>) and scan the QR code under <b>Settings → Phone app</b>. iPhone: Safari → Share → Add to Home Screen.</p>
+      <p><b>From anywhere:</b> turn on HTTPS and two-step login, use a password of 12+ characters, then <b>Settings → Access from the internet</b> and forward port <b>30815 (TCP)</b>.</p></div></details>
+
+  <details class="t" id="stay-logged-in" data-cat="dash"><summary><span class="av">✅</span><span class="q">Can it remember my password so I don't log in every time?<span class="meta"><span class="tag">Dashboard &amp; login</span></span></span><span class="ok">✓ Answered</span></summary>
+    <div class="answer"><div class="by"><i>B</i><b>EasyServer team</b></div>
+      <p>Yes (version 1.12.1 and newer). Turn on <b>Stay logged in on this device</b> on the login page. That device then logs in by itself for 30 days after the last visit, also after restarts. Your browser's password manager also offers to save the password.</p>
+      <p>Lost a phone? <b>Settings → Remembered devices → Forget</b>.</p></div></details>
+
+  <details class="t" id="team" data-cat="dash"><summary><span class="av">👥</span><span class="q">How do I give friends access to help moderate?<span class="meta"><span class="tag">Dashboard &amp; login</span></span></span><span class="ok">✓ Answered</span></summary>
+    <div class="answer"><div class="by"><i>B</i><b>EasyServer team</b></div>
+      <p><b>Settings → Users &amp; roles</b>: name, role, password → <b>Add</b>.</p>
+      <ul><li><b>Viewer</b>: look, change nothing</li><li><b>Moderator</b>: kick, mute, ban, invite list, restart, maintenance</li><li><b>Admin</b>: everything except users, passwords and internet access</li></ul>
+      <p>For in-game moderation only, add their BeamMP names under <b>Config → Moderation &amp; anti-bot → Admins</b>. They can then use <code>/kick</code>, <code>/ban</code> and <code>/mute</code> in the game chat.</p></div></details>
+
+  <!-- ===== Discord ===== -->
+  <details class="t" id="discord-bot" data-cat="discord"><summary><span class="av">🤖</span><span class="q">How do I set up the Discord bot?<span class="meta"><span class="tag">Discord &amp; alerts</span></span></span><span class="ok">✓ Answered</span></summary>
+    <div class="answer"><div class="by"><i>B</i><b>EasyServer team</b></div>
+      <ol><li><a href="https://discord.com/developers/applications">discord.com/developers/applications</a> → <b>New Application</b>.</li>
+        <li><b>Installation</b> → Install Link: <b>None</b> → save.</li>
+        <li><b>Bot</b> → turn <b>Public Bot</b> off and <b>Message Content Intent</b> on (for the chat bridge) → <b>Reset Token</b> → copy.</li>
+        <li>Dashboard: <b>Settings → Discord bot</b> → paste the token, turn it on, <b>Save</b>. When it says <b>Online</b>, click <b>Add the bot to your Discord</b>.</li>
+        <li>Type <code>/status</code> in Discord.</li></ol>
+      <p>Never share the bot token with anyone. If it leaks, press Reset Token again.</p></div></details>
+
+  <details class="t" id="slash-commands" data-cat="discord"><summary><span class="av">⌨️</span><span class="q">The bot is online but the slash commands don't show up<span class="meta"><span class="tag">Discord &amp; alerts</span></span></span><span class="ok">✓ Answered</span></summary>
+    <div class="answer"><div class="by"><i>B</i><b>EasyServer team</b></div>
+      <ul><li>New commands can take a minute. Restart Discord (Ctrl+R on PC).</li>
+        <li>Check <b>Settings → Discord bot → Discord server the bot answers in</b> is set to your server.</li>
+        <li><code>/start</code>, <code>/stop</code>, <code>/restart</code> and <code>/whitelist</code> only appear for people with <b>Manage Server</b>, or the Discord users you allowed.</li></ul></div></details>
+
+  <details class="t" id="alerts" data-cat="discord"><summary><span class="av">🔔</span><span class="q">Can I get a notification when the server crashes or someone joins?<span class="meta"><span class="tag">Discord &amp; alerts</span></span></span><span class="ok">✓ Answered</span></summary>
+    <div class="answer"><div class="by"><i>B</i><b>EasyServer team</b></div>
+      <p>Yes, on your phone (free <b>ntfy</b> app, <b>Settings → Phone app</b>), in Discord, Telegram, Slack and other apps, or by email. Choose what you hear about under <b>Notify me about</b>. <b>Config → Join alerts</b> posts when chosen players join.</p></div></details>
+
+  <!-- ===== Problems ===== -->
+  <details class="t" id="crash-lag" data-cat="trouble"><summary><span class="av">💥</span><span class="q">The server keeps crashing or lagging<span class="meta"><span class="tag">Problems</span></span></span><span class="ok">✓ Answered</span></summary>
+    <div class="answer"><div class="by"><i>B</i><b>EasyServer team</b></div>
+      <ol><li><b>Logs → Explain the whole log</b> lists every error in plain English, including broken mods and running out of memory.</li>
+        <li><b>Health</b> shows memory and disk, and <b>Settings → Computer load</b> has 24-hour graphs.</li>
+        <li>On an older computer, use the <b>Weak computer</b> preset, lower Max cars and turn on light mode.</li></ol>
+      <p>A crashed server restarts by itself, and you're told if crash notifications are on.</p></div></details>
+
+  <details class="t" id="undo" data-cat="trouble"><summary><span class="av">↩️</span><span class="q">I changed a setting and now something is broken<span class="meta"><span class="tag">Problems</span></span></span><span class="ok">✓ Answered</span></summary>
+    <div class="answer"><div class="by"><i>B</i><b>EasyServer team</b></div>
+      <p><b>Config → What changed?</b> keeps the last 40 versions of your config, with who changed what. <b>Compare with now</b> shows the difference, and <b>Restore</b> goes back. Your AuthKey is kept, and you can undo the undo.</p></div></details>
+
+  <details class="t" id="sleep" data-cat="trouble"><summary><span class="av">🌙</span><span class="q">Do I have to keep the computer on 24/7?<span class="meta"><span class="tag">Problems</span></span></span><span class="ok">✓ Answered</span></summary>
+    <div class="answer"><div class="by"><i>B</i><b>EasyServer team</b></div>
+      <p>No. <b>Settings → Sleep &amp; wake-up</b> puts it to sleep when nobody has played for a while and wakes it before events. With <b>Wake-on-LAN</b> (network cable needed) friends can wake it with <code>/start</code> in Discord or the <b>Wake up</b> button in the app. The compatibility score lists what still has to be set.</p></div></details>
+
+  <details class="t" id="new-computer" data-cat="trouble"><summary><span class="av">💾</span><span class="q">How do I move my server to a new computer?<span class="meta"><span class="tag">Problems</span></span></span><span class="ok">✓ Answered</span></summary>
+    <div class="answer"><div class="by"><i>B</i><b>EasyServer team</b></div>
+      <ol><li>Old computer: <b>Settings → Backup / move to another computer → Export settings + mods</b>.</li>
+        <li>Install EasyServer on the new one, then <b>Import…</b> that file.</li>
+        <li>Paste your AuthKey again: keys and passwords are never put in exports.</li></ol>
+      <p>Nightly backups are on by default, and the last 7 can be downloaded any time.</p></div></details>
+
+  <details class="t" id="get-help" data-cat="trouble"><summary><span class="av">🙋</span><span class="q">My problem isn't here. How do I get help?<span class="meta"><span class="tag">Problems</span></span></span><span class="ok">✓ Answered</span></summary>
+    <div class="answer"><div class="by"><i>B</i><b>EasyServer team</b></div>
+      <ol><li><b>Health → Download diagnostic report</b>. Keys, passwords and addresses are removed from it.</li>
+        <li><a href="https://github.com/Csabika-dev/beammp-easyserver/discussions/new?category=q-a">Ask in the community forum</a> and attach the report. Bugs go to <a href="https://github.com/Csabika-dev/beammp-easyserver/issues/new/choose">issues</a>.</li></ol>
+      <p>Found a security problem? Please use <a href="https://github.com/Csabika-dev/beammp-easyserver/security/advisories/new">private reporting</a> instead of posting it publicly.</p></div></details>
+
+  <div class="empty" id="empty" hidden>No answer matches that yet. <a href="https://github.com/Csabika-dev/beammp-easyserver/discussions/new?category=q-a">Ask it in the forum</a> and it may end up here.</div>
+</div>
+
+<div class="ask">
+  <div><h3>Didn't find your answer?</h3>
+    <p>Ask the community. Search old threads, share ideas, or show off your server. You only need a free GitHub account.</p></div>
+  <div class="cta"><a class="btn primary" href="https://github.com/Csabika-dev/beammp-easyserver/discussions/new?category=q-a">Ask a question</a>
+    <a class="btn" href="https://github.com/Csabika-dev/beammp-easyserver/discussions">Open the forum</a></div>
+</div>
+</main>
+
+<footer><div class="wrap">BeamMP EasyServer · MIT license · Not affiliated with the BeamMP team or BeamNG GmbH.</div></footer>
+
+<script>
+const CATS = {all: "All", start: "Getting started", join: "Joining & network", mods: "Mods & maps", dash: "Dashboard & login", discord: "Discord & alerts", trouble: "Problems"};
+const threads = [...document.querySelectorAll("details.t")];
+threads.forEach(t => { t.dataset.text = t.textContent.toLowerCase(); });
+let cat = "all";
+const chips = document.getElementById("chips"), q = document.getElementById("q");
+for (const [k, label] of Object.entries(CATS)) {
+  const n = k === "all" ? threads.length : threads.filter(t => t.dataset.cat === k).length;
+  const b = document.createElement("button");
+  b.innerHTML = label.replace(/&/g, "&amp;") + "<span>" + n + "</span>";
+  b.dataset.cat = k; if (k === "all") b.classList.add("on");
+  b.onclick = () => { cat = k; chips.querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b)); apply(); };
+  chips.appendChild(b);
+}
+// Remove old highlights, then mark the search words inside the question titles.
+function highlight(el, words) {
+  el.querySelectorAll("mark").forEach(m => m.replaceWith(m.textContent));
+  el.normalize();
+  if (!words.length) return;
+  const re = new RegExp("(" + words.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")", "gi");
+  const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const nodes = []; while (walk.nextNode()) nodes.push(walk.currentNode);
+  nodes.forEach(n => {
+    if (!re.test(n.data)) return; re.lastIndex = 0;
+    const span = document.createElement("span");
+    n.data.split(re).forEach((part, i) => {
+      if (i % 2) { const m = document.createElement("mark"); m.textContent = part; span.appendChild(m); }
+      else span.appendChild(document.createTextNode(part));
+    });
+    n.replaceWith(...span.childNodes);
+  });
+}
+function apply() {
+  const words = q.value.toLowerCase().split(/\s+/).filter(w => w.length > 1);
+  let shown = 0;
+  threads.forEach(t => {
+    const ok = (cat === "all" || t.dataset.cat === cat) && words.every(w => t.dataset.text.includes(w));
+    t.hidden = !ok; if (ok) shown++;
+    highlight(t.querySelector(".q"), ok ? words : []);
+  });
+  document.getElementById("count").textContent = shown + (shown === 1 ? " question" : " questions");
+  document.getElementById("empty").hidden = shown > 0;
+}
+q.addEventListener("input", apply);
+// "Copy link" under every answer, and open the thread a shared link points to.
+threads.forEach(t => {
+  const tools = document.createElement("div"); tools.className = "tools";
+  const b = document.createElement("button"); b.type = "button"; b.textContent = "🔗 Copy link";
+  b.onclick = () => {
+    const url = location.href.split("#")[0] + "#" + t.id;
+    (navigator.clipboard ? navigator.clipboard.writeText(url) : Promise.reject()).then(
+      () => { b.textContent = "✓ Link copied"; setTimeout(() => b.textContent = "🔗 Copy link", 1800); },
+      () => { history.replaceState(null, "", "#" + t.id); });
+  };
+  tools.appendChild(b); t.querySelector(".answer").appendChild(tools);
+  t.addEventListener("toggle", () => { if (t.open) history.replaceState(null, "", "#" + t.id); });
+});
+function openHash() {
+  const t = location.hash && document.getElementById(decodeURIComponent(location.hash.slice(1)));
+  if (t && t.matches("details.t")) { t.open = true; t.scrollIntoView({block: "start"}); }
+}
+openHash(); window.addEventListener("hashchange", openHash);
+apply();
+</script>
+</body>
+</html>
