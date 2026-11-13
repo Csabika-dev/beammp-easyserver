@@ -110,6 +110,69 @@ test("chat filter hides blocked words", function()
   eq(esOnChat(2, "Bob", "you badword"), 1)
 end)
 
+-- ------------------------------------------------------------------ command suggestions
+local function sent(id, ev)
+  for i = #client, 1, -1 do if client[i].id == id and client[i].ev == ev then return client[i].data end end
+end
+
+test("players get their command list when they join", function()
+  esOnJoined(1)
+  local data = sent(1, "esCmds")
+  assert(data and data:find('"c":"tp"', 1, true), "no /tp in the list: " .. tostring(data))
+  assert(data:find('"c":"repair"', 1, true), "no /repair")
+  assert(not data:find('"c":"kick"', 1, true), "admin commands sent to a normal player")
+  esOnJoined(3)
+  assert(sent(3, "esCmds"):find('"c":"kick"', 1, true), "admin didn't get the admin commands")
+end)
+
+test("the list is only sent again when it changes", function()
+  esOnJoined(1)
+  client = {}
+  esToolsTick()
+  eq(sent(1, "esCmds"), nil, "unchanged list sent again")
+end)
+
+test("a player can't make the server resend the list in a loop", function()
+  for _ = 1, 50 do esToolsHello(1) end
+  local n = 0
+  for _, c in ipairs(client) do if c.ev == "esCmds" then n = n + 1 end end
+  assert(n <= 1, "list sent " .. n .. " times")
+end)
+
+test("/help lists the commands", function()
+  eq(esOnChat(1, "Alice", "/help"), 1)
+  local all = table.concat(to(1), "\n")
+  assert(all:find("/tp player", 1, true), all)
+  assert(not all:find("/kick", 1, true), "normal player sees admin commands")
+end)
+
+test("a typo gets a suggestion and isn't shown to everyone", function()
+  eq(esOnChat(1, "Alice", "/tpacept"), 1)
+  assert(to(1)[1]:find("did you mean /tpaccept", 1, true), tostring(to(1)[1]))
+  chats = {}
+  eq(esOnChat(1, "Alice", "/hlep"), 1)
+  assert(to(1)[1]:find("/help", 1, true))
+  chats = {}
+  eq(esOnChat(1, "Alice", "/repa"), 1, "start of a command")
+  assert(to(1)[1]:find("/repair", 1, true))
+end)
+
+test("commands nothing is close to are left alone (other plugins)", function()
+  eq(esOnChat(1, "Alice", "/garage open"), nil)
+  eq(#to(1), 0)
+  eq(esOnChat(3, "Boss", "/kik Alice"), 1)
+  assert(to(3)[1]:find("/kick", 1, true), "admin typo")
+  eq(#dropped, 0, "a typo kicked someone")
+end)
+
+test("hostile text can't break the list", function()
+  local j = (function()
+    esOnJoined(3)
+    return sent(3, "esCmds")
+  end)()
+  assert(j:sub(1, 1) == "[" and j:sub(-1) == "]")
+end)
+
 test("json in events.log stays valid with hostile names", function()
   esOnAuth('x"},{"ev":"ban","name":"Boss', "", false, {})
   local f = io.open(DIR .. "events.log")
@@ -132,6 +195,15 @@ end)
 test("a guest with an admin's name gets no bypass and no admin commands", function()
   eq(esOnAuth("Boss", "", true, { ip = "1.2.3.4" }), "Back soon")
   os.remove(DIR .. "maintenance.txt")
+end)
+
+test("suggestions can be switched off", function()
+  write("tools.txt", "tp=on\ntp_cd=0\nrepair=cooldown\nrepair_cd=3\nsuggest=off\n")
+  local t0 = os.time()
+  while os.time() - t0 < 11 do end         -- the plugin re-reads tools.txt every 10 seconds
+  esToolsTick()
+  eq(sent(1, "esCmds"), "[]", "list not cleared")
+  eq(esOnChat(1, "Alice", "/tpacept"), 1, "typos still answered")
 end)
 
 _print(string.format("%d passed, %d failed", passed, failed))
