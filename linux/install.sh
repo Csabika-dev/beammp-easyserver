@@ -15,7 +15,7 @@
 # =============================================================================
 set -euo pipefail
 
-EASY_VERSION="1.12.1"
+EASY_VERSION="1.13.0"
 INSTALL_DIR="/opt/beammp-server"
 SERVICE_USER="beammp"
 DASH_USER="beammp-dash"
