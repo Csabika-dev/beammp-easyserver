@@ -987,19 +987,20 @@ end
 -- Teleport and repair (Config -> Cars & chat -> In-game tools). The server
 -- decides (who may teleport where, cooldowns), the small client mod
 -- easyserver_tools.zip moves or repairs the player's own car.
-local tools = { at = -100, tp = false, tp_cd = 60, repair = "free", repair_cd = 5 }
+local tools = { at = -100, tp = false, tp_cd = 60, repair = "free", repair_cd = 5, suggest = true }
 local tpReq = {}         -- target id -> { from = id, t = time }
 local tpLast, repLast, tpAsked, helloAt = {}, {}, {}, {}
 
 local function readTools(t)
   if t - tools.at < 10 then return end
-  local c = { at = t, tp = false, tp_cd = 60, repair = "free", repair_cd = 5 }
+  local c = { at = t, tp = false, tp_cd = 60, repair = "free", repair_cd = 5, suggest = true }
   local f = io.open(TOOLSFILE, "r")
   if f then
     for line in f:lines() do
       local k, v = trim(line):match("^([%w_]+)%s*=%s*(.-)$")
       if k == "tp" then c.tp = v:lower() == "on"
       elseif k == "repair" and (v == "free" or v == "cooldown" or v == "off") then c.repair = v
+      elseif k == "suggest" then c.suggest = v:lower() ~= "off"
       elseif k == "tp_cd" then local n = tonumber(v); if n and n >= 0 and n <= 3600 then c.tp_cd = math.floor(n) end
       elseif k == "repair_cd" then local n = tonumber(v); if n and n >= 1 and n <= 120 then c.repair_cd = math.floor(n) end end
     end
@@ -1141,6 +1142,153 @@ function esToolsTick(fromPlayer)
     toolsSent = now
     for pid, _ in pairs(players()) do sendToolsCfg(pid) end
   end
+end
+
+-- ---------------------------------------------------------------------------
+-- Command suggestions. The commands a player can use right now (depends on
+-- what's switched on in the dashboard, and admins get the admin commands):
+-- /help lists them, a mistyped command gets "did you mean /...?", and the
+-- client mod shows them as you type "/" in the chat (event esCmds).
+local sug = { sent = {} }      -- sent[player id] = last list sent to that player
+
+function sug.modOn()           -- is the client mod (easyserver_tools.zip) in place?
+  return tools.tp or tools.repair ~= "free" or tools.suggest
+end
+
+function sug.list(id)
+  local t = os.time()
+  readExtras(t) readTools(t) readMod(t)
+  local out = {}
+  local function add(c, a, d) out[#out + 1] = { c = c, a = a, d = d } end
+  add("help", "", "List the commands on this server")
+  if readVote() then add("vote", "number or map", "Vote for the next map") end
+  if cfg.countdown then add("countdown", "3-10", "Start a race countdown for everyone") end
+  if cfg.tag then add("tag", "name or off", "Show a tag before your name") end
+  if cfg.top then add("top", "me", "Server records - add \"me\" for your own") end
+  if tools.tp then
+    add("tp", "player", "Ask to teleport to a player")
+    add("tpaccept", "", "Let a player teleport to you")
+    add("tpdeny", "", "Refuse a teleport request")
+  end
+  if tools.repair ~= "off" and sug.modOn() then
+    add("repair", "", tools.repair == "cooldown" and ("Repair your car (every " .. tools.repair_cd .. " min)") or "Repair your car")
+  end
+  local name = MP.GetPlayerName(id)
+  if name and isAdmin(tostring(name):lower()) then
+    add("kick", "player reason", "Admin: kick a player")
+    add("ban", "player 1d reason", "Admin: ban (1h, 1d, 7d... or leave out for forever)")
+    add("unban", "player", "Admin: lift a ban")
+    add("mute", "player minutes", "Admin: mute a player")
+    add("unmute", "player", "Admin: unmute a player")
+  end
+  return out
+end
+
+function sug.json(list)
+  local parts = {}
+  for _, x in ipairs(list) do
+    parts[#parts + 1] = string.format('{"c":"%s","a":"%s","d":"%s"}', jsonEscape(x.c), jsonEscape(x.a), jsonEscape(x.d))
+  end
+  return "[" .. table.concat(parts, ",") .. "]"
+end
+
+-- send the list when it changed (or always with force); "[]" when suggestions are off
+function sug.send(pid, force)
+  if not MP.TriggerClientEvent or not sug.modOn() then return end
+  local data = tools.suggest and sug.json(sug.list(pid)) or "[]"
+  if force or sug.sent[pid] ~= data then
+    sug.sent[pid] = data
+    MP.TriggerClientEvent(pid, "esCmds", data)
+  end
+end
+
+-- typo distance; a swapped pair of letters counts as one typo
+function sug.dist(a, b)
+  if math.abs(#a - #b) > 2 then return 9 end
+  local d = {}
+  for i = 0, #a do d[i] = { [0] = i } end
+  for j = 0, #b do d[0][j] = j end
+  for i = 1, #a do
+    for j = 1, #b do
+      local c = a:sub(i, i) == b:sub(j, j) and 0 or 1
+      d[i][j] = math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + c)
+      if i > 1 and j > 1 and a:sub(i, i) == b:sub(j - 1, j - 1) and a:sub(i - 1, i - 1) == b:sub(j, j) then
+        d[i][j] = math.min(d[i][j], d[i - 2][j - 2] + 1)
+      end
+    end
+  end
+  return d[#a][#b]
+end
+
+-- the closest command this player can use, or nil if nothing is close enough
+function sug.guess(id, cmd)
+  local best, bestD
+  for _, x in ipairs(sug.list(id)) do
+    local d
+    if #cmd >= 2 and x.c:sub(1, #cmd) == cmd then d = 0.5
+    else d = sug.dist(cmd, x.c) end
+    if d <= (#cmd <= 4 and 1 or 2) and (not bestD or d < bestD) then best, bestD = x.c, d end
+  end
+  return best
+end
+
+function sug.help(id)
+  local list = sug.list(id)
+  if #list <= 1 then
+    say(id, "There are no chat commands on this server.")
+  else
+    say(id, "Commands on this server:")
+    for _, x in ipairs(list) do
+      if x.c ~= "help" then say(id, "/" .. x.c .. (x.a ~= "" and (" " .. x.a) or "") .. "  -  " .. x.d) end
+    end
+  end
+  if cfg.clear then say(id, "All cars are removed " .. (cfg.every == 24 and ("every day at " .. cfg.at) or ("every " .. cfg.every .. " hour" .. (cfg.every == 1 and "" or "s"))) .. ".") end
+  return 1
+end
+
+local extraSug = esExtraChat
+function esExtraChat(id, name, message, cmd, arg)
+  if not cmd then return extraSug(id, name, message, cmd, arg) end
+  local c = cmd:lower()
+  if c == "help" or c == "commands" then return sug.help(id) end
+  local r = extraSug(id, name, message, cmd, arg)
+  if r == 1 then return 1 end
+  local g = sug.guess(id, c)
+  if g and g ~= c then
+    say(id, "Unknown command /" .. c .. " - did you mean /" .. g .. "? Type /help to see all commands.")
+    return 1
+  end
+  return r
+end
+
+local joinedSug = esOnJoined
+function esOnJoined(id)
+  joinedSug(id)
+  sug.send(id, true)
+end
+
+local helloSug = esToolsHello
+sug.hello = {}
+function esToolsHello(id)
+  helloSug(id)
+  if type(id) ~= "number" or not MP.GetPlayerName(id) then return end
+  local t = os.time()
+  if t - (sug.hello[id] or 0) < 5 then return end     -- at most every 5 s per player
+  sug.hello[id] = t
+  sug.send(id, true)
+end
+
+local tickSug = esToolsTick
+function esToolsTick(fromPlayer)
+  tickSug(fromPlayer)
+  if fromPlayer ~= nil then return end
+  for pid, _ in pairs(players()) do sug.send(pid) end
+end
+
+local leftSug = esMsgLeft
+function esMsgLeft(id)
+  leftSug(id)
+  sug.sent[id], sug.hello[id] = nil, nil
 end
 
 MP.RegisterEvent("onPlayerAuth", "esOnAuth")
