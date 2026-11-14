@@ -1180,12 +1180,12 @@ VIEWS.updates = async m => {
         ${d.easy_early ? `<div class="banner" style="margin:8px 0"><span class="small"><b>${d.channel === "experimental" ? "Experimental" : "Early access"} ${esc(d.easy_early)}</b> is out. <a href="${esc(d.easy_early_url || `https://github.com/${d.repo}/releases`)}" target="_blank" rel="noopener noreferrer">Download it</a> and run the installer again.</span></div>` : ""}
         <div class="row" style="margin-top:10px;flex-wrap:wrap;gap:6px"><span class="small"><b>Version:</b></span>
           <button class="btn sm${d.channel === "experimental" ? "" : " on"}" id="ch_stable">Stable</button>
-          <button class="btn sm${d.channel === "experimental" ? " on" : ""}" id="ch_exp">Experimental</button></div>
-        <p class="small muted" style="margin:6px 0 0">${d.channel === "experimental" ? "You hear about every new version first. Experimental versions have the newest features but aren't fully tested - if something breaks, go back to the newest Stable download." : "Tested versions only. Pick Experimental to try new features before everyone else."}</p>
+          <button class="btn sm${d.channel === "experimental" ? " on" : ""}" id="ch_exp" ${d.supporter ? "" : "disabled title=\"Supporters only\""}>Experimental${d.supporter ? "" : " ❤"}</button></div>
+        <p class="small muted" style="margin:6px 0 0">${d.channel === "experimental" ? "You hear about every new version first. Experimental versions have the newest features but aren't fully tested - if something breaks, go back to the newest Stable download." : d.supporter ? "Tested versions only. Pick Experimental to try new features before everyone else." : "Tested versions only. Experimental versions (newest features first) are a thank-you for supporters - Settings → Supporter."}</p>
       </div>
     </div>`;
   const chan = c => async () => { try { await api("/api/updates/check", { json: { channel: c } }); toast(c === "stable" ? "Stable versions only" : "You'll hear about experimental versions too"); } catch (e) { toast(e.message); } show("updates"); };
-  $("#ch_stable").onclick = chan("stable"); $("#ch_exp").onclick = chan("experimental");
+  $("#ch_stable").onclick = chan("stable"); if (d.supporter) $("#ch_exp").onclick = chan("experimental");
   $("#check").onclick = async () => { $("#check").disabled = true; try { await api("/api/updates/check", { method: "POST" }); } catch (e) { toast(e.message); } show("updates"); };
   const ib = $("#install");
   if (ib) ib.onclick = async () => {
@@ -1560,7 +1560,7 @@ async function loadSupporter() {
   const owner = (SESSION.role || "owner") === "owner";
   b.innerHTML = d.active ? `<div class="row"><h2 style="margin:0">Supporter <span class="badge good">Active</span></h2><span class="spacer"></span>${owner ? `<button class="btn sm" id="sup_rm">Remove from this computer</button>` : ""}</div>
       <p class="small" style="margin:8px 0">Thank you for supporting EasyServer! ${d.plan ? esc(d.plan) + " · " : ""}${d.email ? esc(d.email) + " · " : ""}${d.expires_at ? "renews/ends " + esc(String(d.expires_at).slice(0, 10)) : "no end date"}</p>
-      <label class="toggle"><input type="checkbox" id="sup_ea" ${d.early_access ? "checked" : ""} ${owner ? "" : "disabled"}><span><b>Early access</b><small>Tell me about preview versions before everyone else gets them${d.early ? " - " + esc(d.early) + " is ready now" : ""}</small></span></label>
+      <label class="toggle"><input type="checkbox" id="sup_ea" ${d.early_access ? "checked" : ""} ${owner ? "" : "disabled"}><span><b>Experimental versions</b><small>Get the newest features first, before they're fully tested${d.early ? " - " + esc(d.early) + " is ready now" : ""}</small></span></label>
       ${d.early && d.early_url ? `<p class="small"><a href="${esc(d.early_url)}" target="_blank" rel="noopener">Download EasyServer ${esc(d.early)} (preview)</a></p>` : ""}`
     : `<div class="row"><h2 style="margin:0">Support EasyServer</h2><span class="spacer"></span><a class="btn sm" href="${esc(d.url)}" target="_blank" rel="noopener">${d.shop_open ? "Become a supporter" : "Coming soon"}</a></div>
       <p class="small muted" style="margin:8px 0">EasyServer is free and stays free - every feature works without paying. Supporters get early access to new versions and a bigger say in what gets built next.</p>
