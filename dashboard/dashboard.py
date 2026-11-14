@@ -39,14 +39,22 @@ import zipfile
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-EASY_VERSION = "1.13.0"
+EASY_VERSION = "1.14.0"
 REPO = "Csabika-dev/beammp-easyserver"
 BEAMMP_REPO = "BeamMP/BeamMP-Server"
+# Supporter licences are sold through Lemon Squeezy. Their licence API needs no
+# account key: a key is activated for this install and checked once a day.
+# Only keys from this store count (0 = the shop isn't open yet).
+LS_STORE_ID = 0
+LS_API = "https://api.lemonsqueezy.com/v1/licenses/"
+SUPPORT_URL = "https://csabika-dev.github.io/beammp-easyserver/#support"
+SUPPORTER_GRACE = 14 * 86400        # keep supporter features when the check can't reach Lemon Squeezy
 IS_WIN = os.name == "nt"
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import modscan  # noqa: E402
 import tlsgen   # noqa: E402
+import upnp     # noqa: E402
 
 # ----------------------------------------------------------------------------- paths
 if IS_WIN:
@@ -76,7 +84,7 @@ BUILTIN_MAPS = ["gridmap_v2", "west_coast_usa", "east_coast_usa", "utah", "italy
 
 SECRET_NAMES = ("MODS_PASSWORD", "VT_API_KEY", "DISCORD_WEBHOOK", "SMTP_PASSWORD", "TOTP_SECRET",
                 "BEAMMP_AUTH_KEY", "DISCORD_BOT_TOKEN", "DUCKDNS_TOKEN", "NTFY_TOPIC", "WAKE_TOPIC", "USERS_KEY",
-                "TELEGRAM_TOKEN", "CUSTOM_WEBHOOK")
+                "TELEGRAM_TOKEN", "CUSTOM_WEBHOOK", "SUPPORTER_KEY")
 
 DEFAULT_SETTINGS = {
     "port": 30815,
@@ -131,6 +139,11 @@ DEFAULT_SETTINGS = {
     "statuspage_title": "",
     "statuspage_mods": True,       # ...and the mod list with the download size
     "event_ads": False,            # advertise events: Discord/Telegram/webhook post when planned + a day before, in-game reminders
+    "upnp_on": False,              # ask the router (UPnP) to forward the game ports - no router settings page needed
+    "upnp_mapped": [],             # [port, "TCP"/"UDP"] pairs this dashboard opened, so old ones can be closed again
+    "invite_note": "",             # an extra line for the "Copy invite" message (rules, Discord link ...)
+    "supporter": {},               # the supporter licence (key itself is a secret): instance, plan, last check
+    "early_access": True,          # supporters: tell me about pre-release (early access) versions too
 }
 SECURITY_FILE = os.path.join(DATA_DIR, "security.json")
 SECURITY_REPEAT = 15 * 60
@@ -353,6 +366,9 @@ class Settings:
         with LOCK:
             self.data.update(values)
             write_json(SETTINGS_FILE, self.data)
+
+    def update_one(self, k, v):
+        self.update({k: v})
 
     def public(self):
         with LOCK:
@@ -2744,6 +2760,57 @@ def newer(a, b):
         return False
 
 
+def github_prerelease(repo):
+    """The newest pre-release (early access) version, if it is newer than the newest normal release."""
+    req = urllib.request.Request("https://api.github.com/repos/%s/releases?per_page=10" % repo,
+                                 headers={"User-Agent": "BeamMP-EasyServer/" + EASY_VERSION,
+                                          "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        rels = json.loads(r.read(4 * 1024 * 1024))
+    best = None
+    for rel in rels if isinstance(rels, list) else []:
+        m = re.search(r"(\d+\.\d+\.\d+)", str(rel.get("tag_name", "")))
+        if rel.get("prerelease") and not rel.get("draft") and m and (not best or newer(m.group(1), best[0])):
+            best = (m.group(1), rel.get("html_url") or "")
+    return best
+
+
+# ----------------------------------------------------------------------------- supporter licence (Lemon Squeezy)
+def ls_call(action, **fields):
+    data = urllib.parse.urlencode(fields).encode()
+    req = urllib.request.Request(LS_API + action, data=data, method="POST",
+                                 headers={"Accept": "application/json", "User-Agent": "BeamMP-EasyServer/" + EASY_VERSION})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return json.loads(r.read(256 * 1024))
+    except urllib.error.HTTPError as e:
+        try:
+            return json.loads(e.read(64 * 1024))
+        except ValueError:
+            raise RuntimeError("Lemon Squeezy answered %d" % e.code)
+
+
+def ls_summary(d):
+    """What we keep about a licence (no personal data beyond a masked email)."""
+    lk, meta = d.get("license_key") or {}, d.get("meta") or {}
+    mail = str(meta.get("customer_email") or "")
+    if "@" in mail:
+        u, _, dom = mail.partition("@")
+        mail = u[:2] + "***@" + dom
+    return {"status": str(lk.get("status") or ""), "expires_at": lk.get("expires_at"),
+            "plan": clean_msg(" - ".join(x for x in (str(meta.get("product_name") or ""), str(meta.get("variant_name") or "")) if x and x != "Default"))[:80],
+            "store_id": meta.get("store_id"), "email": mail[:80]}
+
+
+def supporter_active():
+    sup = APP.settings.get("supporter") or {} if APP else {}
+    if not sup.get("instance_id") or not APP.secrets.has("SUPPORTER_KEY"):
+        return False
+    if sup.get("status") not in ("active",):
+        return False
+    return now() - (sup.get("ok_at") or 0) < SUPPORTER_GRACE
+
+
 # ----------------------------------------------------------------------------- logs + hints
 def tail_log(lines=300):
     try:
@@ -3324,6 +3391,180 @@ def mod_updates_for(inst, force=False):
     for k in [k for k in cache if k.startswith("f:") and k[2:].split("|")[0] not in {m["name"] for m in list_mods()}]:
         cache.pop(k, None)
     return out
+
+
+# ----------------------------------------------------------------------------- mod browser (BeamNG repository)
+# Browse the public mod list on beamng.com and install a mod with one click.
+# The site has no search API (its search page is behind a bot check), so the
+# browser reads the normal category lists - a few pages, cached - and filters
+# them. A link to any mod page works too.
+REPO_SITE = "https://www.beamng.com/"
+REPO_CATS = [("vehicles.2", "Vehicles"), ("terrains-levels-maps.9", "Maps"), ("skins.12", "Skins"),
+             ("mods-of-mods.7", "Mods of mods"), ("props.5", "Props"), ("sounds.13", "Sounds"),
+             ("user-interface-apps.10", "UI apps"), ("license-plates.15", "License plates"), ("land.3", "Land")]
+REPO_ORDERS = {"download_count": "Most downloaded", "rating_weighted": "Best rated", "last_update": "Recently updated",
+               "resource_date": "Newest"}
+_REPO_CACHE = {}
+_REPO_LOCK = threading.Lock()
+MODB_JOBS = {}
+REPO_ICON_DIR = os.path.join(DATA_DIR, "repo_icons")
+
+
+def _repo_get(url, limit=4 * 1024 * 1024, ttl=6 * 3600):
+    with _REPO_LOCK:
+        c = _REPO_CACHE.get(url)
+        if c and time.time() - c[0] < ttl:
+            return c[1]
+    req = urllib.request.Request(url, headers={"User-Agent": "BeamMP-EasyServer/%s (mod browser)" % EASY_VERSION,
+                                               "Accept-Language": "en"})
+    with urllib.request.urlopen(req, timeout=25) as r:
+        html = r.read(limit).decode("utf-8", "replace")
+    if "CrowdSec" in html[:3000] and "resourceListItem" not in html:
+        raise RuntimeError("beamng.com asked for a browser check - try again in a while")
+    with _REPO_LOCK:
+        if len(_REPO_CACHE) > 300:
+            _REPO_CACHE.clear()
+        _REPO_CACHE[url] = (time.time(), html)
+    return html
+
+
+def _txt(h):
+    return clean_msg(html_unescape(re.sub(r"<[^>]+>", " ", h or "")))
+
+
+def html_unescape(t):
+    import html as _h
+    return _h.unescape(t)
+
+
+def parse_repo_list(html):
+    """Mods on a beamng.com list page."""
+    out = []
+    for m in re.finditer(r'<li class="resourceListItem[^"]*" id="resource-(\d+)">(.*?)</li>\s*(?=<li class="resourceListItem|</ol>|$)', html, re.S):
+        rid, b = int(m.group(1)), m.group(2)
+        title = re.search(r'<h3 class="title">.*?<a href="[^"]*">(.*?)</a>\s*(?:<span class="version">(.*?)</span>)?', b, re.S)
+        if not title:
+            continue
+        det = re.search(r'<div class="resourceDetails muted">(.*?)</div>', b, re.S)
+        links = re.findall(r'<a [^>]*>(.*?)</a>', det.group(1), re.S) if det else []
+        dl = re.search(r'Downloads:</dt>\s*<dd>([\d,]+)', b)
+        rating = re.search(r'itemprop="average">([\d.]+)', b)
+        upd = re.search(r'resourceUpdated.*?data-time="(\d+)"', b, re.S) or re.search(r'data-time="(\d+)"', b)
+        icon = re.search(r'class="resourceIcon"><img src="([^"]+)"', b)
+        out.append({"id": rid, "title": _txt(title.group(1))[:120], "version": _txt(title.group(2))[:40],
+                    "author": _txt(links[0])[:60] if links else "", "category": _txt(links[-1])[:40] if len(links) > 2 else "",
+                    "tagline": _txt((re.search(r'<div class="tagLine">(.*?)</div>', b, re.S) or [None, ""])[1])[:220],
+                    "downloads": int(dl.group(1).replace(",", "")) if dl else 0,
+                    "rating": round(float(rating.group(1)), 1) if rating else None,
+                    "updated": int(upd.group(1)) if upd else None,
+                    "icon": bool(icon) and "/resource_icons/" in icon.group(1),
+                    "page": REPO_PAGE % rid})
+    return out
+
+
+def repo_mod_page(rid):
+    """Title, version and newest download for one mod page."""
+    html = _repo_get(REPO_PAGE % rid, ttl=1800)
+    vids = [int(v) for v in re.findall(r"/download\?version=(\d+)", html)]
+    t = re.search(r"<h1[^>]*>(.*?)(?:<span class=\"muted\">\s*([^<]{1,40}?)\s*</span>)?\s*</h1>", html, re.S)
+    tag = re.search(r'<p class="tagLine">(.*?)</p>', html, re.S)
+    return {"id": rid, "title": _txt(t.group(1))[:120] if t else "Mod %d" % rid, "version": _txt(t.group(2))[:40] if t and t.group(2) else "",
+            "tagline": _txt(tag.group(1))[:220] if tag else "", "version_id": max(vids) if vids else None,
+            "page": REPO_PAGE % rid, "icon": True, "author": "", "category": "", "downloads": 0, "rating": None, "updated": None}
+
+
+def repo_id_from(text):
+    m = re.search(r"beamng\.com/resources/(?:[^/\s]*\.)?(\d{1,7})", text or "")
+    return int(m.group(1)) if m else None
+
+
+def installed_repo_ids():
+    ids = {}
+    for m in list_mods():
+        p = os.path.join(I().CLIENT_DIR if m["enabled"] else I().DISABLED_DIR, m["name"])
+        info = modscan_info_cached(p)
+        if info:
+            ids[info["resource_id"]] = m["name"]
+    return ids
+
+
+_INFO_CACHE = {}
+
+
+def modscan_info_cached(p):
+    try:
+        st = os.stat(p)
+    except OSError:
+        return None
+    key = (p, st.st_size, int(st.st_mtime))
+    if key not in _INFO_CACHE:
+        if len(_INFO_CACHE) > 2000:
+            _INFO_CACHE.clear()
+        _INFO_CACHE[key] = mod_repo_info(p)
+    return _INFO_CACHE[key]
+
+
+def modb_install(job, inst_id, rid):
+    """Background job: download a repository mod, virus-check it, install it."""
+    use_server(inst_id)
+    tdir = None
+    try:
+        job.update(state="Looking up the newest version…")
+        info = repo_mod_page(rid)
+        if not info.get("version_id"):
+            raise RuntimeError("This mod has no download on beamng.com (it may be paid or removed).")
+        url = REPO_DL % (rid, info["version_id"])
+        tdir = tempfile.mkdtemp(dir=UPLOAD_TMP, prefix=".up-")
+        req = urllib.request.Request(url, headers={"User-Agent": "BeamMP-EasyServer/%s (mod browser)" % EASY_VERSION})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            cd = r.headers.get("Content-Disposition") or ""
+            fn = re.search(r'filename\*?=(?:UTF-8\'\')?"?([^";]+)', cd)
+            name = safe_zip_name(fn.group(1) if fn else os.path.basename(urllib.parse.urlparse(r.geturl()).path)) \
+                or safe_zip_name(re.sub(r"[^A-Za-z0-9]+", "_", info["title"]).strip("_")[:60] + ".zip") or "mod_%d.zip" % rid
+            total = int(r.headers.get("Content-Length") or 0)
+            job.update(name=name, total=total)
+            tmp = os.path.join(tdir, name)
+            got = 0
+            with open(tmp, "wb") as f:
+                while True:
+                    chunk = r.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    got += len(chunk)
+                    if got > 4 * 1024 ** 3:
+                        raise RuntimeError("too big (over 4 GB)")
+                    f.write(chunk)
+                    job.update(done=got, state="Downloading…")
+        if not zipfile.is_zipfile(tmp):
+            raise RuntimeError("beamng.com didn't send a zip file (it may want you to log in). Download it from %s and upload it here." % info["page"])
+        mi = mod_repo_info(tmp)
+        if mi and mi["resource_id"] != rid:
+            raise RuntimeError("The downloaded file isn't the mod you picked - not installed.")
+        for folder in (I().CLIENT_DIR, I().DISABLED_DIR):
+            if os.path.exists(os.path.join(folder, name)):
+                raise RuntimeError("You already have %s installed (Mods page)." % name)
+        job.update(state="Virus check…")
+        result = modscan.scan(tmp)
+        if result["verdict"] == "blocked":
+            APP.alerts.raise_("mod:%s:%s" % (inst_id, name), "A mod from the mod browser failed the virus check: %s" % name,
+                              "\n".join(result["reasons"]) + "\nIt was not installed.")
+            raise RuntimeError("Blocked by the virus check: " + "; ".join(result["reasons"][:3]))
+        dest = os.path.join(I().CLIENT_DIR, name)
+        if not IS_WIN:
+            os.chmod(tmp, 0o664)
+        shutil.move(tmp, dest)
+        modscan.remember(dest, result.get("sha256"))
+        refresh_mod_desc()
+        APP.config_changed()
+        maps = zip_maps(dest) or []
+        job.update(ok=True, finished=True, state="Installed", maps=maps,
+                   note="Installed %s%s. %s" % (info["title"], " (" + info["version"] + ")" if info["version"] else "",
+                                               ("It's a map - pick it on the Overview page. " if maps else "") + APP.applied_note()))
+    except Exception as e:
+        job.update(ok=False, finished=True, state="Failed", error=str(e) if isinstance(e, RuntimeError) else short_err(e))
+    finally:
+        if tdir:
+            shutil.rmtree(tdir, ignore_errors=True)
 
 
 # ----------------------------------------------------------------------------- phone push (ntfy)
@@ -4098,28 +4339,47 @@ _ICONS = {}
 
 
 def app_icon_png(size):
-    """The app icon (a steering wheel on blue), drawn in pure Python and cached."""
+    """The app icon: the EasyServer steering wheel (its open top + orange bar is a power symbol), drawn in pure Python."""
     if size in _ICONS:
         return _ICONS[size]
+    import math
     import zlib
-    bg, fg = (42, 120, 214), (255, 255, 255)
-    c, R, w = size / 2.0, size * 0.27, size * 0.055        # inside the 80% "safe zone" for round icons
-    hub, sp = size * 0.075, size * 0.045
+    k = size / 512.0 / 0.8                     # logo units -> pixels, content kept in the round-icon safe zone
+    off = size / 2.0 - 256 / 0.8 * size / 512.0 * 0.8
+
+    def seg(px, py, ax, ay, bx, by):           # distance to a line segment
+        dx, dy = bx - ax, by - ay
+        t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / float(dx * dx + dy * dy)))
+        return math.hypot(px - ax - t * dx, py - ay - t * dy)
     rows = []
     for y in range(size):
         row = bytearray([0])
-        py = y + 0.5 - c
         for x in range(size):
-            px = x + 0.5 - c
-            d = (px * px + py * py) ** 0.5
-            cov = max(0.0, min(1.0, w / 2 - abs(d - R) + 0.5))                  # the rim
-            cov = max(cov, max(0.0, min(1.0, hub - d + 0.5)))                     # the hub
-            if d < R:                                                            # three spokes: left, right, down
-                if px * px > 0 and abs(py) < sp:
-                    cov = max(cov, max(0.0, min(1.0, sp - abs(py) + 0.5)))
-                if py > 0 and abs(px) < sp:
-                    cov = max(cov, max(0.0, min(1.0, sp - abs(px) + 0.5)))
-            row += bytes(int(bg[i] + (fg[i] - bg[i]) * cov) for i in range(3))
+            # back to logo units (512 box, wheel centred)
+            u = (x + 0.5 - size / 2.0) / (size / 512.0) * 0.8 + 256
+            v = (y + 0.5 - size / 2.0) / (size / 512.0) * 0.8 + 256 - 8
+            px = 1.0 / (size / 512.0 / 0.8)    # one pixel in logo units
+            g = (x + y) / (2.0 * size)         # background gradient
+            bg = (int(47 + (23 - 47) * g), int(140 + (71 - 140) * g), int(255 + (184 - 255) * g))
+            # rim: circle (256,268) r 136, open at the top (|angle| < 28 deg), round ends
+            d = math.hypot(u - 256, v - 268)
+            ang = math.degrees(math.atan2(u - 256, 268 - v))
+            if abs(ang) > 28:
+                rim = abs(d - 136)
+            else:
+                rim = min(math.hypot(u - 192, v - 148), math.hypot(u - 320, v - 148))
+            white = min(rim - 20, seg(u, v, 124, 300, 388, 300) - 17, seg(u, v, 256, 300, 256, 392) - 17, math.hypot(u - 256, v - 300) - 44)
+            hole = 17 - math.hypot(u - 256, v - 300)                          # blue dot in the hub
+            bar = seg(u, v, 256, 104, 256, 214) - 20
+            cw = max(0.0, min(1.0, 0.5 - white / px))
+            ch = max(0.0, min(1.0, 0.5 + hole / px))
+            cb = max(0.0, min(1.0, 0.5 - bar / px))
+            t = max(0.0, min(1.0, (v - 92) / 130.0))
+            orange = (255, int(178 + (101 - 178) * t), int(74 + (22 - 74) * t))
+            col = [bg[i] + (255 - bg[i]) * cw for i in range(3)]
+            col = [col[i] + ((31, 95, 214)[i] - col[i]) * ch for i in range(3)]
+            col = [col[i] + (orange[i] - col[i]) * cb for i in range(3)]
+            row += bytes(int(c) for c in col)
         rows.append(bytes(row))
     raw = zlib.compress(b"".join(rows), 9)
     chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
@@ -5126,7 +5386,7 @@ MOD_WRITE = {"/api/players/act", "/api/bans/add", "/api/bans/remove", "/api/allo
              "/api/events/stop", "/api/map", "/api/maintenance"}
 VIEWER_WRITE = {"/api/logout", "/api/notifications/read", "/api/logs/explain", "/api/devices"}
 OWNER_WRITE = {"/api/users", "/api/password", "/api/2fa/begin", "/api/2fa/confirm", "/api/2fa/disable", "/api/remote",
-               "/api/authkey", "/api/import", "/api/power/helper", "/api/servers/delete", "/api/statuspage"}
+               "/api/authkey", "/api/import", "/api/power/helper", "/api/servers/delete", "/api/statuspage", "/api/supporter"}
 ADMIN_GET = {"/api/export", "/api/backups/download", "/api/phoneapp", "/api/ntfy", "/api/power/offline",
              "/api/health/report", "/api/health/saved", "/api/users", "/api/activity", "/api/modpack", "/api/integrations", "/api/statuspage"}
 
@@ -5338,7 +5598,7 @@ ACTION_LABELS = {
     "/api/mods/rescan": "Re-checked mods", "/api/bans/add": "Banned {name}", "/api/bans/remove": "Unbanned {name}",
     "/api/players/act": "Player {action}: {name}", "/api/allowlist": "Changed the allow-list", "/api/settings": "Changed settings",
     "/api/password": "Changed the password", "/api/devices": "Forgot remembered devices", "/api/remote": "Changed internet access / HTTPS", "/api/authkey": "Changed the AuthKey",
-    "/api/import": "Imported a backup", "/api/map": "Switched the map to {map}", "/api/restarts": "Changed scheduled restarts",
+    "/api/import": "Imported a backup", "/api/upnp": "Automatic port forwarding: {on}", "/api/modbrowser/install": "Installed a mod from the mod browser", "/api/supporter": "Changed the supporter licence", "/api/invite": "Changed the invite message", "/api/map": "Switched the map to {map}", "/api/restarts": "Changed scheduled restarts",
     "/api/moderation": "Changed moderation settings", "/api/extras": "Changed cars & chat settings",
     "/api/messages": "Changed chat messages", "/api/rotation": "Changed map rotation", "/api/template": "Applied a template",
     "/api/backups/now": "Made a backup", "/api/events": "Changed events", "/api/events/stop": "Ended an event early",
@@ -5413,6 +5673,8 @@ class App:
         self.notifier = Notifier(self.settings, self.secrets)
         self.alerts = SecurityAlerts(self.settings, self.notifier)
         self.bot = DiscordBot(self)
+        self.upnp_lock = threading.Lock()
+        self.upnp_state = None
         self.sessions = {}
         self.fails = {}
         self.locked = {}
@@ -5564,7 +5826,8 @@ class App:
             for name, fn in (("address check", self.addr_tick), ("backup", self.backup_tick),
                              ("duckdns", self.duck_tick), ("resources", self.resource_tick),
                              ("discord status", self.status_msg_tick), ("mod updates", self.mod_update_tick),
-                             ("sleep", self.sleep_tick), ("health", self.health_tick), ("community", self.community_tick)):
+                             ("sleep", self.sleep_tick), ("health", self.health_tick), ("community", self.community_tick),
+                             ("upnp", self.upnp_tick), ("supporter", self.supporter_tick)):
                 try:
                     fn()
                 except Exception as e:
@@ -5576,6 +5839,127 @@ class App:
                     self.check_updates(notify=True)
             except Exception as e:
                 sys.stderr.write("updates: %s\n" % short_err(e))
+
+    # ---------- automatic port forwarding (UPnP)
+    def upnp_wanted(self):
+        """[(port, proto)] for every server's game port."""
+        with LOCK:
+            ports = sorted({i.port() or 30814 for i in INSTANCES.values()})
+        return [(p, pr) for p in ports for pr in ("TCP", "UDP")]
+
+    def upnp_gateway(self, fresh=False):
+        g = getattr(self, "_upnp_gw", None)
+        if g and not fresh and time.time() - g[0] < 900:
+            return g[1]
+        gw = upnp.find_gateway()
+        self._upnp_gw = (time.time(), gw)
+        return gw
+
+    def upnp_apply(self, fresh=False):
+        """Open every game port on the router and close ones we opened that aren't needed any more."""
+        with self.upnp_lock:
+            st = {"t": now(), "ports": [], "error": None, "router": None, "external_ip": None, "local_ip": None}
+            try:
+                gw = self.upnp_gateway(fresh)
+            except Exception as e:
+                gw, st["error"] = None, "Couldn't look for the router: %s" % short_err(e)
+            if not gw:
+                st["error"] = st["error"] or ("Your router didn't answer. UPnP is probably switched off in its settings "
+                                              "(look for \"UPnP\" and turn it on), or the router doesn't have it - then forward the port by hand.")
+                self.upnp_state = st
+                return st
+            st.update(router=gw.name or gw.host, local_ip=gw.local_ip)
+            try:
+                st["external_ip"] = gw.external_ip()
+            except Exception:
+                pass
+            want = self.upnp_wanted()
+            done = []
+            for port, proto in want:
+                row = {"port": port, "proto": proto, "ok": False, "error": None, "lease": 0}
+                try:
+                    cur = gw.get(port, proto)
+                    if cur and cur["client"] and cur["client"] != gw.local_ip:
+                        row["error"] = "the router already forwards this port to another device (%s)" % cur["client"]
+                    else:
+                        if cur:                          # ours from last time: refresh it
+                            try:
+                                gw.delete(port, proto)
+                            except upnp.UPnPError:
+                                pass
+                        row["lease"] = gw.add(port, proto)
+                        row["ok"] = True
+                        done.append([port, proto])
+                except upnp.UPnPError as e:
+                    row["error"] = str(e)
+                except Exception as e:
+                    row["error"] = short_err(e)
+                st["ports"].append(row)
+            # close what we opened earlier for a port that's no longer used
+            for port, proto in [tuple(x) for x in (self.settings.get("upnp_mapped") or []) if isinstance(x, list) and len(x) == 2]:
+                if (port, proto) not in want:
+                    try:
+                        gw.delete(port, proto)
+                    except Exception:
+                        pass
+            self.settings.update_one("upnp_mapped", done)
+            self.upnp_state = st
+            return st
+
+    def upnp_close(self):
+        with self.upnp_lock:
+            mapped = [tuple(x) for x in (self.settings.get("upnp_mapped") or []) if isinstance(x, list) and len(x) == 2]
+            closed, err = 0, None
+            if mapped:
+                try:
+                    gw = self.upnp_gateway()
+                    for port, proto in mapped:
+                        if gw and gw.delete(port, proto):
+                            closed += 1
+                except Exception as e:
+                    err = short_err(e)
+            self.settings.update_one("upnp_mapped", [])
+            self.upnp_state = {"t": now(), "ports": [], "error": err, "router": None, "external_ip": None, "local_ip": None}
+            return closed, err
+
+    def supporter_tick(self):
+        """Check the supporter licence once a day (it may have been refunded or the subscription ended)."""
+        sup = dict(self.settings.get("supporter") or {})
+        if not sup.get("instance_id") or not self.secrets.has("SUPPORTER_KEY") or now() - sup.get("checked", 0) < 86400:
+            return
+        sup["checked"] = now()
+        try:
+            d = ls_call("validate", license_key=self.secrets.get("SUPPORTER_KEY"), instance_id=sup["instance_id"])
+        except Exception:
+            self.settings.update_one("supporter", sup)          # offline: keep it for the grace period
+            return
+        info = ls_summary(d)
+        was = sup.get("status")
+        if d.get("valid") and (not LS_STORE_ID or info["store_id"] == LS_STORE_ID):
+            sup.update(info, ok_at=now())
+        else:
+            sup.update(status=info["status"] or "invalid")
+        self.settings.update_one("supporter", sup)
+        if was == "active" and sup["status"] != "active":
+            self.notifier.add("update", "Your supporter licence isn't active any more",
+                              "Status: %s. Everything keeps working - only the supporter extras (early access) are off. "
+                              "Thanks for supporting EasyServer!" % sup["status"], "info")
+
+    def upnp_tick(self):
+        """Keep the forwards in place: routers forget them after a reboot, and day-long ones need renewing."""
+        if not self.settings.get("upnp_on") or relay_on():
+            return
+        st = getattr(self, "upnp_state", None) or {}
+        every = 20 * 60 if not st.get("error") and all(r["ok"] for r in st.get("ports", [])) else 5 * 60
+        if now() - st.get("t", 0) >= every:
+            was_ok = bool(st) and not st.get("error") and all(r["ok"] for r in st.get("ports", []))
+            new = self.upnp_apply(fresh=not was_ok)
+            ok = not new.get("error") and all(r["ok"] for r in new.get("ports", []))
+            if was_ok and not ok:
+                self.notifier.add("network", "Automatic port forwarding stopped working",
+                                  "The router no longer accepts the forward (%s). Friends outside your home may not be able to join. "
+                                  "Health page -> Automatic port forwarding shows the details." % (new.get("error") or
+                                  "; ".join("%s %s: %s" % (r["port"], r["proto"], r["error"]) for r in new["ports"] if not r["ok"])), "warning")
 
     def flood_tick(self):
         """Keep the flood rules in place (they're gone after a reboot and must
@@ -6454,6 +6838,13 @@ class App:
             res["easy_latest"] = github_latest(REPO)
         except Exception:
             res["easy_latest"] = None
+        if supporter_active() and self.settings.get("early_access"):
+            try:
+                pre = github_prerelease(REPO)
+                if pre and newer(pre[0], max(res.get("easy_latest") or "0.0.0", EASY_VERSION, key=lambda v: tuple(map(int, v.split("."))))):
+                    res["easy_early"], res["easy_early_url"] = pre
+            except Exception:
+                pass
         with LOCK:
             prev = self.updates
             self.updates = res
@@ -6465,6 +6856,10 @@ class App:
                 res["notified_server"] = res["latest"]
             else:
                 res["notified_server"] = prev.get("notified_server")
+            if res.get("easy_early") and prev.get("notified_early") != res["easy_early"]:
+                self.notifier.add("update", "Early access: EasyServer %s is ready to try" % res["easy_early"],
+                                  "Thanks for supporting EasyServer! Download the preview from %s" % res.get("easy_early_url"), "info")
+            res["notified_early"] = res.get("easy_early") or prev.get("notified_early")
             if res.get("easy_latest") and newer(res["easy_latest"], EASY_VERSION) \
                     and prev.get("notified_easy") != res["easy_latest"]:
                 self.notifier.add("update", "BeamMP EasyServer %s is available" % res["easy_latest"],
@@ -6853,7 +7248,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/manifest.webmanifest":
             body = json.dumps({
                 "name": "BeamMP Dashboard", "short_name": "BeamMP", "id": "/", "start_url": "/", "scope": "/",
-                "display": "standalone", "background_color": "#151514", "theme_color": "#2a78d6",
+                "display": "standalone", "background_color": "#151514", "theme_color": "#1f5fd6",
                 "description": "Manage your BeamMP servers", "orientation": "any",
                 "icons": [{"src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
                           {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}]}).encode()
@@ -6900,6 +7295,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send(200, {
             "logged_in": bool(sess), "csrf": sess["csrf"] if sess else None,
             "user": sess.get("user", "owner") if sess else None, "role": sess.get("role", "owner") if sess else None,
+            "supporter": bool(sess) and supporter_active(),
             "needs_setup": not app.secrets.has("MODS_PASSWORD"),
             "setup_allowed": ip_is_loopback(self.ip) and host_name(self.headers.get("Host")) in ("localhost", "127.0.0.1", "::1"),
             "totp": app.secrets.has("TOTP_SECRET"),
@@ -7748,6 +8144,131 @@ class Handler(BaseHTTPRequestHandler):
         data, _, _ = toml_parse(APP.read_config_text())
         self.send(200, network_check(data, APP.server.status(), q.get("deep") == "1"))
 
+    def get_upnp(self, q):
+        app = APP
+        st = app.upnp_state
+        if q.get("check") == "1" or st is None:
+            st = app.upnp_apply(fresh=True) if app.settings.get("upnp_on") and not relay_on() else self._upnp_probe()
+        self.send(200, {"on": bool(app.settings.get("upnp_on")), "relay": relay_on(), "state": st,
+                        "ports": [{"port": p, "proto": pr} for p, pr in app.upnp_wanted()]})
+
+    def _upnp_probe(self):
+        """Look for a UPnP router without changing anything."""
+        st = {"t": now(), "ports": [], "error": None, "router": None, "external_ip": None, "local_ip": None, "probe": True}
+        try:
+            gw = APP.upnp_gateway(fresh=True)
+        except Exception as e:
+            gw, st["error"] = None, short_err(e)
+        if not gw:
+            st["error"] = st["error"] or "Your router didn't answer - UPnP is off or not supported."
+        else:
+            st.update(router=gw.name or gw.host, local_ip=gw.local_ip)
+            try:
+                st["external_ip"] = gw.external_ip()
+            except Exception:
+                pass
+        APP.upnp_state = st
+        return st
+
+    def post_upnp(self, q):
+        app = APP
+        on = bool(self.body_json().get("on"))
+        if on and relay_on():
+            return self.fail(400, "\"Hide my IP\" is on - players join through the relay, so nothing needs to be opened on your router.")
+        if on:
+            app.settings.update_one("upnp_on", True)
+            st = app.upnp_apply(fresh=True)
+            ok = not st.get("error") and st["ports"] and all(r["ok"] for r in st["ports"])
+            if not ok:
+                app.settings.update_one("upnp_on", bool(st["ports"]) and any(r["ok"] for r in st["ports"]))
+            note = ("Done - your router now forwards port %s to this computer. Friends can join from anywhere." %
+                    ", ".join(sorted({str(r["port"]) for r in st["ports"]})) if ok else
+                    (st.get("error") or "Some ports couldn't be opened: " +
+                     "; ".join("%s %s: %s" % (r["port"], r["proto"], r["error"]) for r in st["ports"] if not r["ok"])))
+            _PUBLIC_IP["t"] = 0                       # the network check should look again
+            return self.send(200, {"ok": bool(ok), "note": note, "state": st, "on": app.settings.get("upnp_on")})
+        app.settings.update_one("upnp_on", False)
+        closed, err = app.upnp_close()
+        self.send(200, {"ok": not err, "on": False, "note": ("Closed the port on your router." if closed else "Automatic port forwarding is off.")
+                        + (" (The router didn't answer: %s - it may still have the forward until it restarts.)" % err if err else "")})
+
+    def get_invite(self, q):
+        """A ready-to-paste invitation for Discord / WhatsApp."""
+        app = APP
+        data, _ = validate_config(app.read_config_text(), app.settings.get("port"), I().has_authkey())[:2]
+        g = data.get("General", {})
+        name = re.sub(r"\^.", "", str(g.get("Name", "") or "my BeamMP server")).strip() or "my BeamMP server"
+        host, port, via_relay = game_address()
+        lan = lan_ip()
+        online = len(analytics_online())
+        public = not g.get("Private") and I().has_authkey()
+        internet = bool(via_relay or duck_host() or public_ip())
+        lines = ["**Join my BeamNG.drive multiplayer server: %s**" % name, ""]
+        if internet:
+            lines.append("In BeamMP: **Direct Connect** -> IP `%s` port `%s`" % (host, port))
+        if public:
+            lines.append("Or search **%s** in the BeamMP server list." % name)
+        lines.append("Map: %s - %s/%s players online" % (map_name(g.get("Map")) or "?", online, g.get("MaxPlayers", "?")))
+        mods = sum(1 for m in list_mods() if m["enabled"])
+        if mods:
+            size = sum(m.get("size", 0) for m in list_mods() if m["enabled"])
+            lines.append("Mods: %d (%s, downloaded when you join)" % (mods, ("%.1f GB" % (size / 1073741824.0) if size >= 1073741824 else "%d MB" % max(1, round(size / 1048576.0)))))
+        note = clean_msg(app.settings.get("invite_note") or "")[:300]
+        foot = "Need BeamMP? https://beammp.com"
+        self.send(200, {"base": "\n".join(lines), "footer": foot,
+                        "text": "\n".join(lines + (["", note] if note else []) + ["", foot]), "host": host, "port": port, "lan": "%s:%s" % (lan, port),
+                        "internet": internet, "relay": via_relay, "public": public, "note": note,
+                        "lan_text": "Join **%s** on our Wi-Fi: BeamMP -> Direct Connect -> IP `%s` port `%s`" % (name, lan, port)})
+
+    def post_invite(self, q):
+        note = clean_msg(str(self.body_json().get("note", "")))[:300]
+        APP.settings.update_one("invite_note", note)
+        self.send(200, {"ok": True})
+
+    # ---------- supporter licence
+    def get_supporter(self, q):
+        sup = APP.settings.get("supporter") or {}
+        self.send(200, {"active": supporter_active(), "shop_open": bool(LS_STORE_ID), "url": SUPPORT_URL,
+                        "status": sup.get("status"), "plan": sup.get("plan"), "expires_at": sup.get("expires_at"),
+                        "email": sup.get("email"), "checked": sup.get("checked"), "has_key": APP.secrets.has("SUPPORTER_KEY"),
+                        "early_access": bool(APP.settings.get("early_access")),
+                        "early": APP.updates.get("easy_early"), "early_url": APP.updates.get("easy_early_url")})
+
+    def post_supporter(self, q):
+        app = APP
+        b = self.body_json()
+        if "early_access" in b and "key" not in b and b.get("action") != "remove":
+            app.settings.update_one("early_access", bool(b["early_access"]))
+            return self.send(200, {"ok": True})
+        sup = dict(app.settings.get("supporter") or {})
+        if b.get("action") == "remove":
+            if sup.get("instance_id") and app.secrets.has("SUPPORTER_KEY"):
+                try:
+                    ls_call("deactivate", license_key=app.secrets.get("SUPPORTER_KEY"), instance_id=sup["instance_id"])
+                except Exception:
+                    pass
+            app.secrets.set("SUPPORTER_KEY", "")
+            app.settings.update_one("supporter", {})
+            return self.send(200, {"ok": True, "note": "Removed the licence from this computer - you can use it on another one now."})
+        key = str(b.get("key") or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9-]{8,80}", key):
+            return self.fail(400, "That doesn't look like a licence key - copy it from the email you got after buying")
+        if not LS_STORE_ID:
+            return self.fail(400, "Supporter licences aren't on sale yet - EasyServer is completely free in the meantime.")
+        try:
+            d = ls_call("activate", license_key=key, instance_name=("EasyServer on %s" % socket.gethostname())[:60])
+        except Exception as e:
+            return self.fail(502, "Couldn't reach the licence server (%s) - try again in a minute" % short_err(e))
+        info = ls_summary(d)
+        if not d.get("activated") or info["store_id"] != LS_STORE_ID:
+            err = clean_msg(str(d.get("error") or ""))[:200]
+            return self.fail(400, "This key wasn't accepted%s." % (": " + err if err else ""))
+        app.secrets.set("SUPPORTER_KEY", key)
+        sup = dict(info, instance_id=str((d.get("instance") or {}).get("id") or ""), checked=now(), ok_at=now())
+        app.settings.update_one("supporter", sup)
+        threading.Thread(target=app.check_updates, kwargs={"notify": True}, daemon=True).start()
+        self.send(200, {"ok": True, "note": "Thank you for supporting EasyServer! Your licence is active%s." % (" (" + info["plan"] + ")" if info["plan"] else "")})
+
     # ---------- updates
     def get_updates(self, q):
         up = dict(APP.updates)
@@ -8438,6 +8959,111 @@ class Handler(BaseHTTPRequestHandler):
             self.send(200, {"ok": True, "note": "Updated %s to %s. %s" % (name, got["version"] or "the newest version", APP.applied_note())})
         finally:
             shutil.rmtree(tdir, ignore_errors=True)
+
+    # ---------- mod browser
+    def get_modbrowser(self, q):
+        cat = q.get("cat") or REPO_CATS[0][0]
+        if cat not in dict(REPO_CATS):
+            return self.fail(400, "unknown category")
+        order = q.get("order") if q.get("order") in REPO_ORDERS else "download_count"
+        text = (q.get("q") or "").strip()[:100]
+        try:
+            page = max(1, min(50, int(q.get("page") or 1)))
+        except ValueError:
+            page = 1
+        items, more, err = [], False, None
+        try:
+            rid = repo_id_from(text) or (int(text) if text.isdigit() and len(text) <= 7 else None)
+            if rid:
+                items = [repo_mod_page(rid)]
+            elif text:
+                words = [w.lower() for w in re.findall(r"\w+", text)]
+                pages = range((page - 1) * 5 + 1, page * 5 + 1)    # search 5 list pages (100 mods) at a time
+                for n in pages:
+                    lst = parse_repo_list(_repo_get(REPO_SITE + "resources/categories/%s/?order=%s&page=%d" % (cat, order, n)))
+                    for it in lst:
+                        hay = ("%s %s %s" % (it["title"], it["tagline"], it["author"])).lower()
+                        if all(w in hay for w in words):
+                            items.append(it)
+                    more = len(lst) >= 20
+                    if not more:
+                        break
+            else:
+                items = parse_repo_list(_repo_get(REPO_SITE + "resources/categories/%s/?order=%s&page=%d" % (cat, order, page)))
+                more = len(items) >= 20
+        except Exception as e:
+            err = "Couldn't load the mod list from beamng.com: %s" % (str(e) if isinstance(e, RuntimeError) else short_err(e))
+        have = installed_repo_ids()
+        for it in items:
+            it["installed"] = have.get(it["id"])
+        self.send(200, {"items": items, "more": more, "page": page, "error": err, "cats": REPO_CATS,
+                        "orders": REPO_ORDERS, "cat": cat, "order": order,
+                        "jobs": [j for j in MODB_JOBS.values() if j["server"] == I().id and not j.get("seen")]})
+
+    def get_modbrowser_icon(self, q):
+        try:
+            rid = int(q.get("id") or 0)
+        except ValueError:
+            rid = 0
+        if not 0 < rid < 10 ** 7:
+            return self.fail(400, "bad id")
+        path = os.path.join(REPO_ICON_DIR, "%d.jpg" % rid)
+        body = None
+        try:
+            if time.time() - os.path.getmtime(path) < 7 * 86400:
+                with open(path, "rb") as f:
+                    body = f.read()
+        except OSError:
+            pass
+        if body is None:
+            try:
+                req = urllib.request.Request(REPO_SITE + "data/resource_icons/%d/%d.jpg" % (rid // 1000, rid),
+                                             headers={"User-Agent": "BeamMP-EasyServer/%s (mod browser)" % EASY_VERSION})
+                with urllib.request.urlopen(req, timeout=15) as r:
+                    body = r.read(300 * 1024 + 1)
+                if len(body) > 300 * 1024 or body[:3] not in (b"\xff\xd8\xff", b"\x89PN"):
+                    body = b""
+            except Exception:
+                body = b""
+            try:
+                os.makedirs(REPO_ICON_DIR, exist_ok=True)
+                with open(path, "wb") as f:
+                    f.write(body)
+            except OSError:
+                pass
+        if not body:
+            return self.send(404, b"", "image/jpeg", {"Cache-Control": "max-age=86400"})
+        self.send(200, body, "image/png" if body[:3] == b"\x89PN" else "image/jpeg", {"Cache-Control": "max-age=604800"})
+
+    def post_modbrowser_install(self, q):
+        try:
+            rid = int(self.body_json().get("id") or 0)
+        except (TypeError, ValueError):
+            rid = 0
+        if not 0 < rid < 10 ** 7:
+            return self.fail(400, "bad mod id")
+        with LOCK:
+            busy = [j for j in MODB_JOBS.values() if not j.get("finished")]
+            if len(busy) >= 3:
+                return self.fail(429, "Three downloads are already running - wait for one to finish")
+            if any(j["id"] == rid and j["server"] == I().id for j in busy):
+                return self.fail(409, "That mod is already downloading")
+            for k in [k for k, j in MODB_JOBS.items() if j.get("finished") and now() - j["t"] > 3600]:
+                MODB_JOBS.pop(k, None)
+            jid = secrets.token_hex(6)
+            job = {"job": jid, "id": rid, "server": I().id, "t": now(), "state": "Starting…", "done": 0, "total": 0,
+                   "finished": False, "name": "", "title": str(self.body_json().get("title") or "")[:120]}
+            MODB_JOBS[jid] = job
+        threading.Thread(target=modb_install, args=(job, I().id, rid), daemon=True).start()
+        self.send(200, {"ok": True, "job": jid})
+
+    def get_modbrowser_job(self, q):
+        j = MODB_JOBS.get(q.get("job") or "")
+        if not j or j["server"] != I().id:
+            return self.fail(404, "no such download")
+        if j.get("finished"):
+            j["seen"] = True
+        self.send(200, j)
 
     # ---------- phone app
     def get_phoneapp(self, q):
