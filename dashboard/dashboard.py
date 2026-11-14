@@ -45,6 +45,7 @@ BEAMMP_REPO = "BeamMP/BeamMP-Server"
 # Supporter licences are sold through Lemon Squeezy. Their licence API needs no
 # account key: a key is activated for this install and checked once a day.
 # Only keys from this store count (0 = the shop isn't open yet).
+UPNP_IDLE = 30 * 60      # "only when needed": close the port this long after the last player / invite
 LS_STORE_ID = 0
 LS_API = "https://api.lemonsqueezy.com/v1/licenses/"
 SUPPORT_URL = "https://csabika-dev.github.io/beammp-easyserver/#support"
@@ -141,6 +142,8 @@ DEFAULT_SETTINGS = {
     "event_ads": False,            # advertise events: Discord/Telegram/webhook post when planned + a day before, in-game reminders
     "upnp_on": False,              # ask the router (UPnP) to forward the game ports - no router settings page needed
     "upnp_mapped": [],             # [port, "TCP"/"UDP"] pairs this dashboard opened, so old ones can be closed again
+    "upnp_mode": "always",         # "always" = keep the port open; "needed" = only while players are on or right after an invite
+    "upnp_open_until": 0,          # "needed" mode: keep the port open until this time
     "invite_note": "",             # an extra line for the "Copy invite" message (rules, Discord link ...)
     "supporter": {},               # the supporter licence (key itself is a secret): instance, plan, last check
     "early_access": True,          # supporters: tell me about pre-release (early access) versions too
@@ -5841,11 +5844,40 @@ class App:
                 sys.stderr.write("updates: %s\n" % short_err(e))
 
     # ---------- automatic port forwarding (UPnP)
-    def upnp_wanted(self):
+    def upnp_ports(self):
         """[(port, proto)] for every server's game port."""
         with LOCK:
             ports = sorted({i.port() or 30814 for i in INSTANCES.values()})
         return [(p, pr) for p in ports for pr in ("TCP", "UDP")]
+
+    def upnp_players(self):
+        """How many players are on any of the servers right now."""
+        with LOCK:
+            dirs = [i.STATS_DIR for i in INSTANCES.values()]
+        n = 0
+        for d in dirs:
+            o = read_json(os.path.join(d, "online.json"), None)
+            if isinstance(o, dict) and now() - int(o.get("t", 0)) < 120:
+                n += len(o.get("players") or [])
+        return n
+
+    def upnp_needed(self):
+        """'Only when needed' mode: open while someone is playing, and for a while after an invite.
+        The router drops knocks on a closed port, so an invite (or the Open button) is what opens it."""
+        if self.settings.get("upnp_mode") != "needed":
+            return True
+        if self.upnp_players():
+            until = now() + UPNP_IDLE
+            if until - int(self.settings.get("upnp_open_until") or 0) > 60:
+                self.settings.update_one("upnp_open_until", until)    # closes UPNP_IDLE after the last player leaves
+            return True
+        return now() < int(self.settings.get("upnp_open_until") or 0)
+
+    def upnp_open_for(self, secs):
+        self.settings.update_one("upnp_open_until", max(int(self.settings.get("upnp_open_until") or 0), now() + int(secs)))
+
+    def upnp_wanted(self):
+        return self.upnp_ports() if self.upnp_needed() else []
 
     def upnp_gateway(self, fresh=False):
         g = getattr(self, "_upnp_gw", None)
@@ -5950,6 +5982,11 @@ class App:
         if not self.settings.get("upnp_on") or relay_on():
             return
         st = getattr(self, "upnp_state", None) or {}
+        if self.settings.get("upnp_mode") == "needed":
+            is_open = bool(self.settings.get("upnp_mapped"))
+            if self.upnp_needed() != is_open:              # time to open or close: do it now, not in 20 minutes
+                self.upnp_apply()
+                return
         every = 20 * 60 if not st.get("error") and all(r["ok"] for r in st.get("ports", [])) else 5 * 60
         if now() - st.get("t", 0) >= every:
             was_ok = bool(st) and not st.get("error") and all(r["ok"] for r in st.get("ports", []))
@@ -8150,7 +8187,9 @@ class Handler(BaseHTTPRequestHandler):
         if q.get("check") == "1" or st is None:
             st = app.upnp_apply(fresh=True) if app.settings.get("upnp_on") and not relay_on() else self._upnp_probe()
         self.send(200, {"on": bool(app.settings.get("upnp_on")), "relay": relay_on(), "state": st,
-                        "ports": [{"port": p, "proto": pr} for p, pr in app.upnp_wanted()]})
+                        "mode": app.settings.get("upnp_mode") or "always", "open_until": int(app.settings.get("upnp_open_until") or 0),
+                        "is_open": bool(app.settings.get("upnp_mapped")), "players": app.upnp_players(), "idle": UPNP_IDLE,
+                        "ports": [{"port": p, "proto": pr} for p, pr in app.upnp_ports()]})
 
     def _upnp_probe(self):
         """Look for a UPnP router without changing anything."""
@@ -8172,11 +8211,33 @@ class Handler(BaseHTTPRequestHandler):
 
     def post_upnp(self, q):
         app = APP
-        on = bool(self.body_json().get("on"))
+        b = self.body_json()
+        if "mode" in b or "open_for" in b or "close_now" in b:
+            if b.get("mode") in ("always", "needed"):
+                app.settings.update_one("upnp_mode", b["mode"])
+                if b["mode"] == "needed":
+                    app.upnp_open_for(UPNP_IDLE)       # don't slam the door on someone joining right now
+            if "open_for" in b:
+                app.upnp_open_for(max(60, min(int(b.get("open_for") or 0), 24 * 3600)))
+            if b.get("close_now"):
+                app.settings.update_one("upnp_open_until", 0)
+            if not app.settings.get("upnp_on") or relay_on():
+                return self.send(200, {"ok": True, "on": bool(app.settings.get("upnp_on")), "note": "Saved."})
+            st = app.upnp_apply()
+            ok = not st.get("error") and all(r["ok"] for r in st["ports"])
+            opened = bool(st["ports"])
+            note = (("Port open until nobody has played for %d minutes." % (UPNP_IDLE // 60) if opened else
+                     "Port closed - it opens again when you copy an invite.")
+                    if app.settings.get("upnp_mode") == "needed" else "Port kept open all the time.")
+            return self.send(200, {"ok": bool(ok), "on": True, "note": note if ok else (st.get("error") or "The router refused: " +
+                             "; ".join("%s %s: %s" % (r["port"], r["proto"], r["error"]) for r in st["ports"] if not r["ok"])), "state": st})
+        on = bool(b.get("on"))
         if on and relay_on():
             return self.fail(400, "\"Hide my IP\" is on - players join through the relay, so nothing needs to be opened on your router.")
         if on:
             app.settings.update_one("upnp_on", True)
+            if app.settings.get("upnp_mode") == "needed":
+                app.upnp_open_for(UPNP_IDLE)
             st = app.upnp_apply(fresh=True)
             ok = not st.get("error") and st["ports"] and all(r["ok"] for r in st["ports"])
             if not ok:
