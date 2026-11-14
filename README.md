@@ -22,7 +22,9 @@ No config files and no command line needed. The installer downloads the newest o
 1. **Get a free AuthKey** at [keymaster.beammp.com](https://keymaster.beammp.com) (log in with Discord → **Keys** → **+** → copy it).
 2. **Install:**
    - **Windows:** download `BeamMP-EasyServer-Windows.zip` from the [latest release](https://github.com/Csabika-dev/beammp-easyserver/releases/latest), extract it, double-click `Install-BeamMP-Server.bat`.
-   - **Linux:** `curl -fsSL https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/main/linux/install.sh | sudo bash`
+   - **Linux:** `curl -fsSL https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/stable/linux/install.sh | sudo bash`
+
+   **Stable or Experimental?** There are always two versions. **Stable** (the release marked *Latest*, and the commands above) is tested and is what most people should use. **Experimental** has the newest features first but isn't fully tested: get it from the [Releases page](https://github.com/Csabika-dev/beammp-easyserver/releases) (marked *Pre-release*), or on Linux use `.../main/linux/install.sh` instead of `.../stable/...`. You can switch any time - your settings and mods are kept - and the dashboard's **Updates** page lets you choose which versions it tells you about.
 3. **Open the dashboard** at `http://localhost:30815` on the server computer (Windows: the **BeamMP Dashboard** shortcut), create your password, and you're running. From other devices at home use `http://<server-ip>:30815`.
 
 Then work through the [guides](#-guides) below - start with [Let friends join over the internet](#let-friends-join-over-the-internet).
@@ -99,7 +101,7 @@ Linux runs the server in the background as a service. It starts by itself when t
 Open a terminal and paste:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/main/linux/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/stable/linux/install.sh | sudo bash
 ```
 
 #### Option B: download and run
