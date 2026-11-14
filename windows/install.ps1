@@ -26,6 +26,7 @@ $TaskName     = 'BeamMP Server (EasyServer)'
 $FwPrefix     = 'BeamMP Server (EasyServer)'
 $DashTask     = 'BeamMP Dashboard (EasyServer)'
 $DashPort     = 30815
+$GuardTask    = 'BeamMP Guard (EasyServer)'
 $PythonUrl    = 'https://www.python.org/ftp/python/3.13.17/python-3.13.17-embed-amd64.zip'
 
 # ---- run as administrator ----------------------------------------------------
@@ -116,6 +117,27 @@ function Stop-Dashboard {
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 }
 
+# BeamMP-only guard: the dashboard (running as you) decides who to block, this
+# task (running as SYSTEM, once a minute) puts that list into Windows Firewall.
+# Its script lives in a folder only administrators can change.
+function Install-Guard($esDir) {
+    try {
+        $gDir = Split-Path $StateFile
+        New-Item -ItemType Directory -Force -Path $gDir | Out-Null
+        Copy-Item -Force (Join-Path $PSScriptRoot 'guard.ps1') (Join-Path $gDir 'guard.ps1')
+        Protect-EsFolder $gDir -AdminOnly
+        Unregister-ScheduledTask -TaskName $GuardTask -Confirm:$false -ErrorAction SilentlyContinue
+        $arg = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$(Join-Path $gDir 'guard.ps1')`" -DataDir `"$(Join-Path $esDir 'data')`""
+        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg
+        $t1 = New-ScheduledTaskTrigger -AtStartup
+        $t2 = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 1)
+        $set = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 2) -MultipleInstances IgnoreNew
+        $who = New-ScheduledTaskPrincipal -UserId 'S-1-5-18' -LogonType ServiceAccount -RunLevel Highest
+        Register-ScheduledTask -TaskName $GuardTask -Action $action -Trigger $t1, $t2 -Settings $set -Principal $who | Out-Null
+        Ok 'BeamMP-only guard ready (switch it on in the dashboard: Settings)'
+    } catch { Warn "The BeamMP-only guard couldn't be set up: $($_.Exception.Message)" }
+}
+
 # Wait until the dashboard really answers. If it doesn't, say so and show why
 # (the dashboard writes its errors to EasyServer\data\dashboard.log).
 function Test-Dashboard([string]$esDir) {
@@ -183,7 +205,7 @@ function Install-Dashboard($dir) {
     $src = Find-DashboardSource
     $dst = Join-Path $esDir 'dashboard'
     New-Item -ItemType Directory -Force -Path $dst, (Join-Path $esDir 'data') | Out-Null
-    foreach ($f in 'dashboard.py', 'webui.html', 'modscan.py', 'tlsgen.py', 'upnp.py') { Copy-Item -Force (Join-Path $src $f) (Join-Path $dst $f) }
+    foreach ($f in 'dashboard.py', 'webui.html', 'modscan.py', 'tlsgen.py', 'upnp.py', 'guard.py') { Copy-Item -Force (Join-Path $src $f) (Join-Path $dst $f) }
     # player statistics plugin, runs inside the BeamMP server
     $plug = Join-Path $dir 'Resources\Server\EasyServerStats'
     New-Item -ItemType Directory -Force -Path $plug | Out-Null
@@ -208,6 +230,7 @@ function Install-Dashboard($dir) {
     Register-ScheduledTask -TaskName $DashTask -Action $action -Trigger $trigger -Settings $set -RunLevel Limited | Out-Null
     Start-ScheduledTask -TaskName $DashTask
     Ok 'Dashboard starts automatically when you log in'
+    Install-Guard $esDir
     [void](Test-Dashboard $esDir)
 
     $url = Join-Path ([Environment]::GetFolderPath('Desktop')) 'BeamMP Dashboard.url'
@@ -238,6 +261,7 @@ if ($Uninstall) {
     Get-Process -Name 'BeamMP-Server' -ErrorAction SilentlyContinue | Stop-Process -Force
     Stop-Dashboard
     Unregister-ScheduledTask -TaskName $DashTask -Confirm:$false -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName $GuardTask -Confirm:$false -ErrorAction SilentlyContinue
     Remove-Firewall; Ok 'Firewall rules removed'
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue; Ok 'Autostart removed'
     $sc = Get-Shortcuts
