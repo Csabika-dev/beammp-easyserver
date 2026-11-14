@@ -132,5 +132,30 @@ class Endpoints(unittest.TestCase):
         self.assertEqual(D.required_role("POST", "/api/guard"), "admin")
 
 
+
+
+@unittest.skipUnless(not D.IS_WIN, "live tests run on Linux")
+class UpdateChannel(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        harness.start()
+        cls.owner = harness.owner()
+
+    def test_switch_channel(self):
+        self.addCleanup(lambda: D.APP.settings.update({"update_channel": "stable"}))
+        self.assertEqual(D.DEFAULT_SETTINGS["update_channel"], "stable")
+        with mock.patch.object(D, "github_latest", lambda repo: "1.13.0"), \
+                mock.patch.object(D, "github_prerelease", lambda repo: ("9.9.9", "https://example.invalid/x")):
+            st, d, _ = self.owner.call("/api/updates/check", {"channel": "nightly"})
+            self.assertEqual(st, 400)
+            st, d, _ = self.owner.call("/api/updates/check", {"channel": "experimental"})
+            self.assertEqual(st, 200, d)
+            self.assertEqual(d["easy_early"], "9.9.9")
+            st, d, _ = self.owner.call("/api/updates/check", {"channel": "stable"})
+            self.assertNotIn("easy_early", d)
+            st, d, _ = self.owner.call("/api/updates")
+            self.assertEqual(d["channel"], "stable")
+
+
 if __name__ == "__main__":
     unittest.main()
