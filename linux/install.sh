@@ -741,6 +741,7 @@ PYEOF
            rm -rf /etc/beammp-easyserver/limits /etc/systemd/system.control/beammp-server*.service.d
            python3 /usr/local/lib/beammp-easyserver/control.py --shape >/dev/null 2>&1 || true   # removes the upload limits
            nft delete table inet beammp_easyserver 2>/dev/null || true                           # flood protection rules
+           nft delete table inet beammp_easyserver_guard 2>/dev/null || true                     # BeamMP-only guard rules
            rm -f "/etc/systemd/system/$SVC.service" /etc/systemd/system/beammp-mods.service \
                  /etc/systemd/system/beammp-dashboard.service /etc/systemd/system/beammp-control.service \
                  /etc/systemd/system/beammp-control.path \
@@ -916,7 +917,7 @@ EOF
   fi
 
   local f
-  for f in dashboard.py webui.html modscan.py tlsgen.py upnp.py; do
+  for f in dashboard.py webui.html modscan.py tlsgen.py upnp.py guard.py; do
     fetch_file "dashboard/$f" "$es/dashboard/$f"
   done
   fetch_file "linux/control.py" "$es/control.py"
