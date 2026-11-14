@@ -2,6 +2,8 @@
 
 ## 1.14.0 - One-click port forwarding, invites, mod browser
 
+- **Only open the port when it's needed** (the new default): the router port opens when you copy an invite, press Open, or a friend types `/join` in your Discord, stays open while anyone plays and closes 30 minutes after the last player leaves. "Always open" is one click away on the Health page.
+- **Discord `/join`**: anyone in your Discord server can open the server for 2 hours. You get a notification saying who did.
 - **Automatic port forwarding** (Health page): "Open port 30814 automatically" asks your router to forward the game port (TCP + UDP) to this computer with UPnP - no router settings page. Every server's port is opened, the forward is checked every 20 minutes and put back after a router restart, and turning it off closes it again. If the router has UPnP switched off, or another device already uses the port, it says so and what to do instead. Off while "Hide my IP" is on (not needed there).
 - **Copy invite** (Overview): a ready-to-paste message for Discord or WhatsApp with the server name, the address and port for Direct Connect, the map, players online and the mod download size. Switch to "Same Wi-Fi" for friends at home, and add your own line (rules, a Discord link). With "Hide my IP" on it uses the relay address.
 - **Mod browser** (Mods → Browse mods): look through the official BeamNG mod repository by category (vehicles, maps, skins, props ...) sorted by downloads, rating or date, search it, or paste a link to any mod page - then **Install**. The mod is downloaded, virus-checked like an upload and ready for players; mods you already have are marked.
