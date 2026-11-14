@@ -1110,7 +1110,7 @@ VIEWS.network = async m => {
     const left = d.open_until - Date.now() / 1000;
     const modeTxt = !d.on || d.relay ? "" : needed
       ? (d.is_open ? (d.players ? `Open - ${d.players} playing. Closes ${Math.round(d.idle / 60)} minutes after the last player leaves.` : left > 0 ? `Open for about ${fmtDur(left)} more (or as long as someone is playing).` : "Closing…")
-                   : "Closed right now, so nobody can reach your server from outside. Copying an invite opens it.")
+                   : "Closed right now, so nobody can reach your server from outside. Copying an invite or /join in Discord opens it.")
       : "Open all the time.";
     b.innerHTML = `<div class="row"><h2 style="margin:0">Automatic port forwarding ${badge}</h2><span class="spacer"></span>
         ${d.relay ? "" : d.on ? `<button class="btn sm" id="up_check">Check again</button><button class="btn sm" id="up_off">Turn off</button>` : `<button class="btn primary" id="up_on">Open port ${esc(ports)} automatically</button>`}</div>
@@ -1119,7 +1119,7 @@ VIEWS.network = async m => {
       ${d.on && !d.relay ? `<div class="row" style="margin-top:10px;flex-wrap:wrap;gap:6px"><span class="small"><b>When:</b></span>
           <button class="btn sm${needed ? "" : " on"}" id="up_always">Always open</button><button class="btn sm${needed ? " on" : ""}" id="up_needed">Only when needed</button>
           ${needed ? (d.is_open ? `<button class="btn sm" id="up_close">Close now</button>` : `<button class="btn sm" id="up_open">Open for 1 hour</button>`) : ""}</div>
-        <p class="small muted" style="margin:6px 0 0">${esc(modeTxt)}${needed ? " Your router can't tell the dashboard that someone is knocking on a closed port, so the port opens when you invite people (or press Open) and stays open while anyone plays. Strangers from the public server list can't join while it's closed." : ""}</p>` : ""}
+        <p class="small muted" style="margin:6px 0 0">${esc(modeTxt)}${needed ? " Your router can't tell the dashboard that someone is knocking on a closed port, so the port opens when you invite people, press Open, or a friend types /join in your Discord (when the Discord bot is set up), and stays open while anyone plays. Strangers from the public server list can't join while it's closed." : ""}</p>` : ""}
       ${st.router ? `<p class="small" style="margin:6px 0 0">Router: <b>${esc(st.router)}</b>${st.external_ip ? " · internet address " + ipb(esc(st.external_ip)) : ""}${st.local_ip ? " · this computer " + ipb(esc(st.local_ip)) : ""}</p>` : ""}
       ${rows.length ? `<div style="margin-top:6px">${rows.map(r => `<div class="check"><span class="mark ${r.ok ? "ok" : "bad"}">${r.ok ? "✓" : "✕"}</span><div><b>${esc(r.port)} ${esc(r.proto)}</b> <span class="small muted">${r.ok ? (r.lease ? "open (renewed every day)" : "open") : esc(r.error)}</span></div></div>`).join("")}</div>` : ""}
       ${st.error ? `<div class="banner warn" style="margin:10px 0 0"><span class="small">${esc(st.error)}</span></div>` : ""}
