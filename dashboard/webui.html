@@ -1177,8 +1177,15 @@ VIEWS.updates = async m => {
         <div class="row"><div class="stat"><div class="label">Installed</div><div class="value">${esc(d.easy_installed)}</div></div><span class="spacer"></span><div class="stat"><div class="label">Newest</div><div class="value">${esc(d.easy_latest || "?")}</div></div></div>
         <p>${esNew ? `<span class="pill warn"><span class="dot"></span>Update available</span>` : `<span class="pill good"><span class="dot"></span>Up to date</span>`}</p>
         ${esNew ? `<p class="small">Download it from <a href="https://github.com/${esc(d.repo)}/releases/latest" target="_blank" rel="noopener noreferrer">GitHub</a> and run the installer again - your settings and mods are kept.</p>` : ""}
+        ${d.easy_early ? `<div class="banner" style="margin:8px 0"><span class="small"><b>${d.channel === "experimental" ? "Experimental" : "Early access"} ${esc(d.easy_early)}</b> is out. <a href="${esc(d.easy_early_url || `https://github.com/${d.repo}/releases`)}" target="_blank" rel="noopener noreferrer">Download it</a> and run the installer again.</span></div>` : ""}
+        <div class="row" style="margin-top:10px;flex-wrap:wrap;gap:6px"><span class="small"><b>Version:</b></span>
+          <button class="btn sm${d.channel === "experimental" ? "" : " on"}" id="ch_stable">Stable</button>
+          <button class="btn sm${d.channel === "experimental" ? " on" : ""}" id="ch_exp">Experimental</button></div>
+        <p class="small muted" style="margin:6px 0 0">${d.channel === "experimental" ? "You hear about every new version first. Experimental versions have the newest features but aren't fully tested - if something breaks, go back to the newest Stable download." : "Tested versions only. Pick Experimental to try new features before everyone else."}</p>
       </div>
     </div>`;
+  const chan = c => async () => { try { await api("/api/updates/check", { json: { channel: c } }); toast(c === "stable" ? "Stable versions only" : "You'll hear about experimental versions too"); } catch (e) { toast(e.message); } show("updates"); };
+  $("#ch_stable").onclick = chan("stable"); $("#ch_exp").onclick = chan("experimental");
   $("#check").onclick = async () => { $("#check").disabled = true; try { await api("/api/updates/check", { method: "POST" }); } catch (e) { toast(e.message); } show("updates"); };
   const ib = $("#install");
   if (ib) ib.onclick = async () => {
