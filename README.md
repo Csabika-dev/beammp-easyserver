@@ -42,18 +42,18 @@ Then work through the [guides](#-guides) below - start with [Let friends join ov
 
 | Page | What you can do |
 |---|---|
-| **Overview** | Status, who's online, uptime, start / stop / restart, switch the map in one click |
+| **Overview** | Status, who's online, uptime, start / stop / restart, switch the map in one click, **Copy invite** (a ready-to-paste Discord message with the address) |
 | **Servers** | Run several servers on one computer, copy a server, CPU / RAM / download limits per server |
 | **Config** | Every server setting in a simple form (or as text) with plain-English checks; who can join, map vote, events, map rotation, templates, **security presets**, **teleport & repair**, announcements, restarts, moderation & anti-bot, and **"What changed?"** with one-click undo |
-| **Mods** | Drag & drop mods (each one virus-checked), turn them on/off, **light mode** for map mods, one-click mod updates, **modpacks** |
+| **Mods** | Drag & drop mods (each one virus-checked), **browse and install mods from the BeamNG repository**, turn them on/off, **light mode** for map mods, one-click mod updates, **modpacks** |
 | **Players** | Players per day, busiest hours, top players, server records, **per-map statistics**, kick / mute / ban, **maintenance mode** |
-| **Health** | **Health report** (internet, BeamMP backend, server, port, config, AuthKey, plugin, mods, reachability, disk, memory), **diagnostic reports**, the **"someone can't join?"** doctor and the port checker |
+| **Health** | **Health report** (internet, BeamMP backend, server, port, config, AuthKey, plugin, mods, reachability, disk, memory), **diagnostic reports**, the **"someone can't join?"** doctor, the port checker and **automatic port forwarding (UPnP)** |
 | **Updates** | New BeamMP server and EasyServer versions, one-click server update |
 | **Logs** | Live server log with a **log explainer**, plus the **activity log** (who changed what) |
 | **Notifications** | Crashes, updates, blocked mods, failed logins, joins, health problems ... sent to Discord, email, phone, Telegram or any webhook if you like |
 | **Settings** | Alerts, password, two-step login, **users & roles**, internet access (HTTPS), hide your IP, backups, DuckDNS, Discord bot, phone app, **public status page**, sleep & wake-up |
 
-Dark and light mode, works on phones (Android app, or add it to the iPhone home screen). Before anything changes your network the dashboard shows exactly what will change and asks first. Your router is never changed.
+Dark and light mode, works on phones (Android app, or add it to the iPhone home screen). Before anything changes your network the dashboard shows exactly what will change and asks first. Your router is only changed if you click "Open port automatically" (and closed again when you turn it off).
 
 ---
 
@@ -188,7 +188,9 @@ Click a guide to open it. Every path like **Config → Who can join** means: ope
 
 Friends on the **same Wi-Fi** can join right away (BeamMP → Direct connect → the server's home address, port 30814).
 
-For everyone else:
+For everyone else, the quick way: **Health → Automatic port forwarding → "Open port 30814 automatically"**. Most routers accept it (UPnP) and the dashboard keeps the forward in place. Then click **Copy invite** on the Overview page and paste it to your friends.
+
+If your router has UPnP switched off or doesn't support it, do it by hand:
 1. Give the server computer a fixed address in your router (often called *DHCP reservation* or *static lease*), so the next step keeps working.
 2. **Forward port 30814, TCP and UDP**, to the server computer. Search for "*your router model* port forwarding". Several servers? Forward each server's port (shown on the Servers page).
 3. Open **Health** → **Full check**. "Reachable from the internet" should be green.
