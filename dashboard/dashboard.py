@@ -46,6 +46,7 @@ BEAMMP_REPO = "BeamMP/BeamMP-Server"
 # account key: a key is activated for this install and checked once a day.
 # Only keys from this store count (0 = the shop isn't open yet).
 UPNP_IDLE = 30 * 60      # "only when needed": close the port this long after the last player / invite
+JOIN_OPEN = 2 * 3600      # Discord /join keeps the port open this long
 LS_STORE_ID = 0
 LS_API = "https://api.lemonsqueezy.com/v1/licenses/"
 SUPPORT_URL = "https://csabika-dev.github.io/beammp-easyserver/#support"
@@ -142,7 +143,7 @@ DEFAULT_SETTINGS = {
     "event_ads": False,            # advertise events: Discord/Telegram/webhook post when planned + a day before, in-game reminders
     "upnp_on": False,              # ask the router (UPnP) to forward the game ports - no router settings page needed
     "upnp_mapped": [],             # [port, "TCP"/"UDP"] pairs this dashboard opened, so old ones can be closed again
-    "upnp_mode": "always",         # "always" = keep the port open; "needed" = only while players are on or right after an invite
+    "upnp_mode": "needed",         # "needed" = only while players are on, after an invite or /join; "always" = keep the port open
     "upnp_open_until": 0,          # "needed" mode: keep the port open until this time
     "invite_note": "",             # an extra line for the "Copy invite" message (rules, Discord link ...)
     "supporter": {},               # the supporter licence (key itself is a secret): instance, plan, last check
@@ -5197,6 +5198,8 @@ class DiscordBot:
                          {"type": 3, "name": "player", "description": "BeamMP player name", "required": False,
                           "max_length": 40}] + opts},
             {"name": "events", "description": "Upcoming events on the BeamMP server", "type": 1, "contexts": [0]},
+            {"name": "join", "description": "Open the server so you can join (it closes again once nobody plays)", "type": 1,
+             "contexts": [0], "options": opts},
             {"name": "sleep", "description": "Put the server computer to sleep to save power (/start wakes it up)",
              "type": 1, "contexts": [0], "default_member_permissions": str(PERM_MANAGE_GUILD)},
         ]
@@ -5254,6 +5257,11 @@ class DiscordBot:
                 return discord_api("PATCH", edit, body={"embeds": [{"title": "Upcoming events", "color": 0x8B5CF6,
                                                                     "description": upcoming_events_text()}],
                                                         "allowed_mentions": {"parse": []}})
+            if name == "join":
+                with LOCK:
+                    inst = INSTANCES.get(str(opts.get("server") or "main")) or INSTANCES["main"]
+                discord_api("POST", cb, body={"type": 5})
+                return discord_api("PATCH", edit, body={"content": self.do_join(inst, who), "allowed_mentions": {"parse": []}})
             if name not in ("start", "stop", "restart", "whitelist", "sleep"):
                 return
             perms = int(member.get("permissions") or 0)
@@ -5319,6 +5327,34 @@ class DiscordBot:
         self.app.notifier.add("moderation", "Allow-list changed from Discord", "%s by %s." % (msg.replace("*", ""), who[:60]),
                               "info", send=False)
         return msg + ("" if on else " (The list isn't switched on - /whitelist on makes the server invite-only.)")
+
+    def do_join(self, inst, who):
+        """/join: anyone in the Discord server can open the port for a while ("Only when needed" mode)."""
+        app = self.app
+        use_server(inst.id)
+        host, port, via_relay = game_address(inst)
+        where = "BeamMP -> **Direct Connect** -> IP `%s` port `%s`" % (host, port)
+        if inst.server.status().get("state") not in ("running", "starting"):
+            return "😴 **%s** isn't running right now. Someone with Manage Server can /start it." % discord_escape(inst.name)
+        if via_relay or not app.settings.get("upnp_on") or app.settings.get("upnp_mode") != "needed":
+            return "✅ You can join right away: " + where
+        last = getattr(self, "_join_t", 0)
+        if now() - last < 20:
+            return "⏳ Just opened - join now: " + where
+        self._join_t = now()
+        app.upnp_open_for(JOIN_OPEN)
+        st = app.upnp_apply()
+        ok = st["ports"] and not st.get("error") and all(r["ok"] for r in st["ports"])
+        activity(who, "/join", "discord", server=inst.id)
+        if not ok:
+            app.notifier.add("network", "/join from Discord couldn't open the port",
+                             "%s asked to join, but the router said: %s" % (who[:60], st.get("error") or "; ".join(
+                                 "%s %s: %s" % (r["port"], r["proto"], r["error"]) for r in st["ports"] if not r["ok"])), "warning")
+            return "❌ The router didn't open the port. The server owner got a message about it."
+        app.notifier.add("network", "%s opened the server from Discord" % who[:60],
+                         "The port is open for %d minutes, and stays open while anyone plays." % (JOIN_OPEN // 60), "info", send=False)
+        return ("🔓 Open for the next %d minutes (and as long as anyone plays). Join now: %s"
+                % (JOIN_OPEN // 60, where))
 
     def do_sleep(self, who):
         app = self.app
