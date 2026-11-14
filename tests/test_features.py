@@ -56,7 +56,7 @@ class PortForwarding(unittest.TestCase):
         self.assertEqual(self.router.maps[(30814, "TCP")]["client"], "192.168.1.99")   # left alone
 
     def test_only_when_needed(self):
-        self.addCleanup(lambda: D.APP.settings.update({"upnp_mode": "always", "upnp_open_until": 0}))
+        self.addCleanup(lambda: D.APP.settings.update({"upnp_mode": "needed", "upnp_open_until": 0}))
         self.owner.call("/api/upnp", {"on": True})
         st, d, _ = self.owner.call("/api/upnp", {"mode": "needed"})
         self.assertTrue(d["ok"], d)
@@ -76,6 +76,24 @@ class PortForwarding(unittest.TestCase):
             D.APP.upnp_tick()
         self.assertIn((30814, "UDP"), self.router.maps)
         self.assertGreater(D.APP.settings.get("upnp_open_until"), D.now() + 25 * 60)
+
+    def test_discord_join(self):
+        self.addCleanup(lambda: D.APP.settings.update({"upnp_mode": "needed", "upnp_open_until": 0}))
+        self.assertEqual(D.DEFAULT_SETTINGS["upnp_mode"], "needed")       # not open all the time unless chosen
+        main = D.INSTANCES["main"]
+        bot = D.APP.bot
+        bot._join_t = 0
+        with mock.patch.object(main.server, "status", lambda: {"state": "stopped"}):
+            self.assertIn("isn't running", bot.do_join(main, "Dani"))
+        with mock.patch.object(main.server, "status", lambda: {"state": "running"}):
+            self.assertIn("right away", bot.do_join(main, "Dani"))       # port forwarding is off: nothing to open
+            self.owner.call("/api/upnp", {"on": True})
+            self.owner.call("/api/upnp", {"close_now": True})
+            self.assertEqual(self.router.maps, {})
+            msg = bot.do_join(main, "Dani")
+            self.assertIn("Open for the next 120 minutes", msg)
+            self.assertIn((30814, "UDP"), self.router.maps)
+            self.assertIn("Just opened", bot.do_join(main, "Bence"))      # no hammering the router
 
     def test_viewer_cannot_change_it(self):
         self.assertEqual(D.required_role("POST", "/api/upnp"), "admin")
