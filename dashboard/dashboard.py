@@ -150,6 +150,7 @@ DEFAULT_SETTINGS = {
     "invite_note": "",             # an extra line for the "Copy invite" message (rules, Discord link ...)
     "supporter": {},               # the supporter licence (key itself is a secret): instance, plan, last check
     "early_access": True,          # supporters: tell me about pre-release (early access) versions too
+    "update_channel": "stable",    # "stable" = tested releases only, "experimental" = newest features first (pre-releases)
 }
 SECURITY_FILE = os.path.join(DATA_DIR, "security.json")
 GUARD_FILE = os.path.join(DATA_DIR, "guard.json")                 # what the guard knows (blocked, good players)
@@ -6993,7 +6994,8 @@ class App:
             res["easy_latest"] = github_latest(REPO)
         except Exception:
             res["easy_latest"] = None
-        if supporter_active() and self.settings.get("early_access"):
+        res["channel"] = self.settings.get("update_channel") or "stable"
+        if res["channel"] == "experimental" or (supporter_active() and self.settings.get("early_access")):
             try:
                 pre = github_prerelease(REPO)
                 if pre and newer(pre[0], max(res.get("easy_latest") or "0.0.0", EASY_VERSION, key=lambda v: tuple(map(int, v.split("."))))):
@@ -7012,8 +7014,12 @@ class App:
             else:
                 res["notified_server"] = prev.get("notified_server")
             if res.get("easy_early") and prev.get("notified_early") != res["easy_early"]:
-                self.notifier.add("update", "Early access: EasyServer %s is ready to try" % res["easy_early"],
-                                  "Thanks for supporting EasyServer! Download the preview from %s" % res.get("easy_early_url"), "info")
+                if res["channel"] == "experimental":
+                    self.notifier.add("update", "Experimental: EasyServer %s is out" % res["easy_early"],
+                                      "The newest features, not fully tested yet. Download it from %s" % res.get("easy_early_url"), "info")
+                else:
+                    self.notifier.add("update", "Early access: EasyServer %s is ready to try" % res["easy_early"],
+                                      "Thanks for supporting EasyServer! Download the preview from %s" % res.get("easy_early_url"), "info")
             res["notified_early"] = res.get("easy_early") or prev.get("notified_early")
             if res.get("easy_latest") and newer(res["easy_latest"], EASY_VERSION) \
                     and prev.get("notified_easy") != res["easy_latest"]:
@@ -8485,9 +8491,18 @@ class Handler(BaseHTTPRequestHandler):
         up.setdefault("installed", APP.server.installed_version())
         up["easy_installed"] = EASY_VERSION
         up["repo"] = REPO
+        up["channel"] = APP.settings.get("update_channel") or "stable"
         self.send(200, up)
 
     def post_updates_check(self, q):
+        b = self.body_json(1024) if int(self.headers.get("Content-Length") or 0) else {}
+        if b.get("channel") is not None:
+            if b["channel"] not in ("stable", "experimental"):
+                return self.fail(400, "channel must be stable or experimental")
+            APP.settings.update_one("update_channel", b["channel"])
+            if b["channel"] == "stable":
+                with LOCK:
+                    APP.updates.pop("easy_early", None)
         self.send(200, APP.check_updates(notify=False))
 
     def post_updates_install(self, q):
