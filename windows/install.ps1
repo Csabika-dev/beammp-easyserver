@@ -16,7 +16,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'   # makes downloads much faster
-$EasyVersion  = '1.13.0'
+$EasyVersion  = '1.14.0'
 $DefaultDir   = 'C:\BeamMP-Server'
 $StateFile    = Join-Path $env:ProgramData 'BeamMP-EasyServer\install-dir.txt'
 $ServerUrl    = 'https://github.com/BeamMP/BeamMP-Server/releases/latest/download/BeamMP-Server.exe'
@@ -183,7 +183,7 @@ function Install-Dashboard($dir) {
     $src = Find-DashboardSource
     $dst = Join-Path $esDir 'dashboard'
     New-Item -ItemType Directory -Force -Path $dst, (Join-Path $esDir 'data') | Out-Null
-    foreach ($f in 'dashboard.py', 'webui.html', 'modscan.py', 'tlsgen.py') { Copy-Item -Force (Join-Path $src $f) (Join-Path $dst $f) }
+    foreach ($f in 'dashboard.py', 'webui.html', 'modscan.py', 'tlsgen.py', 'upnp.py') { Copy-Item -Force (Join-Path $src $f) (Join-Path $dst $f) }
     # player statistics plugin, runs inside the BeamMP server
     $plug = Join-Path $dir 'Resources\Server\EasyServerStats'
     New-Item -ItemType Directory -Force -Path $plug | Out-Null
