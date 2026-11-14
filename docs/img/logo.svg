@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2f8cff"/>
+      <stop offset="1" stop-color="#1747b8"/>
+    </linearGradient>
+    <linearGradient id="hi" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity=".20"/>
+      <stop offset=".55" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="or" gradientUnits="userSpaceOnUse" x1="0" y1="92" x2="0" y2="222">
+      <stop offset="0" stop-color="#ffb24a"/>
+      <stop offset="1" stop-color="#ff6516"/>
+    </linearGradient>
+  </defs>
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#bg)"/>
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#hi)"/>
+  <!-- steering-wheel rim with a gap at the top: also a power symbol -->
+  <path d="M 192 148 A 136 136 0 1 0 320 148" fill="none" stroke="#fff" stroke-width="40" stroke-linecap="round"/>
+  <!-- spokes -->
+  <path d="M 124 300 L 388 300" stroke="#fff" stroke-width="34" stroke-linecap="round"/>
+  <path d="M 256 300 L 256 392" stroke="#fff" stroke-width="34" stroke-linecap="round"/>
+  <!-- hub -->
+  <circle cx="256" cy="300" r="44" fill="#fff"/>
+  <circle cx="256" cy="300" r="17" fill="#1f5fd6"/>
+  <!-- power line (orange = on) -->
+  <path d="M 256 104 L 256 214" stroke="url(#or)" stroke-width="40" stroke-linecap="round"/>
+</svg>
