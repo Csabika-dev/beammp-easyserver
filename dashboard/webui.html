@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-title" content="BeamMP">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>BeamMP Dashboard</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232a78d6'/%3E%3Ctext x='16' y='22' font-family='Arial' font-size='18' font-weight='700' fill='white' text-anchor='middle'%3EB%3C/text%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Cdefs%3E%3ClinearGradient id='a' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%232f8cff'/%3E%3Cstop offset='1' stop-color='%231747b8'/%3E%3C/linearGradient%3E%3ClinearGradient id='b' gradientUnits='userSpaceOnUse' x1='0' y1='92' x2='0' y2='222'%3E%3Cstop offset='0' stop-color='%23ffb24a'/%3E%3Cstop offset='1' stop-color='%23ff6516'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='512' height='512' rx='112' fill='url%28%23a%29'/%3E%3Cg fill='none' stroke='%23fff' stroke-linecap='round'%3E%3Cpath d='M192 148A136 136 0 1 0 320 148' stroke-width='40'/%3E%3Cpath d='M124 300H388M256 300V392' stroke-width='34'/%3E%3C/g%3E%3Ccircle cx='256' cy='300' r='44' fill='%23fff'/%3E%3Ccircle cx='256' cy='300' r='17' fill='%231f5fd6'/%3E%3Cpath d='M256 104V214' stroke='url%28%23b%29' stroke-width='40' stroke-linecap='round'/%3E%3C/svg%3E">
 <style nonce="__NONCE__">
 :root{
   --bg:#f4f4f2;--surface:#fcfcfb;--surface-2:#f0efec;--line:#e2e1dc;--line-strong:#cfcec8;
@@ -45,7 +45,7 @@ button,input,select,textarea{font:inherit;color:inherit}
 .heat{min-width:0}
 .side{background:var(--surface);border-right:1px solid var(--line);padding:18px 12px;position:sticky;top:0;height:100vh;display:flex;flex-direction:column;gap:2px}
 .brand{display:flex;align-items:center;gap:10px;padding:4px 10px 18px;font-weight:650;letter-spacing:-.01em}
-.brand .logo{width:28px;height:28px;border-radius:8px;background:var(--accent);display:grid;place-items:center;color:#fff;font-size:15px}
+.brand .logo{width:30px;height:30px;flex:none}
 .brand small{display:block;font-weight:400;color:var(--muted);font-size:12px}
 .nav{all:unset;display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;color:var(--text-2);cursor:pointer;position:relative}
 .nav:hover{background:var(--surface-2);color:var(--text)}
@@ -126,6 +126,10 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 .banner{display:flex;gap:12px;align-items:center;padding:12px 16px;border-radius:10px;border:1px solid var(--line);background:var(--surface);margin-bottom:16px}
 .secbar{position:sticky;top:0;z-index:20;display:flex;gap:12px;align-items:flex-start;padding:12px 16px;margin:0 0 16px;border-radius:10px;background:var(--critical);color:#fff;box-shadow:0 4px 16px rgba(0,0,0,.25)}
 .secbar b{display:block}.secbar .small{opacity:.92;white-space:pre-wrap}.secbar .btn{background:#fff;color:#8b1a1a;border-color:#fff;flex:none}
+.modalbg{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:50;padding:16px}
+.modalbg .card{width:min(620px,100%);max-height:90vh;overflow:auto}
+.modalbg textarea{min-height:170px;font-family:inherit;font-size:14px}
+.btn.on{background:var(--accent-soft);border-color:var(--accent)}
 .banner.warn{border-color:var(--warning)}.banner.bad{border-color:var(--critical)}.banner.info{border-color:var(--accent)}
 .badge{display:inline-block;font-size:11.5px;font-weight:600;border-radius:99px;padding:1px 8px;background:var(--surface-2);color:var(--text-2);margin-left:6px;vertical-align:1px}
 .badge.good{color:var(--good-ink)}.badge.warn{color:var(--warn-ink)}.badge.bad{color:var(--crit-ink)}
@@ -165,7 +169,7 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 /* auth screens */
 .center{min-height:100vh;display:grid;place-items:center;padding:20px}
 .authcard{width:100%;max-width:380px}
-.authcard .logo{width:44px;height:44px;border-radius:12px;background:var(--accent);display:grid;place-items:center;color:#fff;font-size:22px;margin-bottom:14px}
+.authcard .logo{width:48px;height:48px;margin-bottom:14px}
 #toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--text);color:var(--surface);padding:10px 16px;border-radius:10px;font-weight:500;z-index:50;max-width:92vw;box-shadow:0 6px 24px rgba(0,0,0,.2)}
 .secret{font-family:var(--mono);font-size:16px;letter-spacing:.06em;background:var(--surface-2);padding:10px 12px;border-radius:8px;text-align:center;user-select:all}
 .mobilebar{display:none}
@@ -214,6 +218,83 @@ async function api(path, opts = {}) {
   if (!r.ok) { const e = new Error(data.error || ("Error " + r.status)); e.data = data; e.status = r.status; throw e; }
   return data;
 }
+async function copyText(t) {
+  try { if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(t); return true; } } catch (e) {}
+  const ta = document.createElement("textarea"); ta.value = t; ta.style.cssText = "position:fixed;opacity:0;min-height:0"; document.body.appendChild(ta); ta.select();
+  let ok = false; try { ok = document.execCommand("copy"); } catch (e) {}
+  ta.remove(); return ok;
+}
+function modal(inner) {
+  const bg = document.createElement("div"); bg.className = "modalbg"; bg.innerHTML = `<div class="card">${inner}</div>`;
+  bg.onclick = e => { if (e.target === bg) bg.remove(); };
+  document.body.appendChild(bg); return bg;
+}
+/* ---------------- mod browser (BeamNG repository) */
+async function modBrowser() {
+  const bg = modal(`<div class="row"><h2 style="margin:0">Browse mods</h2><span class="spacer"></span><button class="btn sm" data-x>Close</button></div>
+    <p class="small muted">From the official BeamNG repository (beamng.com). Install = download, virus check, ready for players. You can also paste a link to a mod page.</p>
+    <div class="row" style="gap:8px;flex-wrap:wrap"><select id="mb_cat" style="flex:1;min-width:140px"></select><select id="mb_ord" style="flex:1;min-width:140px"></select></div>
+    <div class="row" style="margin-top:8px"><input type="text" id="mb_q" placeholder="Search, or paste a beamng.com mod link" maxlength="200" style="flex:1"><button class="btn" id="mb_go">Search</button></div>
+    <div id="mb_list" style="margin-top:12px"><p class="muted small">Loading…</p></div>`);
+  bg.querySelector(".card").style.width = "min(820px,100%)";
+  bg.querySelector("[data-x]").onclick = () => { bg.remove(); if (TAB === "mods") show("mods"); };
+  let page = 1, installedAny = false;
+  const load = async (more) => {
+    const L = $("#mb_list", bg); if (!more) { page = 1; L.innerHTML = `<p class="muted small">Loading…</p>`; }
+    const qs = new URLSearchParams({ cat: $("#mb_cat", bg).value || "", order: $("#mb_ord", bg).value || "", q: $("#mb_q", bg).value.trim(), page });
+    let d; try { d = await api("/api/modbrowser?" + qs); } catch (e) { L.innerHTML = `<div class="banner bad">${esc(e.message)}</div>`; return; }
+    if (!$("#mb_cat", bg).options.length) {
+      $("#mb_cat", bg).innerHTML = d.cats.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join("");
+      $("#mb_ord", bg).innerHTML = Object.entries(d.orders).map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join("");
+      $("#mb_cat", bg).value = d.cat; $("#mb_ord", bg).value = d.order;
+    }
+    const rows = d.items.map(it => `<div class="check" style="align-items:flex-start">
+        <img src="/api/modbrowser/icon?id=${it.id}&srv=${encodeURIComponent(SERVER)}" alt="" loading="lazy" width="56" height="56" style="border-radius:8px;object-fit:cover;flex:none;background:var(--surface-2)">
+        <div style="flex:1;min-width:0"><b>${esc(it.title)}</b> <span class="small muted">${esc(it.version)}</span>
+          <div class="small muted">${[it.author, it.category, it.downloads ? it.downloads.toLocaleString() + " downloads" : "", it.rating ? "★ " + it.rating : "", it.updated ? "updated " + ago(it.updated) : ""].filter(Boolean).map(esc).join(" · ")}</div>
+          <div class="small">${esc(it.tagline)}</div>
+          <a class="small" href="${esc(it.page)}" target="_blank" rel="noopener noreferrer">Open on beamng.com</a></div>
+        ${it.installed ? `<span class="badge good">Installed</span>` : `<button class="btn sm primary" data-inst="${it.id}" data-title="${esc(it.title)}">Install</button>`}</div>`).join("");
+    const html = (d.error ? `<div class="banner warn">${esc(d.error)}</div>` : "") + (rows || (d.error ? "" : `<p class="muted small">Nothing found${$("#mb_q", bg).value.trim() ? " in this category - try another category, or paste the mod's link" : ""}.</p>`)) +
+      (d.more ? `<div class="row" style="justify-content:center;margin-top:10px"><button class="btn" id="mb_more">${$("#mb_q", bg).value.trim() ? "Search further" : "More"}</button></div>` : "");
+    if (more) { $("#mb_more", bg) && $("#mb_more", bg).parentElement.remove(); L.insertAdjacentHTML("beforeend", html); } else L.innerHTML = html;
+    if ($("#mb_more", bg)) $("#mb_more", bg).onclick = () => { page++; load(true); };
+    L.querySelectorAll("[data-inst]").forEach(b => b.onclick = () => install(b));
+    L.querySelectorAll("img").forEach(i => { i.onerror = () => { i.style.visibility = "hidden"; }; });
+  };
+  const install = async b => {
+    b.disabled = true; b.textContent = "Starting…";
+    let r; try { r = await api("/api/modbrowser/install", { json: { id: +b.dataset.inst, title: b.dataset.title } }); } catch (e) { b.disabled = false; b.textContent = "Install"; return toast(e.message, 7000); }
+    const tick = async () => {
+      let j; try { j = await api("/api/modbrowser/job?job=" + r.job); } catch (e) { b.textContent = "Install"; b.disabled = false; return toast(e.message); }
+      if (!j.finished) { b.textContent = j.total ? Math.round(100 * j.done / j.total) + "%" : j.done ? fmtSize(j.done) : j.state; return setTimeout(tick, 800); }
+      if (j.ok) { b.outerHTML = `<span class="badge good">Installed</span>`; installedAny = true; toast(j.note, 8000); }
+      else { b.disabled = false; b.textContent = "Install"; toast(j.error, 10000); }
+    };
+    tick();
+  };
+  $("#mb_go", bg).onclick = () => load(false);
+  $("#mb_q", bg).onkeydown = e => { if (e.key === "Enter") load(false); };
+  $("#mb_cat", bg).onchange = () => load(false); $("#mb_ord", bg).onchange = () => load(false);
+  load(false);
+}
+async function openInvite() {
+  let d; try { d = await api("/api/invite"); } catch (e) { return toast(e.message); }
+  const bg = modal(`<div class="row"><h2 style="margin:0">Invite friends</h2><span class="spacer"></span><button class="btn sm" data-x>Close</button></div>
+    <p class="small muted">Paste this into Discord, WhatsApp or anywhere. ${d.internet ? "" : "<b>No internet address was found yet</b> - check the Health page. "}${d.relay ? "It uses your relay address, so your home IP stays hidden." : ""}</p>
+    <div class="row" style="margin-bottom:8px"><button class="btn sm on" data-v="net">${d.internet ? "Friends anywhere" : "Message"}</button><button class="btn sm" data-v="lan">Same Wi-Fi</button></div>
+    <textarea id="inv_t" readonly></textarea>
+    <label class="f" style="margin-top:10px"><span>Extra line <span class="muted">(rules, your Discord link…)</span></span><input type="text" id="inv_note" maxlength="300" value="${esc(d.note)}" placeholder="Be nice, no ramming at spawn"></label>
+    <div class="row" style="margin-top:12px"><button class="btn primary" id="inv_copy">Copy invite</button><span class="small muted">Discord shows the **bold** parts in bold.</span></div>`);
+  let view = "net";
+  const fill = () => { const note = $("#inv_note", bg).value.trim(); $("#inv_t", bg).value = (view === "lan" ? d.lan_text : d.base) + (note ? "\n\n" + note : "") + "\n\n" + d.footer; };
+  fill();
+  bg.querySelectorAll("[data-v]").forEach(b => b.onclick = () => { view = b.dataset.v; bg.querySelectorAll("[data-v]").forEach(x => x.classList.toggle("on", x === b)); fill(); });
+  $("#inv_note", bg).oninput = fill;
+  $("#inv_note", bg).onchange = () => api("/api/invite", { json: { note: $("#inv_note", bg).value.trim() } }).catch(() => {});
+  bg.querySelector("[data-x]").onclick = () => bg.remove();
+  $("#inv_copy", bg).onclick = async () => { if (await copyText($("#inv_t", bg).value)) { toast("Invite copied - paste it in Discord"); } else { $("#inv_t", bg).removeAttribute("readonly"); $("#inv_t", bg).select(); toast("Press Ctrl+C to copy"); } };
+}
 const fmtSize = b => b > 1073741824 ? (b / 1073741824).toFixed(1) + " GB" : b > 1048576 ? (b / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(b / 1024)) + " KB";
 const fmtDur = s => { s = Math.max(0, s | 0); const d = Math.floor(s / 86400), hh = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60); return d ? `${d}d ${hh}h` : hh ? `${hh}h ${m}m` : `${m}m`; };
 const fmtTime = t => t ? new Date(t * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "-";
@@ -244,6 +325,7 @@ const I = {
   moon: '<path d="M12 3a9 9 0 1 0 9 9c0-.5 0-.9-.1-1.4A5.5 5.5 0 0 1 12.4 3.1L12 3z"/>',
   logout: '<path d="M10 17l1.4-1.4-2.6-2.6H20v-2H8.8l2.6-2.6L10 7l-5 5 5 5zM4 5h8V3H4a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/>',
 };
+const LOGO_SVG = `<svg width="100%" height="100%" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><defs><linearGradient id="lga" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2f8cff"/><stop offset="1" stop-color="#1747b8"/></linearGradient><linearGradient id="lgb" gradientUnits="userSpaceOnUse" x1="0" y1="92" x2="0" y2="222"><stop offset="0" stop-color="#ffb24a"/><stop offset="1" stop-color="#ff6516"/></linearGradient></defs><rect width="512" height="512" rx="112" fill="url(#lga)"/><g fill="none" stroke="#fff" stroke-linecap="round"><path d="M192 148A136 136 0 1 0 320 148" stroke-width="40"/><path d="M124 300H388M256 300V392" stroke-width="34"/></g><circle cx="256" cy="300" r="44" fill="#fff"/><circle cx="256" cy="300" r="17" fill="#1f5fd6"/><path d="M256 104V214" stroke="url(#lgb)" stroke-width="40" stroke-linecap="round"/></svg>`;
 const icon = n => `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">${I[n]}</svg>`;
 const TABS = [["overview","Overview"],["servers","Servers"],["config","Config"],["mods","Mods"],["players","Players"],["network","Health"],["updates","Updates"],["logs","Logs"],["notifications","Notifications"],["settings","Settings"]];
 
@@ -285,7 +367,7 @@ function switchServer(id) {
 }
 
 function authShell(inner) {
-  $("#root").innerHTML = `<div class="center"><div class="card authcard"><div class="logo">${esc("B")}</div>${inner}</div></div>`;
+  $("#root").innerHTML = `<div class="center"><div class="card authcard"><div class="logo">${LOGO_SVG}</div>${inner}</div></div>`;
 }
 
 function renderSetup() {
@@ -334,7 +416,7 @@ function renderShell() {
   const navs = myTabs().map(([k, label]) => `<button class="nav" data-tab="${k}">${icon(k)}<span>${label}</span>${k === "notifications" ? '<span class="count hidden" data-unread></span>' : ""}</button>`).join("");
   const picker = SERVERS.length > 1 ? `<label class="srvpick"><span class="small muted">Server</span><select data-srv>${SERVERS.map(x => `<option value="${esc(x.id)}" ${x.id === SERVER ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></label>` : "";
   $("#root").innerHTML = `<div class="app">
-    <aside class="side"><div class="brand"><div class="logo">B</div><div>BeamMP EasyServer<small>Dashboard ${esc(SESSION.version)}</small></div></div>
+    <aside class="side"><div class="brand"><div class="logo">${LOGO_SVG}</div><div>BeamMP EasyServer<small>Dashboard ${esc(SESSION.version)}${SESSION.supporter ? " · ❤ Supporter" : ""}</small></div></div>
       ${picker}${navs}<div class="grow"></div>
       <div class="foot"><button class="iconbtn" id="theme" title="Light / dark mode">${icon("moon")}</button><span class="small muted" title="Logged in as">${esc(SESSION.user || "owner")}${SESSION.role && SESSION.role !== "owner" ? " · " + esc(SESSION.role) : ""}</span><span class="spacer"></span><button class="iconbtn" id="logout" title="Log out">${icon("logout")}</button></div>
     </aside>
@@ -454,7 +536,7 @@ VIEWS.overview = async m => {
   if (d.update_available) banners.push(`<div class="banner info"><b>A BeamMP server update is available.</b><span class="spacer"></span><button class="btn sm" data-go="updates">See update</button></div>`);
   if (d.quarantined) banners.push(`<div class="banner warn"><b>${d.quarantined} mod(s) blocked by the virus check.</b><span class="spacer"></span><button class="btn sm" data-go="mods">Review</button></div>`);
   m.innerHTML = `
-    <div class="row"><div><h1>${esc(d.name || "BeamMP server")}</h1><p class="sub">${ipb(esc(d.lan_ip) + ":" + esc(d.port))} · ${esc(d.map || "?")} · ${d.private ? "Private" : "Public"}${d.relay ? " · players join via " + ipb(esc(d.relay)) : ""}</p></div><span class="spacer"></span>${statePill(s.state)}</div>
+    <div class="row"><div><h1>${esc(d.name || "BeamMP server")}</h1><p class="sub">${ipb(esc(d.lan_ip) + ":" + esc(d.port))} · ${esc(d.map || "?")} · ${d.private ? "Private" : "Public"}${d.relay ? " · players join via " + ipb(esc(d.relay)) : ""}</p></div><span class="spacer"></span><button class="btn sm" id="ov_invite" title="A ready-to-paste message with the address">Copy invite</button>${statePill(s.state)}</div>
     ${d.reviewed ? "" : `<div class="banner info" style="margin-top:12px">Before this server goes live, look over its settings once. <a href="#" id="rv_open">Review settings</a></div>`}
     ${banners.join("")}
     <div class="grid g4">
@@ -471,6 +553,7 @@ VIEWS.overview = async m => {
       <div class="card"><h2>Who's online</h2>${online.length ? `<div class="row">${online.map(p => `<span class="pill"><span class="dot"></span>${esc(p)}</span>`).join("")}</div>` : `<p class="muted">Nobody is playing right now.</p>`}</div>
     </div>`;
   m.querySelectorAll("[data-act]").forEach(b => b.onclick = () => serverAction(b.dataset.act, b));
+  $("#ov_invite").onclick = openInvite;
   if ($("#rv_open")) $("#rv_open").onclick = async e => { e.preventDefault(); if (await reviewGate(undefined, false)) { toast("Thanks - this server is ready to start"); show("overview"); } };
   m.querySelectorAll("[data-go]").forEach(b => b.onclick = () => show(b.dataset.go));
   $("#qmapgo").onclick = async () => {
@@ -780,7 +863,7 @@ VIEWS.mods = async m => {
   setTimeout(() => { const t = $("#descsize"); if (t) t.onchange = async () => { try { const r = await api("/api/mods/desc", { json: { enabled: t.checked } }); toast(r.note, 7000); } catch (e) { toast(e.message); t.checked = !t.checked; } }; }, 0);
   const B = { clean: ["good", "✓ safe"], warning: ["warn", "⚠ check"], unchecked: ["", "not checked yet"] };
   m.innerHTML = `
-    <h1>Mods</h1><p class="sub">Drop mod .zip files here. Every mod is virus-checked before players can download it.</p>
+    <div class="row"><div><h1>Mods</h1><p class="sub">Drop mod .zip files here, or find mods in the BeamNG repository. Every mod is virus-checked before players can download it.</p></div><span class="spacer"></span><button class="btn primary" id="mb_open">Browse mods</button></div>
     <div class="drop" id="drop"><b>Drag &amp; drop mods here</b><br><span class="muted">or click to choose files</span><input id="file" type="file" accept=".zip" multiple hidden></div>
     <div id="uploads"></div>
     <p class="small muted" style="margin:10px 0 16px">🛡 Active checks: ${esc(d.checks.join(" + "))}. ${d.auto_apply ? "The server restarts by itself ~15 s after a change." : "Restart the server after changes."}</p>
@@ -802,6 +885,7 @@ VIEWS.mods = async m => {
     <div class="row" style="margin-top:12px;flex-wrap:wrap"><button class="btn sm" id="rescan">Re-check all mods</button><button class="btn sm" id="modupd">Check for updates</button>
       <label class="toggle" style="margin:0 0 0 8px"><input type="checkbox" id="modupd_on" ${mu.on !== false ? "checked" : ""}><span><b>Check every day</b><small>Mods from the BeamNG repository${mu.checked ? " · last check " + esc(ago(mu.checked)) : ""}</small></span></label></div>
     ${d.quarantine.length ? `<h2 style="margin-top:26px">⛔ Blocked mods (quarantine)</h2><div class="card tight"><table><tbody>${d.quarantine.map(q => `<tr><td><b>${esc(q.name)}</b><div class="small" style="color:var(--crit-ink);white-space:pre-wrap">${esc(q.why)}</div></td><td class="num"><button class="btn sm danger" data-a="qdelete" data-n="${esc(q.name)}">Delete</button></td></tr>`).join("")}</tbody></table></div>` : ""}`;
+  $("#mb_open").onclick = () => modBrowser();
   const D = $("#drop");
   D.onclick = () => $("#file").click();
   $("#file").onchange = e => upload([...e.target.files]);
@@ -983,6 +1067,7 @@ VIEWS.players = async m => {
 VIEWS.network = async m => {
   m.innerHTML = `<div class="row"><div><h1>Health</h1><p class="sub">Is everything working? What's wrong, and what to do about it.</p></div></div>
     <div class="card" id="healthbox"><p class="muted">Checking…</p></div>
+    <div class="card" id="upnpbox" style="margin-top:16px"><p class="muted small">Looking for your router…</p></div>
     <div class="card" id="doctorbox" style="margin-top:16px"></div>
     <div id="netbox" style="margin-top:24px"><p class="muted">Checking the network…</p></div>`;
   const HS = { pass: ["ok", "✓"], fail: ["bad", "✕"], warn: ["warn", "!"], info: ["info", "i"] };
@@ -1013,7 +1098,28 @@ VIEWS.network = async m => {
     };
     $("#dr_go").onclick = go; $("#dr_name").onkeydown = e => { if (e.key === "Enter") go(); };
   };
-  health(false); doctor();
+  const upnpCard = async check => {
+    const b = $("#upnpbox"); if (!b) return;
+    let d; try { d = await api("/api/upnp" + (check ? "?check=1" : "")); } catch (e) { b.innerHTML = `<p class="small muted">${esc(e.message)}</p>`; return; }
+    const st = d.state || {}, rows = st.ports || [], ports = [...new Set(d.ports.map(x => x.port))].join(", ");
+    const allOk = d.on && rows.length && rows.every(r => r.ok) && !st.error;
+    const badge = d.relay ? `<span class="badge">Not needed</span>` : allOk ? `<span class="badge good">Port ${esc(ports)} open</span>` : d.on ? `<span class="badge warn">Problem</span>` : `<span class="badge">Off</span>`;
+    b.innerHTML = `<div class="row"><h2 style="margin:0">Automatic port forwarding ${badge}</h2><span class="spacer"></span>
+        ${d.relay ? "" : d.on ? `<button class="btn sm" id="up_check">Check again</button><button class="btn sm" id="up_off">Turn off</button>` : `<button class="btn primary" id="up_on">Open port ${esc(ports)} automatically</button>`}</div>
+      <p class="small muted" style="margin:8px 0 0">${d.relay ? "\"Hide my IP\" is on: players join through the relay, so nothing has to be opened on your router." :
+        "Friends outside your home can only join when your router forwards port " + esc(ports) + " (TCP + UDP) to this computer. Most routers let the dashboard do that itself (UPnP) - one click, no router settings page. It's checked every 20 minutes and put back after a router restart."}</p>
+      ${st.router ? `<p class="small" style="margin:6px 0 0">Router: <b>${esc(st.router)}</b>${st.external_ip ? " · internet address " + ipb(esc(st.external_ip)) : ""}${st.local_ip ? " · this computer " + ipb(esc(st.local_ip)) : ""}</p>` : ""}
+      ${rows.length ? `<div style="margin-top:6px">${rows.map(r => `<div class="check"><span class="mark ${r.ok ? "ok" : "bad"}">${r.ok ? "✓" : "✕"}</span><div><b>${esc(r.port)} ${esc(r.proto)}</b> <span class="small muted">${r.ok ? (r.lease ? "open (renewed every day)" : "open") : esc(r.error)}</span></div></div>`).join("")}</div>` : ""}
+      ${st.error ? `<div class="banner warn" style="margin:10px 0 0"><span class="small">${esc(st.error)}</span></div>` : ""}
+      ${!d.relay && (st.error || rows.some(r => !r.ok)) ? `<p class="small muted" style="margin:8px 0 0">No luck? Forward port ${esc(ports)} TCP + UDP to ${st.local_ip ? ipb(esc(st.local_ip)) : "this computer"} by hand in your router's settings page (search "<i>your router model</i> port forwarding"), or turn on "Hide my IP" (Settings) to use a relay instead.</p>` : ""}`;
+    const go = async (on, btn) => { btn.disabled = true; btn.textContent = on ? "Asking your router…" : "Closing…";
+      try { const r = await api("/api/upnp", { json: { on } }); toast(r.note, 8000); } catch (e) { toast(e.message, 8000); }
+      upnpCard(false); run(false).catch(() => {}); };
+    if ($("#up_on")) $("#up_on").onclick = () => go(true, $("#up_on"));
+    if ($("#up_off")) $("#up_off").onclick = () => go(false, $("#up_off"));
+    if ($("#up_check")) $("#up_check").onclick = () => { $("#up_check").disabled = true; upnpCard(true); };
+  };
+  health(false); doctor(); upnpCard(false);
   const run = async deep => {
     const m = $("#netbox"); if (!m) return;
     const d = await api("/api/network" + (deep ? "?deep=1" : ""));
@@ -1422,6 +1528,22 @@ async function drawLoadGraphs(upMbit, cpus) {
 }
 
 /* ---------------- 1.9: phone app + push (Settings) */
+async function loadSupporter() {
+  const b = $("#supbox"); if (!b) return;
+  let d; try { d = await api("/api/supporter"); } catch (e) { b.remove(); return; }
+  const owner = (SESSION.role || "owner") === "owner";
+  b.innerHTML = d.active ? `<div class="row"><h2 style="margin:0">Supporter <span class="badge good">Active</span></h2><span class="spacer"></span>${owner ? `<button class="btn sm" id="sup_rm">Remove from this computer</button>` : ""}</div>
+      <p class="small" style="margin:8px 0">Thank you for supporting EasyServer! ${d.plan ? esc(d.plan) + " · " : ""}${d.email ? esc(d.email) + " · " : ""}${d.expires_at ? "renews/ends " + esc(String(d.expires_at).slice(0, 10)) : "no end date"}</p>
+      <label class="toggle"><input type="checkbox" id="sup_ea" ${d.early_access ? "checked" : ""} ${owner ? "" : "disabled"}><span><b>Early access</b><small>Tell me about preview versions before everyone else gets them${d.early ? " - " + esc(d.early) + " is ready now" : ""}</small></span></label>
+      ${d.early && d.early_url ? `<p class="small"><a href="${esc(d.early_url)}" target="_blank" rel="noopener">Download EasyServer ${esc(d.early)} (preview)</a></p>` : ""}`
+    : `<div class="row"><h2 style="margin:0">Support EasyServer</h2><span class="spacer"></span><a class="btn sm" href="${esc(d.url)}" target="_blank" rel="noopener">${d.shop_open ? "Become a supporter" : "Coming soon"}</a></div>
+      <p class="small muted" style="margin:8px 0">EasyServer is free and stays free - every feature works without paying. Supporters get early access to new versions and a bigger say in what gets built next.</p>
+      ${d.status && d.status !== "active" ? `<div class="banner warn"><span class="small">Your licence isn't active (${esc(d.status)}). Supporter extras are off - everything else keeps working.</span></div>` : ""}
+      ${owner ? `<div class="row"><input type="text" id="sup_key" placeholder="Licence key from your email" maxlength="80" spellcheck="false" autocomplete="off" style="flex:1"><button class="btn primary" id="sup_go">Activate</button></div>` : ""}`;
+  if ($("#sup_go")) $("#sup_go").onclick = async () => { $("#sup_go").disabled = true; try { const r = await api("/api/supporter", { json: { key: $("#sup_key").value.trim() } }); toast(r.note, 7000); renderShell(); show("settings"); } catch (e) { toast(e.message, 8000); $("#sup_go").disabled = false; } };
+  if ($("#sup_rm")) $("#sup_rm").onclick = async () => { if (!confirm("Remove the supporter licence from this computer? You can activate it again here or on another computer.")) return; try { const r = await api("/api/supporter", { json: { action: "remove" } }); toast(r.note, 6000); show("settings"); } catch (e) { toast(e.message); } };
+  if ($("#sup_ea")) $("#sup_ea").onchange = async () => { try { await api("/api/supporter", { json: { early_access: $("#sup_ea").checked } }); toast("Saved"); } catch (e) { toast(e.message); } };
+}
 async function loadPhone() {
   const el = $("#phonecard"); if (!el) return;
   let pa, nt;
@@ -1714,6 +1836,7 @@ VIEWS.settings = async m => {
   const tg = (id, label, help, on) => `<label class="toggle"><input type="checkbox" id="${id}" ${on ? "checked" : ""}><span><b>${esc(label)}</b><small>${esc(help)}</small></span></label>`;
   const N = s.notify;
   m.innerHTML = `<h1>Settings</h1><p class="sub">Notifications, security, remote access and backups.</p>
+  <div class="card" id="supbox" style="margin-bottom:16px"></div>
   <div class="grid g2">
     <div class="card"><h2>Security alerts</h2>
       ${tg("security_alerts", "Alert me about attacks", "Password guessing, websites probing the dashboard, mods with viruses, tampered server files, zip bombs, connection floods. Sent to every channel that is set up (here, Discord, email) - even if its switch below is off", s.security_alerts)}
@@ -1837,6 +1960,7 @@ VIEWS.settings = async m => {
   }
   $("#savenotif").onclick = () => saveNotif(false).catch(e => toast(e.message));
   loadBot();
+  loadSupporter();
   loadPhone();
   loadPower();
   loadUsers();
