@@ -59,6 +59,15 @@ details{border-bottom:1px solid var(--line);padding:16px 0}details summary{curso
 details summary::after{content:"+";float:right;color:var(--mute)}details[open] summary::after{content:"−"}
 details p{color:var(--mute);margin:10px 0 0}
 footer{padding:40px 0 60px;color:var(--mute);font-size:14px;text-align:center}
+.plans{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-top:22px}
+@media (max-width:820px){.plans{grid-template-columns:1fr}}
+.plan{background:var(--bg2);border:1px solid var(--line);border-radius:14px;padding:22px;display:flex;flex-direction:column}
+section.alt .plan{background:var(--bg)}
+.plan h4{margin:0;font-size:18px}.plan .price{font-size:30px;font-weight:800;margin:8px 0 2px;letter-spacing:-.01em}
+.plan .price small{font-size:15px;font-weight:500;color:var(--mute)}.plan .per{color:var(--mute);font-size:14px;margin-bottom:12px}
+.plan ul{margin:0;padding-left:20px;font-size:15px}.plan li{margin:5px 0}.plan li.no{color:var(--mute)}
+.plan .foot{margin-top:auto;padding-top:16px}
+.soon{display:inline-block;padding:7px 14px;border-radius:9px;border:1px dashed var(--line);color:var(--mute);font-size:14px;font-weight:600}
 .badge{display:inline-block;padding:3px 10px;border-radius:99px;background:var(--accent2);color:var(--accent);font-size:13px;font-weight:600;margin-bottom:16px}
 </style>
 </head>
@@ -170,9 +179,26 @@ footer{padding:40px 0 60px;color:var(--mute);font-size:14px;text-align:center}
   </div>
 </div></section>
 
+<section id="support"><div class="wrap">
+  <h2>Support EasyServer</h2>
+  <p class="sub">EasyServer is free and stays free: every feature, no ads, no limits and no reminders to upgrade. If you want to help it grow, there will be two optional ways to chip in.</p>
+  <div class="plans">
+    <div class="plan"><h4>Free</h4><div class="price">$0</div><div class="per">forever</div>
+      <ul><li>Everything EasyServer can do</li><li>Every new version, about 2 weeks after supporters</li><li>Help page and community forum</li><li>No ads, no limits</li></ul>
+      <div class="foot"><a class="btn primary" href="https://github.com/Csabika-dev/beammp-easyserver/releases/latest">Download</a></div></div>
+    <div class="plan"><h4>Supporter</h4><div class="price">$2 <small>/ month</small></div><div class="per">cancel any time</div>
+      <ul><li>Everything in Free</li><li>New versions <b>first</b>, about 2 weeks early</li><li>Your bug reports and ideas are looked at first</li><li>Vote on the next feature each month</li><li>Your name on the supporters list (if you want)</li></ul>
+      <div class="foot"><span class="soon">Coming soon</span></div></div>
+    <div class="plan"><h4>Lifetime</h4><div class="price">$20</div><div class="per">pay once, no subscription</div>
+      <ul><li>Everything in Supporter</li><li>For as long as EasyServer is developed</li><li>Marked as a Lifetime supporter</li></ul>
+      <div class="foot"><span class="soon">Coming soon</span></div></div>
+  </div>
+  <p class="sub" style="margin-top:18px;font-size:15px">Supporting is a thank-you, not a requirement. The free version will never be limited to make you pay.</p>
+</div></section>
+
 <section id="faq" class="alt"><div class="wrap">
   <h2>Questions</h2>
-  <details><summary>Is it free?</summary><p>Yes, free and open source (MIT license). BeamMP and its server are also free. You need your own copy of BeamNG.drive to play.</p></details>
+  <details><summary>Is it free?</summary><p>Yes, free and open source (MIT license), with every feature and no ads. BeamMP and its server are also free. You need your own copy of BeamNG.drive to play. Optional <a href="#support">supporter plans</a> (coming soon) only get new versions a bit earlier.</p></details>
   <details><summary>Is this the official BeamMP server?</summary><p>EasyServer installs the <b>official</b> BeamMP server and keeps it updated. EasyServer itself is a community project, not made or endorsed by the BeamMP team.</p></details>
   <details><summary>What computer do I need?</summary><p>Any 64-bit Windows 10/11 PC, or Linux (Ubuntu, Linux Mint, Debian and others, also Raspberry Pi 4/5 with a 64-bit OS). An old laptop is enough for a group of friends. Upload speed matters more than the processor.</p></details>
   <details><summary>Does it change my router?</summary><p>No. It only opens the port in the computer's own firewall, and always asks first. For friends outside your home you forward the port yourself; the guides show how for common routers.</p></details>
@@ -184,7 +210,7 @@ footer{padding:40px 0 60px;color:var(--mute);font-size:14px;text-align:center}
 <footer><div class="wrap">
   <div class="cta" style="margin-bottom:22px"><a class="btn primary" href="https://github.com/Csabika-dev/beammp-easyserver/releases/latest">Download EasyServer</a>
     <a class="btn" href="https://github.com/Csabika-dev/beammp-easyserver">View on GitHub</a></div>
-  BeamMP EasyServer · MIT license · Not affiliated with the BeamMP team or BeamNG GmbH.<br>
+  BeamMP EasyServer · MIT license · <a href="#support">Support the project</a> · Not affiliated with the BeamMP team or BeamNG GmbH.<br>
   Screenshots show a demo server with invented players.
 </div></footer>
 
