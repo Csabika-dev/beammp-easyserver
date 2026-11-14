@@ -5,6 +5,10 @@
 
 **🌐 Website:** [csabika-dev.github.io/beammp-easyserver](https://csabika-dev.github.io/beammp-easyserver/) · **Found a bug?** [Open an issue](https://github.com/Csabika-dev/beammp-easyserver/issues/new/choose) · **Want to help?** [CONTRIBUTING.md](CONTRIBUTING.md)
 
+[![▶ Watch the 2-minute setup video](docs/img/setup-video.jpg)](https://youtu.be/DWD9HcW1OIc)
+
+**▶ [Watch the setup video on YouTube](https://youtu.be/DWD9HcW1OIc)** - from download to a running server in about 2 minutes.
+
 **Host your own BeamNG.drive multiplayer (BeamMP) server in one click, on Windows or Linux - and run it from a web dashboard on your PC or phone.**
 
 No config files and no command line needed. The installer downloads the newest official BeamMP server, asks a few simple questions (name, map, player count), sets everything up and starts it. After that you do everything in the dashboard: mods, maps, players, moderation, Discord, backups, health checks and more.
