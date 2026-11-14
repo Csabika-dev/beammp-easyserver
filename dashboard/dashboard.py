@@ -57,6 +57,7 @@ sys.path.insert(0, HERE)
 import modscan  # noqa: E402
 import tlsgen   # noqa: E402
 import upnp     # noqa: E402
+import guard    # noqa: E402
 
 # ----------------------------------------------------------------------------- paths
 if IS_WIN:
@@ -112,6 +113,7 @@ DEFAULT_SETTINGS = {
     "relay_host": "",
     "relay_ports": {},             # server id -> port players use on the relay
     "flood_protect": False,        # Linux: per-address limits on the game ports (nftables)
+    "guard_on": False,             # BeamMP-only guard: block addresses that keep knocking on the game port but never play
     "auto_update": False,          # install BeamMP updates at a scheduled restart
     "discord_bot": False,          # slash commands (/status, /start, /stop, /restart) - needs a bot token
     "discord_bot_guild": "",       # the one Discord server the bot answers in
@@ -150,6 +152,10 @@ DEFAULT_SETTINGS = {
     "early_access": True,          # supporters: tell me about pre-release (early access) versions too
 }
 SECURITY_FILE = os.path.join(DATA_DIR, "security.json")
+GUARD_FILE = os.path.join(DATA_DIR, "guard.json")                 # what the guard knows (blocked, good players)
+GUARD_BLOCK_FILE = os.path.join(DATA_DIR, "guard-block.txt")      # Windows: read by the firewall task
+GUARD_STATUS_FILE = os.path.join(os.environ.get("ProgramData") or "C:\\ProgramData", "BeamMP-EasyServer",
+                                 "guard-status.txt")              # Windows: the firewall task notes when it ran
 SECURITY_REPEAT = 15 * 60
 
 LOCK = threading.RLock()
@@ -5637,7 +5643,7 @@ ACTION_LABELS = {
     "/api/mods/rescan": "Re-checked mods", "/api/bans/add": "Banned {name}", "/api/bans/remove": "Unbanned {name}",
     "/api/players/act": "Player {action}: {name}", "/api/allowlist": "Changed the allow-list", "/api/settings": "Changed settings",
     "/api/password": "Changed the password", "/api/devices": "Forgot remembered devices", "/api/remote": "Changed internet access / HTTPS", "/api/authkey": "Changed the AuthKey",
-    "/api/import": "Imported a backup", "/api/upnp": "Automatic port forwarding: {on}", "/api/modbrowser/install": "Installed a mod from the mod browser", "/api/supporter": "Changed the supporter licence", "/api/invite": "Changed the invite message", "/api/map": "Switched the map to {map}", "/api/restarts": "Changed scheduled restarts",
+    "/api/import": "Imported a backup", "/api/upnp": "Automatic port forwarding: {on}", "/api/modbrowser/install": "Installed a mod from the mod browser", "/api/supporter": "Changed the supporter licence", "/api/guard": "Unblocked an address in the BeamMP-only guard", "/api/invite": "Changed the invite message", "/api/map": "Switched the map to {map}", "/api/restarts": "Changed scheduled restarts",
     "/api/moderation": "Changed moderation settings", "/api/extras": "Changed cars & chat settings",
     "/api/messages": "Changed chat messages", "/api/rotation": "Changed map rotation", "/api/template": "Applied a template",
     "/api/backups/now": "Made a backup", "/api/events": "Changed events", "/api/events/stop": "Ended an event early",
@@ -5723,6 +5729,10 @@ class App:
         self.flood_dropped = None
         self.flood_next = 0
         self.flood_lock = threading.Lock()
+        self.guard = guard.Guard(read_json(GUARD_FILE, {}))
+        self.guard_lock = threading.Lock()
+        self.guard_applied = None      # (ports, ips) last handed to the firewall
+        self.guard_err = ""
         self.idle_since = now()        # auto-sleep: nobody has played (or used the dashboard) since
         self.sleep_busy_why = ""
         self.last_use = 0              # last click in the dashboard (keeps the computer awake)
@@ -6033,6 +6043,78 @@ class App:
                                   "The router no longer accepts the forward (%s). Friends outside your home may not be able to join. "
                                   "Health page -> Automatic port forwarding shows the details." % (new.get("error") or
                                   "; ".join("%s %s: %s" % (r["port"], r["proto"], r["error"]) for r in new["ports"] if not r["ok"])), "warning")
+
+    # ---------- BeamMP-only guard
+    def guard_ports(self):
+        with LOCK:
+            return sorted({i.port() or 30814 for i in INSTANCES.values()})
+
+    def guard_loop(self):
+        """Look at the connection table every second (cheap) while the guard is on."""
+        saved = 0
+        while True:
+            time.sleep(1)
+            if not self.settings.get("guard_on") or relay_on():
+                if self.guard_applied != ((), ()):
+                    self.guard_apply()
+                time.sleep(4)
+                continue
+            try:
+                with self.guard_lock:
+                    new = self.guard.see(guard.connections(self.guard_ports()))
+                    changed = new or self.guard.block_list() != list(self.guard_applied[1] if self.guard_applied else ())
+                if changed or self.guard_applied is None:
+                    self.guard_apply()
+                for ip in new:
+                    b = self.guard.blocked[ip]
+                    activity("guard", "Blocked %s for %s: %s" % (ip, fmt_secs(int(b["until"] - b["at"])), b["why"]), "system")
+                if new and len(self.guard.blocked) >= 3 and now() - self.state.get("guard_note", 0) > 6 * 3600:
+                    self.state["guard_note"] = now()
+                    self.notifier.add("network", "The BeamMP-only guard is blocking port scanners",
+                                      "%d addresses kept knocking on your game port without ever playing, so they're blocked for now. "
+                                      "Nothing to do - Settings -> BeamMP-only guard shows them." % len(self.guard.blocked), "info", send=False)
+                if now() - saved > 60:
+                    saved = now()
+                    with self.guard_lock:
+                        write_json(GUARD_FILE, self.guard.state())
+            except Exception as e:
+                self.guard_err = short_err(e)
+                time.sleep(10)
+
+    def guard_apply(self):
+        """Hand the block list to the firewall (Linux root helper / Windows firewall task)."""
+        on = bool(self.settings.get("guard_on")) and not relay_on()
+        with self.guard_lock:
+            ports = tuple(self.guard_ports()) if on else ()
+            ips = tuple(self.guard.block_list()) if on else ()
+            write_json(GUARD_FILE, self.guard.state())
+        key = (ports, ips)
+        if key == self.guard_applied:
+            return
+        if IS_WIN:
+            try:
+                guard.write_block_file(GUARD_BLOCK_FILE, ports, ips)
+                self.guard_err = ""
+            except OSError as e:
+                self.guard_err = "Couldn't write the block list: %s" % short_err(e)
+                return
+        else:
+            r = control("guard-block", ports=list(ports), ips=list(ips), timeout=30)
+            if not r.get("ok"):
+                self.guard_err = r.get("msg") or "the server helper didn't answer"
+                return
+            self.guard_err = ""
+        self.guard_applied = key
+
+    def guard_status(self):
+        """Is something actually blocking? (Windows: the firewall task leaves a note every minute.)"""
+        if not IS_WIN:
+            return {"enforced": not self.guard_err, "helper": True}
+        try:
+            age = now() - os.path.getmtime(GUARD_STATUS_FILE)
+        except OSError:
+            age = None
+        return {"enforced": age is not None and age < 300 and not self.guard_err, "helper": age is not None and age < 300}
 
     def flood_tick(self):
         """Keep the flood rules in place (they're gone after a reboot and must
@@ -8322,6 +8404,37 @@ class Handler(BaseHTTPRequestHandler):
         APP.settings.update_one("invite_note", note)
         self.send(200, {"ok": True})
 
+    # ---------- BeamMP-only guard
+    def get_guard(self, q):
+        app = APP
+        with app.guard_lock:
+            g = app.guard
+            blocked = [{"ip": ip, "until": int(b["until"]), "at": int(b["at"]), "why": b.get("why", ""), "times": b.get("times", 1)}
+                       for ip, b in sorted(g.blocked.items(), key=lambda x: -x[1]["at"])][:200]
+            out = {"on": bool(app.settings.get("guard_on")), "relay": relay_on(), "blocked": blocked, "count": len(g.blocked),
+                   "total": g.total, "players_known": len(g.good), "error": app.guard_err,
+                   "strikes": guard.STRIKES, "window": guard.WINDOW, "stay": guard.STAY, "platform": "windows" if IS_WIN else "linux"}
+        out.update(app.guard_status())
+        self.send(200, out)
+
+    def post_guard(self, q):
+        app = APP
+        b = self.body_json()
+        ip = str(b.get("unblock") or "").strip()
+        if b.get("unblock_all"):
+            with app.guard_lock:
+                for x in list(app.guard.blocked):
+                    app.guard.unblock(x)
+            app.guard_apply()
+            return self.send(200, {"ok": True, "note": "Everyone is unblocked."})
+        if not guard.norm_ip(ip):
+            return self.fail(400, "That isn't an IP address")
+        with app.guard_lock:
+            gone = app.guard.unblock(ip)
+        app.guard_apply()
+        self.send(200, {"ok": True, "note": ("Unblocked %s - it won't be blocked again for a month." % ip) if gone else
+                        "%s wasn't blocked. It's marked as a player now, so it won't be." % ip})
+
     # ---------- supporter licence
     def get_supporter(self, q):
         sup = APP.settings.get("supporter") or {}
@@ -9639,6 +9752,8 @@ class Handler(BaseHTTPRequestHandler):
             app.settings.update(upd)
         if "flood_protect" in upd:
             threading.Thread(target=app.flood_tick, daemon=True).start()
+        if "guard_on" in upd:
+            threading.Thread(target=app.guard_apply, daemon=True).start()
         self.send(200, {"ok": True})
 
     def post_password(self, q):
@@ -9876,7 +9991,7 @@ def clean_settings(b):
         cur.update({k: bool(v) for k, v in b["notify"].items() if k in DEFAULT_SETTINGS["notify"]})
         upd["notify"] = cur
     for k in ("discord_enabled", "email_enabled", "auto_restart", "update_check", "security_alerts", "security_reminders",
-              "relay_enabled", "flood_protect"):
+              "relay_enabled", "flood_protect", "guard_on"):
         if k in b:
             upd[k] = bool(b[k])
     if "relay_host" in b:
@@ -10100,6 +10215,7 @@ def main():
     if not httpd:
         sys.exit("Port %d is busy - is the dashboard already running?" % port)
     threading.Thread(target=APP.monitor, daemon=True).start()
+    threading.Thread(target=APP.guard_loop, daemon=True).start()
     threading.Thread(target=APP.bot.run, daemon=True).start()
     if not APP.updates:
         threading.Thread(target=APP.check_updates, kwargs={"notify": True}, daemon=True).start()
