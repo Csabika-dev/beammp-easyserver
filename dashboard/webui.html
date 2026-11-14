@@ -293,7 +293,9 @@ async function openInvite() {
   $("#inv_note", bg).oninput = fill;
   $("#inv_note", bg).onchange = () => api("/api/invite", { json: { note: $("#inv_note", bg).value.trim() } }).catch(() => {});
   bg.querySelector("[data-x]").onclick = () => bg.remove();
-  $("#inv_copy", bg).onclick = async () => { if (await copyText($("#inv_t", bg).value)) { toast("Invite copied - paste it in Discord"); } else { $("#inv_t", bg).removeAttribute("readonly"); $("#inv_t", bg).select(); toast("Press Ctrl+C to copy"); } };
+  $("#inv_copy", bg).onclick = async () => {
+    if (view === "net") api("/api/upnp", { json: { open_for: 7200 } }).catch(() => {});   // "only when needed": friends are about to join
+    if (await copyText($("#inv_t", bg).value)) { toast("Invite copied - paste it in Discord"); } else { $("#inv_t", bg).removeAttribute("readonly"); $("#inv_t", bg).select(); toast("Press Ctrl+C to copy"); } };
 }
 const fmtSize = b => b > 1073741824 ? (b / 1073741824).toFixed(1) + " GB" : b > 1048576 ? (b / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(b / 1024)) + " KB";
 const fmtDur = s => { s = Math.max(0, s | 0); const d = Math.floor(s / 86400), hh = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60); return d ? `${d}d ${hh}h` : hh ? `${hh}h ${m}m` : `${m}m`; };
@@ -1102,12 +1104,22 @@ VIEWS.network = async m => {
     const b = $("#upnpbox"); if (!b) return;
     let d; try { d = await api("/api/upnp" + (check ? "?check=1" : "")); } catch (e) { b.innerHTML = `<p class="small muted">${esc(e.message)}</p>`; return; }
     const st = d.state || {}, rows = st.ports || [], ports = [...new Set(d.ports.map(x => x.port))].join(", ");
+    const needed = d.mode === "needed", sleeping = d.on && needed && !d.is_open && !st.error;
     const allOk = d.on && rows.length && rows.every(r => r.ok) && !st.error;
-    const badge = d.relay ? `<span class="badge">Not needed</span>` : allOk ? `<span class="badge good">Port ${esc(ports)} open</span>` : d.on ? `<span class="badge warn">Problem</span>` : `<span class="badge">Off</span>`;
+    const badge = d.relay ? `<span class="badge">Not needed</span>` : sleeping ? `<span class="badge">Closed - opens when needed</span>` : allOk ? `<span class="badge good">Port ${esc(ports)} open</span>` : d.on ? `<span class="badge warn">Problem</span>` : `<span class="badge">Off</span>`;
+    const left = d.open_until - Date.now() / 1000;
+    const modeTxt = !d.on || d.relay ? "" : needed
+      ? (d.is_open ? (d.players ? `Open - ${d.players} playing. Closes ${Math.round(d.idle / 60)} minutes after the last player leaves.` : left > 0 ? `Open for about ${fmtDur(left)} more (or as long as someone is playing).` : "Closing…")
+                   : "Closed right now, so nobody can reach your server from outside. Copying an invite opens it.")
+      : "Open all the time.";
     b.innerHTML = `<div class="row"><h2 style="margin:0">Automatic port forwarding ${badge}</h2><span class="spacer"></span>
         ${d.relay ? "" : d.on ? `<button class="btn sm" id="up_check">Check again</button><button class="btn sm" id="up_off">Turn off</button>` : `<button class="btn primary" id="up_on">Open port ${esc(ports)} automatically</button>`}</div>
       <p class="small muted" style="margin:8px 0 0">${d.relay ? "\"Hide my IP\" is on: players join through the relay, so nothing has to be opened on your router." :
         "Friends outside your home can only join when your router forwards port " + esc(ports) + " (TCP + UDP) to this computer. Most routers let the dashboard do that itself (UPnP) - one click, no router settings page. It's checked every 20 minutes and put back after a router restart."}</p>
+      ${d.on && !d.relay ? `<div class="row" style="margin-top:10px;flex-wrap:wrap;gap:6px"><span class="small"><b>When:</b></span>
+          <button class="btn sm${needed ? "" : " on"}" id="up_always">Always open</button><button class="btn sm${needed ? " on" : ""}" id="up_needed">Only when needed</button>
+          ${needed ? (d.is_open ? `<button class="btn sm" id="up_close">Close now</button>` : `<button class="btn sm" id="up_open">Open for 1 hour</button>`) : ""}</div>
+        <p class="small muted" style="margin:6px 0 0">${esc(modeTxt)}${needed ? " Your router can't tell the dashboard that someone is knocking on a closed port, so the port opens when you invite people (or press Open) and stays open while anyone plays. Strangers from the public server list can't join while it's closed." : ""}</p>` : ""}
       ${st.router ? `<p class="small" style="margin:6px 0 0">Router: <b>${esc(st.router)}</b>${st.external_ip ? " · internet address " + ipb(esc(st.external_ip)) : ""}${st.local_ip ? " · this computer " + ipb(esc(st.local_ip)) : ""}</p>` : ""}
       ${rows.length ? `<div style="margin-top:6px">${rows.map(r => `<div class="check"><span class="mark ${r.ok ? "ok" : "bad"}">${r.ok ? "✓" : "✕"}</span><div><b>${esc(r.port)} ${esc(r.proto)}</b> <span class="small muted">${r.ok ? (r.lease ? "open (renewed every day)" : "open") : esc(r.error)}</span></div></div>`).join("")}</div>` : ""}
       ${st.error ? `<div class="banner warn" style="margin:10px 0 0"><span class="small">${esc(st.error)}</span></div>` : ""}
@@ -1118,6 +1130,13 @@ VIEWS.network = async m => {
     if ($("#up_on")) $("#up_on").onclick = () => go(true, $("#up_on"));
     if ($("#up_off")) $("#up_off").onclick = () => go(false, $("#up_off"));
     if ($("#up_check")) $("#up_check").onclick = () => { $("#up_check").disabled = true; upnpCard(true); };
+    const set = async (body, btn) => { btn.disabled = true;
+      try { const r = await api("/api/upnp", { json: body }); toast(r.note, 8000); } catch (e) { toast(e.message, 8000); }
+      upnpCard(false); };
+    if ($("#up_always")) $("#up_always").onclick = () => set({ mode: "always" }, $("#up_always"));
+    if ($("#up_needed")) $("#up_needed").onclick = () => set({ mode: "needed" }, $("#up_needed"));
+    if ($("#up_open")) $("#up_open").onclick = () => set({ open_for: 3600 }, $("#up_open"));
+    if ($("#up_close")) $("#up_close").onclick = () => set({ close_now: true }, $("#up_close"));
   };
   health(false); doctor(); upnpCard(false);
   const run = async deep => {
