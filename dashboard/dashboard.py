@@ -149,8 +149,7 @@ DEFAULT_SETTINGS = {
     "upnp_open_until": 0,          # "needed" mode: keep the port open until this time
     "invite_note": "",             # an extra line for the "Copy invite" message (rules, Discord link ...)
     "supporter": {},               # the supporter licence (key itself is a secret): instance, plan, last check
-    "early_access": True,          # supporters: tell me about pre-release (early access) versions too
-    "update_channel": "stable",    # "stable" = tested releases only, "experimental" = newest features first (pre-releases)
+    "early_access": True,          # supporters: Experimental versions (newest features first, pre-releases) - supporters only
 }
 SECURITY_FILE = os.path.join(DATA_DIR, "security.json")
 GUARD_FILE = os.path.join(DATA_DIR, "guard.json")                 # what the guard knows (blocked, good players)
@@ -2771,19 +2770,26 @@ def newer(a, b):
         return False
 
 
+def update_channel():
+    """Experimental versions (pre-releases, newest features first) are a supporter perk; everyone else gets Stable."""
+    return "experimental" if supporter_active() and APP.settings.get("early_access") else "stable"
+
+
+EXPERIMENTAL_INFO = "https://csabika-dev.github.io/beammp-easyserver/experimental.json"
+SUPPORTER_DOWNLOADS = "https://app.lemonsqueezy.com/my-orders"
+
+
 def github_prerelease(repo):
-    """The newest pre-release (early access) version, if it is newer than the newest normal release."""
-    req = urllib.request.Request("https://api.github.com/repos/%s/releases?per_page=10" % repo,
-                                 headers={"User-Agent": "BeamMP-EasyServer/" + EASY_VERSION,
-                                          "Accept": "application/vnd.github+json"})
+    """The newest Experimental version (supporters only), as (version, where to download it).
+    Experimental builds aren't public on GitHub; the website just says which one is out, and
+    supporters download it from their Lemon Squeezy order."""
+    req = urllib.request.Request(EXPERIMENTAL_INFO, headers={"User-Agent": "BeamMP-EasyServer/" + EASY_VERSION})
     with urllib.request.urlopen(req, timeout=20) as r:
-        rels = json.loads(r.read(4 * 1024 * 1024))
-    best = None
-    for rel in rels if isinstance(rels, list) else []:
-        m = re.search(r"(\d+\.\d+\.\d+)", str(rel.get("tag_name", "")))
-        if rel.get("prerelease") and not rel.get("draft") and m and (not best or newer(m.group(1), best[0])):
-            best = (m.group(1), rel.get("html_url") or "")
-    return best
+        info = json.loads(r.read(64 * 1024))
+    v = str(info.get("version") or "") if isinstance(info, dict) else ""
+    if not re.fullmatch(r"\d+\.\d+\.\d+", v):
+        return None
+    return v, SUPPORTER_DOWNLOADS
 
 
 # ----------------------------------------------------------------------------- supporter licence (Lemon Squeezy)
@@ -6994,8 +7000,8 @@ class App:
             res["easy_latest"] = github_latest(REPO)
         except Exception:
             res["easy_latest"] = None
-        res["channel"] = self.settings.get("update_channel") or "stable"
-        if res["channel"] == "experimental" or (supporter_active() and self.settings.get("early_access")):
+        res["channel"] = update_channel()
+        if res["channel"] == "experimental":
             try:
                 pre = github_prerelease(REPO)
                 if pre and newer(pre[0], max(res.get("easy_latest") or "0.0.0", EASY_VERSION, key=lambda v: tuple(map(int, v.split("."))))):
@@ -7016,10 +7022,10 @@ class App:
             if res.get("easy_early") and prev.get("notified_early") != res["easy_early"]:
                 if res["channel"] == "experimental":
                     self.notifier.add("update", "Experimental: EasyServer %s is out" % res["easy_early"],
-                                      "The newest features, not fully tested yet. Download it from %s" % res.get("easy_early_url"), "info")
+                                      "The newest features, not fully tested yet. Download it from your supporter order: %s" % res.get("easy_early_url"), "info")
                 else:
                     self.notifier.add("update", "Early access: EasyServer %s is ready to try" % res["easy_early"],
-                                      "Thanks for supporting EasyServer! Download the preview from %s" % res.get("easy_early_url"), "info")
+                                      "Thanks for supporting EasyServer! Download it from your supporter order: %s" % res.get("easy_early_url"), "info")
             res["notified_early"] = res.get("easy_early") or prev.get("notified_early")
             if res.get("easy_latest") and newer(res["easy_latest"], EASY_VERSION) \
                     and prev.get("notified_easy") != res["easy_latest"]:
@@ -8491,7 +8497,10 @@ class Handler(BaseHTTPRequestHandler):
         up.setdefault("installed", APP.server.installed_version())
         up["easy_installed"] = EASY_VERSION
         up["repo"] = REPO
-        up["channel"] = APP.settings.get("update_channel") or "stable"
+        up["channel"] = update_channel()
+        up["supporter"] = bool(supporter_active())
+        if up["channel"] != "experimental":
+            up.pop("easy_early", None)
         self.send(200, up)
 
     def post_updates_check(self, q):
@@ -8499,7 +8508,9 @@ class Handler(BaseHTTPRequestHandler):
         if b.get("channel") is not None:
             if b["channel"] not in ("stable", "experimental"):
                 return self.fail(400, "channel must be stable or experimental")
-            APP.settings.update_one("update_channel", b["channel"])
+            if b["channel"] == "experimental" and not supporter_active():
+                return self.fail(403, "Experimental versions are for supporters - Settings -> Supporter")
+            APP.settings.update_one("early_access", b["channel"] == "experimental")
             if b["channel"] == "stable":
                 with LOCK:
                     APP.updates.pop("easy_early", None)
