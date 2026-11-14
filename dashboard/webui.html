@@ -1953,6 +1953,9 @@ VIEWS.settings = async m => {
     <hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
     ${s.platform === "linux" ? `${tg("flood_protect", "Flood protection", "Off by default. Limits how fast one address can connect to and send to your game server. Stops floods from single computers; it can't stop a big DDoS - only hiding your IP can. Your home network is never limited.", s.flood_protect)}<div class="small muted" id="floodst"></div>`
       : `<p class="small muted"><b>Flood protection</b> (per-address limits on the game port) is only available on Linux. On Windows, hiding your IP is the protection that matters.</p>`}
+    <hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
+    ${tg("guard_on", "BeamMP-only guard", "Off by default. Port scanners and bots knock on any open port, get nothing and hang up. Real players stay connected. An address that keeps knocking (lots of short connections in 10 minutes) without ever staying to play is blocked by the firewall - for an hour, longer if it comes back. Your home network and anyone who has played here are never blocked.", s.guard_on)}
+    <div id="guardbox" class="small"></div>
   </div>
 
   <div id="set17"></div>
@@ -2009,6 +2012,24 @@ VIEWS.settings = async m => {
     } catch (e) { toast(e.message); }
     b.disabled = false; b.textContent = "Test the relay";
   };
+  const guardBox = async () => {
+    const b = $("#guardbox"); if (!b) return;
+    let g; try { g = await api("/api/guard"); } catch (e) { b.textContent = e.message; return; }
+    const warn = g.on && !g.relay && !g.enforced ? `<div class="banner warn" style="margin:8px 0 0"><span class="small">${g.error ? esc(g.error) : g.platform === "windows" ? "The firewall task isn't running yet, so nothing is actually blocked. Run Update-BeamMP-Server.bat once (it sets it up)." : "The server helper didn't answer."}</span></div>` : "";
+    b.innerHTML = (g.relay ? `<p class="muted">Not needed while "Hide my IP" is on.</p>` : !g.on ? "" :
+      `<p class="muted" style="margin:6px 0 0">Watching. ${g.count ? `<b>${g.count}</b> blocked right now` : "Nobody blocked right now"} · ${g.total} blocked so far · ${g.players_known} addresses known as players.</p>${warn}
+       ${g.blocked.length ? `<div style="margin-top:6px">${g.blocked.map(x => `<div class="check"><span class="mark bad">✕</span><div><b>${ipb(esc(x.ip))}</b> <span class="muted">until ${fmtTime(x.until)} - ${esc(x.why)}</span> <button class="btn sm" data-unblock="${esc(x.ip)}">Unblock</button></div></div>`).join("")}</div>
+         <button class="btn sm" id="guard_all" style="margin-top:6px">Unblock everyone</button>` : ""}
+       <div class="row" style="margin-top:8px"><input type="text" id="guard_ip" placeholder="A friend can't join? Paste their IP" style="max-width:260px"><button class="btn sm" id="guard_ok">Never block</button></div>`) ;
+    const un = async body => { try { const r = await api("/api/guard", { json: body }); toast(r.note, 6000); } catch (e) { toast(e.message); } guardBox(); };
+    b.querySelectorAll("[data-unblock]").forEach(x => x.onclick = () => un({ unblock: x.dataset.unblock }));
+    if ($("#guard_all")) $("#guard_all").onclick = () => un({ unblock_all: true });
+    if ($("#guard_ok")) $("#guard_ok").onclick = () => un({ unblock: $("#guard_ip").value.trim() });
+  };
+  if ($("#guard_on")) {
+    $("#guard_on").onchange = async () => { try { await api("/api/settings", { json: { guard_on: $("#guard_on").checked } }); toast($("#guard_on").checked ? "BeamMP-only guard is on" : "BeamMP-only guard is off - nothing is blocked while it is off"); setTimeout(guardBox, 1200); } catch (e) { toast(e.message); $("#guard_on").checked = !$("#guard_on").checked; } };
+    guardBox();
+  }
   if ($("#flood_protect")) {
     const fst = async () => { try { const f = await api("/api/flood-status"); $("#floodst").textContent = f.active ? "Active - blocked " + f.dropped + " packets since it was turned on" : ($("#flood_protect").checked ? "Starting…" : ""); } catch (e) { } };
     $("#flood_protect").onchange = async () => { try { await api("/api/settings", { json: { flood_protect: $("#flood_protect").checked } }); toast($("#flood_protect").checked ? "Flood protection is on" : "Flood protection is off"); setTimeout(fst, 1500); } catch (e) { toast(e.message); $("#flood_protect").checked = !$("#flood_protect").checked; } };
