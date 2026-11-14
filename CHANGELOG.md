@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.14.0 - One-click port forwarding, invites, mod browser
+
+- **Automatic port forwarding** (Health page): "Open port 30814 automatically" asks your router to forward the game port (TCP + UDP) to this computer with UPnP - no router settings page. Every server's port is opened, the forward is checked every 20 minutes and put back after a router restart, and turning it off closes it again. If the router has UPnP switched off, or another device already uses the port, it says so and what to do instead. Off while "Hide my IP" is on (not needed there).
+- **Copy invite** (Overview): a ready-to-paste message for Discord or WhatsApp with the server name, the address and port for Direct Connect, the map, players online and the mod download size. Switch to "Same Wi-Fi" for friends at home, and add your own line (rules, a Discord link). With "Hide my IP" on it uses the relay address.
+- **Mod browser** (Mods → Browse mods): look through the official BeamNG mod repository by category (vehicles, maps, skins, props ...) sorted by downloads, rating or date, search it, or paste a link to any mod page - then **Install**. The mod is downloaded, virus-checked like an upload and ready for players; mods you already have are marked.
+- **Supporter licence** (Settings): EasyServer stays completely free. Once supporter licences are on sale, a licence key turns on early access to preview versions. The key is stored encrypted, checked once a day, and can be moved to another computer.
+- **New logo** in the dashboard, the phone app icon and the website.
+
+
 ## 1.13.0 - Command suggestions in the chat
 
 - **Command suggestions**: when players type `/` in the game chat, a list of this server's commands appears above the chat box with what each one does. It narrows down as you type and also finds typos (`/rpeair` shows `/repair`). **Tab** completes, **↑ ↓** choose, **Esc** closes. Admins also see the admin commands. On by default (Config → In-game tools); players get it through the same tiny helper mod as /tp and /repair (about 4.5 KB).
