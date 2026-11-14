@@ -55,6 +55,28 @@ class PortForwarding(unittest.TestCase):
         self.assertIn("another device", d["note"])
         self.assertEqual(self.router.maps[(30814, "TCP")]["client"], "192.168.1.99")   # left alone
 
+    def test_only_when_needed(self):
+        self.addCleanup(lambda: D.APP.settings.update({"upnp_mode": "always", "upnp_open_until": 0}))
+        self.owner.call("/api/upnp", {"on": True})
+        st, d, _ = self.owner.call("/api/upnp", {"mode": "needed"})
+        self.assertTrue(d["ok"], d)
+        self.assertIn((30814, "UDP"), self.router.maps)          # stays open for a while after switching
+        st, d, _ = self.owner.call("/api/upnp", {"close_now": True})
+        self.assertEqual(self.router.maps, {})
+        st, d, _ = self.owner.call("/api/upnp")
+        self.assertEqual(d["mode"], "needed")
+        self.assertFalse(d["is_open"])
+        self.owner.call("/api/upnp", {"open_for": 7200})          # an invite was copied
+        self.assertIn((30814, "TCP"), self.router.maps)
+        D.APP.settings.update_one("upnp_open_until", 0)          # time's up and nobody is playing
+        with mock.patch.object(D.APP, "upnp_players", lambda: 0):
+            D.APP.upnp_tick()
+        self.assertEqual(self.router.maps, {})
+        with mock.patch.object(D.APP, "upnp_players", lambda: 2):   # someone is on (e.g. joined on the LAN)
+            D.APP.upnp_tick()
+        self.assertIn((30814, "UDP"), self.router.maps)
+        self.assertGreater(D.APP.settings.get("upnp_open_until"), D.now() + 25 * 60)
+
     def test_viewer_cannot_change_it(self):
         self.assertEqual(D.required_role("POST", "/api/upnp"), "admin")
 
