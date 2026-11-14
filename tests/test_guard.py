@@ -142,20 +142,25 @@ class UpdateChannel(unittest.TestCase):
         cls.owner = harness.owner()
 
     def test_switch_channel(self):
-        self.addCleanup(lambda: D.APP.settings.update({"update_channel": "stable"}))
-        self.assertEqual(D.DEFAULT_SETTINGS["update_channel"], "stable")
+        self.addCleanup(lambda: D.APP.settings.update({"early_access": True}))
         with mock.patch.object(D, "github_latest", lambda repo: "1.13.0"), \
                 mock.patch.object(D, "github_prerelease", lambda repo: ("9.9.9", "https://example.invalid/x")):
-            st, d, _ = self.owner.call("/api/updates/check", {"channel": "nightly"})
-            self.assertEqual(st, 400)
-            st, d, _ = self.owner.call("/api/updates/check", {"channel": "experimental"})
-            self.assertEqual(st, 200, d)
-            self.assertEqual(d["easy_early"], "9.9.9")
-            st, d, _ = self.owner.call("/api/updates/check", {"channel": "stable"})
-            self.assertNotIn("easy_early", d)
-            st, d, _ = self.owner.call("/api/updates")
-            self.assertEqual(d["channel"], "stable")
-
+            with mock.patch.object(D, "supporter_active", lambda: False):
+                st, d, _ = self.owner.call("/api/updates/check", {"channel": "experimental"})
+                self.assertEqual(st, 403)                       # supporters only
+                st, d, _ = self.owner.call("/api/updates")
+                self.assertEqual(d["channel"], "stable")
+                self.assertNotIn("easy_early", d)
+            with mock.patch.object(D, "supporter_active", lambda: True):
+                st, d, _ = self.owner.call("/api/updates/check", {"channel": "nightly"})
+                self.assertEqual(st, 400)
+                st, d, _ = self.owner.call("/api/updates/check", {"channel": "experimental"})
+                self.assertEqual(st, 200, d)
+                self.assertEqual(d["easy_early"], "9.9.9")
+                st, d, _ = self.owner.call("/api/updates/check", {"channel": "stable"})
+                self.assertNotIn("easy_early", d)
+                st, d, _ = self.owner.call("/api/updates")
+                self.assertEqual(d["channel"], "stable")
 
 if __name__ == "__main__":
     unittest.main()
