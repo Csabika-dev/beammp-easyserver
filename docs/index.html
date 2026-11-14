@@ -35,6 +35,9 @@ section{padding:70px 0}section.alt{background:var(--bg2);border-top:1px solid va
 h2{font-size:clamp(26px,3.4vw,38px);margin:0 0 10px;letter-spacing:-.01em}
 .sub{color:var(--mute);margin:0 0 34px;max-width:720px}
 .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+.video{max-width:860px;margin:30px auto 0;aspect-ratio:16/9;border-radius:14px;overflow:hidden;border:1px solid var(--line);background:#000}
+.video iframe{width:100%;height:100%;border:0;display:block}
+.video-cap{text-align:center;margin-top:10px}
 @media (max-width:820px){.steps{grid-template-columns:1fr}}
 .step{background:var(--bg2);border:1px solid var(--line);border-radius:14px;padding:22px}
 section.alt .step{background:var(--bg)}
@@ -103,6 +106,8 @@ section.alt .plan{background:var(--bg)}
     <div class="step"><b class="n">3</b><h3>Open the dashboard</h3>
       <p>Go to <b>http://localhost:30815</b> on the server computer, choose a password, and you're live. From your phone or other PCs at home: <b>http://&lt;server-ip&gt;:30815</b>.</p></div>
   </div>
+  <div class="video"><iframe src="https://www.youtube-nocookie.com/embed/DWD9HcW1OIc" title="How to make a BeamMP server in 5 minutes - setup video" loading="lazy" allow="accelerometer; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe></div>
+  <p class="small video-cap">Prefer to watch? The whole setup in about 2 minutes. <a href="https://youtu.be/DWD9HcW1OIc">Open on YouTube</a></p>
   <p class="small" style="margin-top:22px">For friends outside your home, forward port 30814 (TCP + UDP) on your router. The dashboard's Health page tells you whether it worked. <a href="https://github.com/Csabika-dev/beammp-easyserver#-guides">Step-by-step guides →</a></p>
 </div></section>
 
