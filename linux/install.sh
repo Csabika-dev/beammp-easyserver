@@ -15,7 +15,7 @@
 # =============================================================================
 set -euo pipefail
 
-EASY_VERSION="1.13.0"
+EASY_VERSION="1.14.0"
 INSTALL_DIR="/opt/beammp-server"
 SERVICE_USER="beammp"
 DASH_USER="beammp-dash"
@@ -380,7 +380,7 @@ case "${1:-}" in
     cd "$DIR"
     exec "${AS_SERVER[@]}" /opt/beammp-server/BeamMP-Server --config="$RUN/ServerConfig.toml" ;;
   dashboard|mods)
-    for n in MODS_PASSWORD VT_API_KEY DISCORD_WEBHOOK SMTP_PASSWORD TOTP_SECRET DISCORD_BOT_TOKEN DUCKDNS_TOKEN NTFY_TOPIC WAKE_TOPIC USERS_KEY TELEGRAM_TOKEN CUSTOM_WEBHOOK; do
+    for n in MODS_PASSWORD VT_API_KEY DISCORD_WEBHOOK SMTP_PASSWORD TOTP_SECRET DISCORD_BOT_TOKEN DUCKDNS_TOKEN NTFY_TOPIC WAKE_TOPIC USERS_KEY TELEGRAM_TOKEN CUSTOM_WEBHOOK SUPPORTER_KEY; do
       v=$(SEC "$n"); [[ -n "$v" ]] && export "$n=$v"
     done
     unset v
@@ -916,7 +916,7 @@ EOF
   fi
 
   local f
-  for f in dashboard.py webui.html modscan.py tlsgen.py; do
+  for f in dashboard.py webui.html modscan.py tlsgen.py upnp.py; do
     fetch_file "dashboard/$f" "$es/dashboard/$f"
   done
   fetch_file "linux/control.py" "$es/control.py"
