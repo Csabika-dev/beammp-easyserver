@@ -79,7 +79,7 @@ i.lg{background:url(img/logo.svg) center/contain no-repeat!important;border-radi
 <body>
 <nav><div class="wrap">
   <a class="logo" href="#"><i class="lg"></i>BeamMP EasyServer</a>
-  <div class="links"><a class="opt" href="#start">Get started</a><a class="opt" href="#features">Features</a><a class="opt" href="#faq">FAQ</a><a href="help.html">Help</a>
+  <div class="links"><a class="opt" href="#start">Get started</a><a class="opt" href="#features">Features</a><a class="opt" href="#versions">Downloads</a><a class="opt" href="#faq">FAQ</a><a href="help.html">Help</a>
     <a href="https://github.com/Csabika-dev/beammp-easyserver">GitHub</a></div>
 </div></nav>
 
@@ -105,7 +105,7 @@ i.lg{background:url(img/logo.svg) center/contain no-repeat!important;border-radi
       <p data-for="win">Download <b>BeamMP-EasyServer-Windows.zip</b> from the <a href="https://github.com/Csabika-dev/beammp-easyserver/releases/latest">latest release</a>, extract it and double-click <b>Install-BeamMP-Server.bat</b>.</p>
       <div data-for="linux" hidden><p style="margin-bottom:8px">Paste this into a terminal:</p>
         <pre>curl -fsSL https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/stable/linux/install.sh | sudo bash</pre></div>
-      <p class="small" style="margin-top:8px;opacity:.8">This is the <b>Stable</b> version (tested).</p></div>
+      <p class="small" style="margin-top:8px;opacity:.8">This is the <b>Stable</b> version (tested). Want the newest features right away? See <a href="#versions">Rolling release</a>.</p></div>
     <div class="step"><b class="n">3</b><h3>Open the dashboard</h3>
       <p>Go to <b>http://localhost:30815</b> on the server computer, choose a password, and you're live. From your phone or other PCs at home: <b>http://&lt;server-ip&gt;:30815</b>.</p></div>
   </div>
@@ -188,6 +188,23 @@ i.lg{background:url(img/logo.svg) center/contain no-repeat!important;border-radi
     <div class="card"><h4>Two-step login</h4><p>Required before the dashboard can be reached from the internet.</p></div>
     <div class="card"><h4>Tested on every change</h4><p>Automated tests attack every dashboard page and the game plugin on each update.</p></div>
   </div>
+</div></section>
+
+<section id="versions"><div class="wrap">
+  <h2>Downloads</h2>
+  <p class="sub">Both are free, for everyone. Not sure? Take <b>Stable</b>.</p>
+  <div class="plans" style="grid-template-columns:repeat(2,minmax(0,1fr))">
+    <div class="plan"><h4>Stable</h4><div class="per">Recommended · tested · the release marked "Latest"</div>
+      <ul><li><b>Windows:</b> download <b>BeamMP-EasyServer-Windows.zip</b>, extract it, double-click <b>Install-BeamMP-Server.bat</b></li>
+        <li><b>Linux:</b><pre style="white-space:pre-wrap;word-break:break-all">curl -fsSL https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/stable/linux/install.sh | sudo bash</pre></li></ul>
+      <div class="foot"><a class="btn primary" href="https://github.com/Csabika-dev/beammp-easyserver/releases/latest">Download Stable</a></div></div>
+    <div class="plan"><h4>Rolling release</h4><div class="per">The newest features as soon as they're made · may have bugs</div>
+      <ul><li><b>Windows:</b> download the ZIP, extract it, open the <b>windows</b> folder and double-click <b>Install-BeamMP-Server.bat</b></li>
+        <li><b>Linux:</b><pre style="white-space:pre-wrap;word-break:break-all">curl -fsSL https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/main/linux/install.sh | sudo bash</pre></li>
+        <li>Something broken? Install <b>Stable</b> over it - your settings and mods stay.</li></ul>
+      <div class="foot"><a class="btn" href="https://github.com/Csabika-dev/beammp-easyserver/archive/refs/heads/main.zip">Download Rolling (ZIP)</a></div></div>
+  </div>
+  <p class="small" style="margin-top:14px;opacity:.8">What changed in each version: <a href="https://github.com/Csabika-dev/beammp-easyserver/blob/main/CHANGELOG.md">changelog</a> · <a href="https://github.com/Csabika-dev/beammp-easyserver/releases">all releases</a></p>
 </div></section>
 
 <section id="faq" class="alt"><div class="wrap">
