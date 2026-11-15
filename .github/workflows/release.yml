@@ -38,14 +38,21 @@ jobs:
       - name: Release notes from CHANGELOG.md
         run: |
           # The section of CHANGELOG.md for this version ("## 1.12.0 - ..." up to the next "## ")
-          v="${GITHUB_REF_NAME#v}"
+          v="${GITHUB_REF_NAME#v}"; v="${v%%-*}"     # v1.14.0-experimental.1 -> 1.14.0
           awk -v v="$v" '/^## /{p = index($0, "## " v " ") == 1 || $0 == "## " v} p' CHANGELOG.md > notes.md
           if [ ! -s notes.md ]; then echo "See CHANGELOG.md" > notes.md; fi
+          case "$GITHUB_REF_NAME" in *-*)
+            { printf '> **Experimental version** - the newest features, not fully tested yet. For supporters - thank you! If something breaks, go back to the newest **Stable** release (marked "Latest").\n\n'; cat notes.md; } > n2 && mv n2 notes.md;;
+          esac
           printf '\n---\n**Downloads:** Windows → `BeamMP-EasyServer-Windows.zip` · Linux → `BeamMP-EasyServer-Linux.zip` (or the one-line install in the README) · Wake helper → `BeamMP-EasyServer-WakeHelper.zip`\n' >> notes.md
           cat notes.md
 
       - name: Publish release
+        # Tags with a dash (v1.14.0-experimental.1) are Experimental builds: a supporter perk that is
+        # kept off GitHub (built and stored privately). Only Stable tags get a public release.
+        if: ${{ !contains(github.ref_name, '-') }}
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*.zip
           body_path: notes.md
+          make_latest: true

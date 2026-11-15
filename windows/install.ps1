@@ -16,7 +16,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'   # makes downloads much faster
-$EasyVersion  = '1.13.0'
+$EasyVersion  = '1.14.0'
 $DefaultDir   = 'C:\BeamMP-Server'
 $StateFile    = Join-Path $env:ProgramData 'BeamMP-EasyServer\install-dir.txt'
 $ServerUrl    = 'https://github.com/BeamMP/BeamMP-Server/releases/latest/download/BeamMP-Server.exe'
@@ -26,6 +26,7 @@ $TaskName     = 'BeamMP Server (EasyServer)'
 $FwPrefix     = 'BeamMP Server (EasyServer)'
 $DashTask     = 'BeamMP Dashboard (EasyServer)'
 $DashPort     = 30815
+$GuardTask    = 'BeamMP Guard (EasyServer)'
 $PythonUrl    = 'https://www.python.org/ftp/python/3.13.17/python-3.13.17-embed-amd64.zip'
 
 # ---- run as administrator ----------------------------------------------------
@@ -116,23 +117,40 @@ function Stop-Dashboard {
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 }
 
+# BeamMP-only guard: the dashboard (running as you) decides who to block, this
+# task (running as SYSTEM, once a minute) puts that list into Windows Firewall.
+# Its script lives in a folder only administrators can change.
+function Install-Guard($esDir) {
+    try {
+        $gDir = Split-Path $StateFile
+        New-Item -ItemType Directory -Force -Path $gDir | Out-Null
+        Copy-Item -Force (Join-Path $PSScriptRoot 'guard.ps1') (Join-Path $gDir 'guard.ps1')
+        Protect-EsFolder $gDir -AdminOnly
+        Unregister-ScheduledTask -TaskName $GuardTask -Confirm:$false -ErrorAction SilentlyContinue
+        $arg = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$(Join-Path $gDir 'guard.ps1')`" -DataDir `"$(Join-Path $esDir 'data')`""
+        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg
+        $t1 = New-ScheduledTaskTrigger -AtStartup
+        $t2 = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 1)
+        $set = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 2) -MultipleInstances IgnoreNew
+        $who = New-ScheduledTaskPrincipal -UserId 'S-1-5-18' -LogonType ServiceAccount -RunLevel Highest
+        Register-ScheduledTask -TaskName $GuardTask -Action $action -Trigger $t1, $t2 -Settings $set -Principal $who | Out-Null
+        Ok 'BeamMP-only guard ready (switch it on in the dashboard: Settings)'
+    } catch { Warn "The BeamMP-only guard couldn't be set up: $($_.Exception.Message)" }
+}
+
 # Wait until the dashboard really answers. If it doesn't, say so and show why
 # (the dashboard writes its errors to EasyServer\data\dashboard.log).
 function Test-Dashboard([string]$esDir) {
     for ($i = 0; $i -lt 20; $i++) {
         Start-Sleep -Seconds 1
+        # Any program accepting connections on the port counts. (An HTTP check fails
+        # when HTTPS is on: Windows PowerShell does not trust the self-signed certificate.)
+        $c = New-Object System.Net.Sockets.TcpClient
         try {
-            $r = Invoke-WebRequest -Uri "http://127.0.0.1:$DashPort/api/session" -UseBasicParsing -TimeoutSec 3
-            if ($r.StatusCode -eq 200) { Ok "Dashboard is running on port $DashPort"; return $true }
-        } catch {
-            # HTTPS turned on earlier: any answer at all means it runs
-            try {
-                Invoke-WebRequest -Uri "https://127.0.0.1:$DashPort/api/session" -UseBasicParsing -TimeoutSec 3 | Out-Null
+            if ($c.ConnectAsync('127.0.0.1', $DashPort).Wait(2000) -and $c.Connected) {
                 Ok "Dashboard is running on port $DashPort"; return $true
-            } catch {
-                if ($_.Exception.Response) { Ok "Dashboard is running on port $DashPort"; return $true }
             }
-        }
+        } catch { } finally { $c.Dispose() }
     }
     Warn "The dashboard did not start (nothing answers on port $DashPort)."
     $log = Join-Path $esDir 'data\dashboard.log'
@@ -158,7 +176,78 @@ function Assert-Signed([string]$Path, [string]$Company) {
     }
 }
 
-function Install-Dashboard($dir) {
+# Change a few dashboard settings in data\dashboard.json (keeps everything else).
+function Set-DashSettings([string]$esDir, [hashtable]$values) {
+    $j = Join-Path $esDir 'data\dashboard.json'
+    New-Item -ItemType Directory -Force -Path (Split-Path $j) | Out-Null
+    $d = [ordered]@{}
+    if (Test-Path $j) {
+        try { (Get-Content $j -Raw | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $d[$_.Name] = $_.Value } } catch { }
+    }
+    foreach ($k in $values.Keys) { $d[$k] = $values[$k] }
+    [IO.File]::WriteAllText($j, ($d | ConvertTo-Json -Depth 6), (New-Object Text.UTF8Encoding $false))
+}
+
+# Ask how friends outside the home should get in, in plain words.
+# Returns 'auto' (dashboard asks the router), 'manual' (user does it) or 'later'.
+function Show-PortChoice([int]$port, [bool]$dashboard, [string]$current) {
+    $f = New-Object System.Windows.Forms.Form
+    $f.Text = 'Letting friends join from anywhere'
+    $f.Size = New-Object System.Drawing.Size(600, 560)
+    $f.StartPosition = 'CenterScreen'; $f.FormBorderStyle = 'FixedDialog'
+    $f.MaximizeBox = $false; $f.MinimizeBox = $false
+    $f.Font = New-Object System.Drawing.Font('Segoe UI', 10)
+    $y = 15
+    $add = {
+        param($text, $x, $w, $bold, $grey)
+        $l = New-Object System.Windows.Forms.Label
+        $l.Text = $text; $l.Location = New-Object System.Drawing.Point($x, $script:py)
+        $l.MaximumSize = New-Object System.Drawing.Size($w, 0); $l.AutoSize = $true
+        if ($bold) { $l.Font = New-Object System.Drawing.Font('Segoe UI', 12, [System.Drawing.FontStyle]::Bold) }
+        if ($grey) { $l.ForeColor = [System.Drawing.Color]::DimGray }
+        $f.Controls.Add($l); $script:py += $l.Height + 6
+    }
+    $script:py = $y
+    & $add 'How should friends outside your home get in?' 20 540 $true $false
+    & $add ("Friends on your Wi-Fi can join straight away. Friends somewhere else need your router to let them through to this computer on port $port " +
+            "(this is called port forwarding). Pick one - you can change it later on the dashboard's Health page.") 20 540 $false $false
+    $script:py += 6
+    $radio = {
+        param($text, $desc)
+        $r = New-Object System.Windows.Forms.RadioButton
+        $r.Text = $text; $r.AutoSize = $true
+        $r.Font = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
+        $r.Location = New-Object System.Drawing.Point(20, $script:py)
+        $f.Controls.Add($r); $script:py += 26
+        & $add $desc 40 520 $false $true
+        $script:py += 8
+        return $r
+    }
+    $autoDesc = if ($dashboard) {
+        "The dashboard asks your router to open port $port for this computer - no router settings page needed. Most home routers allow this (it's called UPnP).`n" +
+        "- It only opens when you invite friends (Copy invite in the dashboard, or /join in your Discord) and closes by itself 30 minutes after the last player leaves.`n" +
+        "- Only this one game port is touched. Nothing else on your router changes.`n" +
+        "- If your router says no, the Health page tells you and shows how to do it by hand."
+    } else { 'Needs the web dashboard - tick "Install the web dashboard" on the first screen to use this.' }
+    $rAuto = & $radio 'Do it for me (recommended)' $autoDesc
+    $rAuto.Enabled = $dashboard
+    $rMan = & $radio "I'll do it myself" ("You open your router's settings page and add the forward yourself. When the install is finished, " +
+                                          "this window shows exactly what to type in, and the help page opens.")
+    $rLater = & $radio 'Not now' 'Only people on your Wi-Fi can join for now. Nothing is changed on your router.'
+    if ($current -eq 'manual') { $rMan.Checked = $true } elseif ($current -eq 'later' -or -not $dashboard) { $rLater.Checked = $true } else { $rAuto.Checked = $true }
+    $script:py += 6
+    $ok = New-Object System.Windows.Forms.Button
+    $ok.Text = 'Continue'; $ok.Width = 140; $ok.Height = 36
+    $ok.Font = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
+    $ok.Location = New-Object System.Drawing.Point(420, $script:py)
+    $ok.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $f.AcceptButton = $ok; $f.Controls.Add($ok)
+    $f.ClientSize = New-Object System.Drawing.Size(580, ($script:py + 50))
+    [void]$f.ShowDialog()
+    if ($rAuto.Checked) { return 'auto' } elseif ($rMan.Checked) { return 'manual' } else { return 'later' }
+}
+
+function Install-Dashboard($dir, [hashtable]$preset = $null) {
     Step 'Installing the web dashboard'
     $esDir = Join-Path $dir 'EasyServer'
     $pyDir = Join-Path $esDir 'python'
@@ -180,10 +269,11 @@ function Install-Dashboard($dir) {
     }
     Ok 'Portable Python ready'
     Stop-Dashboard
+    if ($preset) { Set-DashSettings $esDir $preset }
     $src = Find-DashboardSource
     $dst = Join-Path $esDir 'dashboard'
     New-Item -ItemType Directory -Force -Path $dst, (Join-Path $esDir 'data') | Out-Null
-    foreach ($f in 'dashboard.py', 'webui.html', 'modscan.py', 'tlsgen.py') { Copy-Item -Force (Join-Path $src $f) (Join-Path $dst $f) }
+    foreach ($f in 'dashboard.py', 'webui.html', 'modscan.py', 'tlsgen.py', 'upnp.py', 'guard.py') { Copy-Item -Force (Join-Path $src $f) (Join-Path $dst $f) }
     # player statistics plugin, runs inside the BeamMP server
     $plug = Join-Path $dir 'Resources\Server\EasyServerStats'
     New-Item -ItemType Directory -Force -Path $plug | Out-Null
@@ -208,6 +298,7 @@ function Install-Dashboard($dir) {
     Register-ScheduledTask -TaskName $DashTask -Action $action -Trigger $trigger -Settings $set -RunLevel Limited | Out-Null
     Start-ScheduledTask -TaskName $DashTask
     Ok 'Dashboard starts automatically when you log in'
+    Install-Guard $esDir
     [void](Test-Dashboard $esDir)
 
     $url = Join-Path ([Environment]::GetFolderPath('Desktop')) 'BeamMP Dashboard.url'
@@ -238,6 +329,7 @@ if ($Uninstall) {
     Get-Process -Name 'BeamMP-Server' -ErrorAction SilentlyContinue | Stop-Process -Force
     Stop-Dashboard
     Unregister-ScheduledTask -TaskName $DashTask -Confirm:$false -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName $GuardTask -Confirm:$false -ErrorAction SilentlyContinue
     Remove-Firewall; Ok 'Firewall rules removed'
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue; Ok 'Autostart removed'
     $sc = Get-Shortcuts
@@ -450,6 +542,14 @@ if (-not $cfg.Name) { $cfg.Name = "$env:COMPUTERNAME BeamMP Server" }
 if (-not $cfg.Map)  { $cfg.Map = 'gridmap_v2' }
 if (-not $cfg.Dir)  { $cfg.Dir = $DefaultDir }
 
+# How friends outside the home get in (pre-select what this computer used last time)
+$prevPorts = 'auto'
+$prevJson = Join-Path $cfg.Dir 'EasyServer\data\dashboard.json'
+if (Test-Path $prevJson) {
+    try { if (-not (Get-Content $prevJson -Raw | ConvertFrom-Json).upnp_on) { $prevPorts = 'manual' } } catch { }
+}
+$cfg.Ports = Show-PortChoice $cfg.Port $cfg.Dash $prevPorts
+
 try {
     Write-Host ''
     Write-Host "  BeamMP EasyServer v$EasyVersion - installing to $($cfg.Dir)" -ForegroundColor White
@@ -578,7 +678,8 @@ UpdateReminderTime = "30s"
     # ---- dashboard ----
     $dashOk = $false
     if ($cfg.Dash) {
-        try { Install-Dashboard $cfg.Dir; $dashOk = $true }
+        $preset = if ($cfg.Ports -eq 'auto') { @{ upnp_on = $true; upnp_mode = 'needed' } } else { @{ upnp_on = $false } }
+        try { Install-Dashboard $cfg.Dir $preset; $dashOk = $true }
         catch { Warn "The dashboard couldn't be installed: $($_.Exception.Message). The server itself works fine." }
     }
 
@@ -603,7 +704,23 @@ UpdateReminderTime = "30s"
     Write-Host ''
     Write-Host "  Friends on the same Wi-Fi connect to:   $($lan):$($cfg.Port)"
     Write-Host "  Friends over the internet connect to:   $($pub):$($cfg.Port)"
-    Write-Host "    -> for internet play, forward port $($cfg.Port) (TCP + UDP) on your router to $lan"
+    if ($cfg.Ports -eq 'auto' -and $dashOk) {
+        Write-Host "    -> The dashboard opens port $($cfg.Port) on your router when you invite friends" -ForegroundColor Cyan
+        Write-Host '       (Copy invite, or /join in Discord) and closes it 30 minutes after the last player leaves.'
+        Write-Host "       Check that your router said yes: dashboard -> Health -> Automatic port forwarding."
+    } elseif ($cfg.Ports -eq 'manual' -or $cfg.Ports -eq 'auto') {
+        $gw = (Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Sort-Object RouteMetric | Select-Object -First 1).NextHop
+        Write-Host ''
+        Write-Host '  Set up port forwarding on your router:' -ForegroundColor Cyan
+        Write-Host "    1. Open your router's settings page: http://$(if ($gw) { $gw } else { '192.168.0.1' })  (the login is often on a sticker on the router)"
+        Write-Host '    2. Find "Port forwarding" (sometimes called "Virtual server" or "NAT").'
+        Write-Host "    3. Add a rule:  port $($cfg.Port)  -  protocol TCP and UDP (or Both)  -  to $lan"
+        Write-Host '    4. Save. Test it on the dashboard''s Health page.'
+        Write-Host '    Stuck? Search "<your router model> port forwarding".'
+        try { Start-Process 'https://csabika-dev.github.io/beammp-easyserver/help.html#friends-cant-join' } catch { }
+    } else {
+        Write-Host "    -> Not set up yet. When you want it: dashboard -> Health -> Automatic port forwarding."
+    }
     Write-Host ''
     if ($dashOk) {
         Write-Host '  Dashboard:           ' -NoNewline; Write-Host "http://localhost:$DashPort  (double-click 'BeamMP Dashboard' on your desktop)" -ForegroundColor Cyan

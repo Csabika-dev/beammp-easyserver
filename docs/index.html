@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="img/logo.svg" type="image/svg+xml">
 <title>BeamMP EasyServer - host a BeamNG.drive multiplayer server in one click</title>
 <meta name="description" content="Free one-click installer and web dashboard for BeamMP (BeamNG.drive multiplayer) servers on Windows and Linux. Mods with virus check, player stats, moderation, Discord, phone app.">
 <meta property="og:title" content="BeamMP EasyServer">
@@ -72,12 +73,13 @@ section.alt .plan{background:var(--bg)}
 .plan .foot{margin-top:auto;padding-top:16px}
 .soon{display:inline-block;padding:7px 14px;border-radius:9px;border:1px dashed var(--line);color:var(--mute);font-size:14px;font-weight:600}
 .badge{display:inline-block;padding:3px 10px;border-radius:99px;background:var(--accent2);color:var(--accent);font-size:13px;font-weight:600;margin-bottom:16px}
+i.lg{background:url(img/logo.svg) center/contain no-repeat!important;border-radius:0!important}
 </style>
 </head>
 <body>
 <nav><div class="wrap">
-  <a class="logo" href="#"><i>B</i>BeamMP EasyServer</a>
-  <div class="links"><a class="opt" href="#start">Get started</a><a class="opt" href="#features">Features</a><a class="opt" href="#faq">FAQ</a><a href="help.html">Help</a>
+  <a class="logo" href="#"><i class="lg"></i>BeamMP EasyServer</a>
+  <div class="links"><a class="opt" href="#start">Get started</a><a class="opt" href="#features">Features</a><a class="opt" href="#versions">Downloads</a><a class="opt" href="#faq">FAQ</a><a href="help.html">Help</a>
     <a href="https://github.com/Csabika-dev/beammp-easyserver">GitHub</a></div>
 </div></nav>
 
@@ -102,13 +104,14 @@ section.alt .plan{background:var(--bg)}
       <div class="tabs" role="tablist"><button class="on" data-os="win">Windows</button><button data-os="linux">Linux</button></div>
       <p data-for="win">Download <b>BeamMP-EasyServer-Windows.zip</b> from the <a href="https://github.com/Csabika-dev/beammp-easyserver/releases/latest">latest release</a>, extract it and double-click <b>Install-BeamMP-Server.bat</b>.</p>
       <div data-for="linux" hidden><p style="margin-bottom:8px">Paste this into a terminal:</p>
-        <pre>curl -fsSL https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/main/linux/install.sh | sudo bash</pre></div></div>
+        <pre>curl -fsSL https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/stable/linux/install.sh | sudo bash</pre></div>
+      <p class="small" style="margin-top:8px;opacity:.8">This is the <b>Stable</b> version (tested). Want the newest features right away? See <a href="#versions">Rolling release</a>.</p></div>
     <div class="step"><b class="n">3</b><h3>Open the dashboard</h3>
       <p>Go to <b>http://localhost:30815</b> on the server computer, choose a password, and you're live. From your phone or other PCs at home: <b>http://&lt;server-ip&gt;:30815</b>.</p></div>
   </div>
   <div class="video"><iframe src="https://www.youtube-nocookie.com/embed/DWD9HcW1OIc" title="How to make a BeamMP server in 5 minutes - setup video" loading="lazy" allow="accelerometer; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe></div>
   <p class="small video-cap">Prefer to watch? The whole setup in about 2 minutes. <a href="https://youtu.be/DWD9HcW1OIc">Open on YouTube</a></p>
-  <p class="small" style="margin-top:22px">For friends outside your home, forward port 30814 (TCP + UDP) on your router. The dashboard's Health page tells you whether it worked. <a href="https://github.com/Csabika-dev/beammp-easyserver#-guides">Step-by-step guides →</a></p>
+  <p class="small" style="margin-top:22px">For friends outside your home, click <b>Open port automatically</b> on the Health page - most routers accept it (UPnP). Otherwise forward port 30814 (TCP + UDP) on your router; the Health page tells you whether it worked. Then <b>Copy invite</b> and paste it in Discord. <a href="https://github.com/Csabika-dev/beammp-easyserver#-guides">Step-by-step guides →</a></p>
 </div></section>
 
 <section id="features"><div class="wrap">
@@ -118,7 +121,8 @@ section.alt .plan{background:var(--bg)}
   <div class="feature">
     <div class="txt"><h3>Mods without the worry</h3>
       <p>Drag mod .zip files onto the page. Every mod is checked for hidden programs, disguised files and zip bombs before players can download it, with Microsoft Defender or ClamAV and optionally VirusTotal.</p>
-      <ul><li><b>Light mode</b> sends players only the map that's being played, so joining is much faster</li>
+      <ul><li><b>Mod browser</b>: find mods from the BeamNG repository and install them with one click</li>
+        <li><b>Light mode</b> sends players only the map that's being played, so joining is much faster</li>
         <li><b>One-click updates</b> for mods from the BeamNG repository</li>
         <li><b>Modpacks</b>: share or move all your mods as one file</li></ul></div>
     <picture class="shot"><img src="img/mods-dark.webp" loading="lazy" width="1100" height="696" alt="Mods page with virus check results and light mode saving 380 MB"></picture>
@@ -161,6 +165,8 @@ section.alt .plan{background:var(--bg)}
   <h2>And a lot more</h2>
   <p class="sub">All optional. Turn on what you need.</p>
   <div class="grid">
+    <div class="card"><div class="ic">🔌</div><h4>One-click port forwarding</h4><p>Opens the game port on your router (UPnP) and keeps it open.</p></div>
+    <div class="card"><div class="ic">📨</div><h4>Copy invite</h4><p>A ready-to-paste Discord message with the address and port.</p></div>
     <div class="card"><div class="ic">🗺️</div><h4>Map vote &amp; rotation</h4><p>Players type /vote, or the map changes on a schedule.</p></div>
     <div class="card"><div class="ic">📅</div><h4>Weekly events</h4><p>"Friday drift night" switches map and mods, and is announced in Discord.</p></div>
     <div class="card"><div class="ic">🚗</div><h4>/tp and /repair</h4><p>Teleport to friends (they accept first), and realism or hardcore repair rules.</p></div>
@@ -184,26 +190,26 @@ section.alt .plan{background:var(--bg)}
   </div>
 </div></section>
 
-<section id="support"><div class="wrap">
-  <h2>Support EasyServer</h2>
-  <p class="sub">EasyServer is free and stays free: every feature, no ads, no limits and no reminders to upgrade. If you want to help it grow, there will be two optional ways to chip in.</p>
-  <div class="plans">
-    <div class="plan"><h4>Free</h4><div class="price">$0</div><div class="per">forever</div>
-      <ul><li>Everything EasyServer can do</li><li>Every new version, about 2 weeks after supporters</li><li>Help page and community forum</li><li>No ads, no limits</li></ul>
-      <div class="foot"><a class="btn primary" href="https://github.com/Csabika-dev/beammp-easyserver/releases/latest">Download</a></div></div>
-    <div class="plan"><h4>Supporter</h4><div class="price">$20 <small>/ year</small></div><div class="per">or $3 / month · yearly saves 44% · cancel any time</div>
-      <ul><li>Everything in Free</li><li>New versions <b>first</b>, about 2 weeks early</li><li>Your bug reports and ideas are looked at first</li><li>Vote on the next feature each month</li><li>Your name on the supporters list (if you want)</li></ul>
-      <div class="foot"><span class="soon">Coming soon</span></div></div>
-    <div class="plan"><h4>Lifetime</h4><div class="price">$45</div><div class="per">pay once, no subscription</div>
-      <ul><li>Everything in Supporter</li><li>For as long as EasyServer is developed</li><li>Marked as a Lifetime supporter</li></ul>
-      <div class="foot"><span class="soon">Coming soon</span></div></div>
+<section id="versions"><div class="wrap">
+  <h2>Downloads</h2>
+  <p class="sub">Both are free, for everyone. Not sure? Take <b>Stable</b>.</p>
+  <div class="plans" style="grid-template-columns:repeat(2,minmax(0,1fr))">
+    <div class="plan"><h4>Stable</h4><div class="per">Recommended · tested · the release marked "Latest"</div>
+      <ul><li><b>Windows:</b> download <b>BeamMP-EasyServer-Windows.zip</b>, extract it, double-click <b>Install-BeamMP-Server.bat</b></li>
+        <li><b>Linux:</b><pre style="white-space:pre-wrap;word-break:break-all">curl -fsSL https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/stable/linux/install.sh | sudo bash</pre></li></ul>
+      <div class="foot"><a class="btn primary" href="https://github.com/Csabika-dev/beammp-easyserver/releases/latest">Download Stable</a></div></div>
+    <div class="plan"><h4>Rolling release</h4><div class="per">The newest features as soon as they're made · may have bugs</div>
+      <ul><li><b>Windows:</b> download the ZIP, extract it, open the <b>windows</b> folder and double-click <b>Install-BeamMP-Server.bat</b></li>
+        <li><b>Linux:</b><pre style="white-space:pre-wrap;word-break:break-all">curl -fsSL https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/main/linux/install.sh | sudo bash</pre></li>
+        <li>Something broken? Install <b>Stable</b> over it - your settings and mods stay.</li></ul>
+      <div class="foot"><a class="btn" href="https://github.com/Csabika-dev/beammp-easyserver/archive/refs/heads/main.zip">Download Rolling (ZIP)</a></div></div>
   </div>
-  <p class="sub" style="margin-top:18px;font-size:15px">Supporting is a thank-you, not a requirement. The free version will never be limited to make you pay.</p>
+  <p class="small" style="margin-top:14px;opacity:.8">What changed in each version: <a href="https://github.com/Csabika-dev/beammp-easyserver/blob/main/CHANGELOG.md">changelog</a> · <a href="https://github.com/Csabika-dev/beammp-easyserver/releases">all releases</a></p>
 </div></section>
 
 <section id="faq" class="alt"><div class="wrap">
   <h2>Questions</h2>
-  <details><summary>Is it free?</summary><p>Yes, free and open source (MIT license), with every feature and no ads. BeamMP and its server are also free. You need your own copy of BeamNG.drive to play. Optional <a href="#support">supporter plans</a> (coming soon) only get new versions a bit earlier.</p></details>
+  <details><summary>Is it free?</summary><p>Yes, free and open source (MIT license), with every feature and no ads. BeamMP and its server are also free. You need your own copy of BeamNG.drive to play.</p></details>
   <details><summary>Is this the official BeamMP server?</summary><p>EasyServer installs the <b>official</b> BeamMP server and keeps it updated. EasyServer itself is a community project, not made or endorsed by the BeamMP team.</p></details>
   <details><summary>What computer do I need?</summary><p>Any 64-bit Windows 10/11 PC, or Linux (Ubuntu, Linux Mint, Debian and others, also Raspberry Pi 4/5 with a 64-bit OS). An old laptop is enough for a group of friends. Upload speed matters more than the processor.</p></details>
   <details><summary>Does it change my router?</summary><p>No. It only opens the port in the computer's own firewall, and always asks first. For friends outside your home you forward the port yourself; the guides show how for common routers.</p></details>
@@ -215,7 +221,7 @@ section.alt .plan{background:var(--bg)}
 <footer><div class="wrap">
   <div class="cta" style="margin-bottom:22px"><a class="btn primary" href="https://github.com/Csabika-dev/beammp-easyserver/releases/latest">Download EasyServer</a>
     <a class="btn" href="https://github.com/Csabika-dev/beammp-easyserver">View on GitHub</a></div>
-  BeamMP EasyServer · MIT license · <a href="#support">Support the project</a> · Not affiliated with the BeamMP team or BeamNG GmbH.<br>
+  BeamMP EasyServer · MIT license · Not affiliated with the BeamMP team or BeamNG GmbH.<br>
   Screenshots show a demo server with invented players.
 </div></footer>
 

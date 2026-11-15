@@ -9,6 +9,7 @@ an encrypted key, open the firewall) it drops a small JSON request into
   * only performs a fixed list of actions with validated arguments
   * writes a short answer (never a secret) to /run/beammp-easyserver-ctl-out
 """
+import ipaddress
 import json
 import os
 import pwd
@@ -28,7 +29,7 @@ SERVER_DIR = "/opt/beammp-server"
 INSTALL_ENV = "/etc/beammp-easyserver/install.env"
 SERVERS = SERVER_DIR + "/servers"              # extra servers: servers/<id>/
 LIMITS_DIR = "/etc/beammp-easyserver/limits"   # upload limits, re-applied when a server starts
-SECRET_NAMES = {"MODS_PASSWORD", "VT_API_KEY", "DISCORD_WEBHOOK", "SMTP_PASSWORD", "TOTP_SECRET", "BEAMMP_AUTH_KEY", "DISCORD_BOT_TOKEN", "DUCKDNS_TOKEN", "NTFY_TOPIC", "WAKE_TOPIC", "USERS_KEY", "TELEGRAM_TOKEN", "CUSTOM_WEBHOOK"}
+SECRET_NAMES = {"MODS_PASSWORD", "VT_API_KEY", "DISCORD_WEBHOOK", "SMTP_PASSWORD", "TOTP_SECRET", "BEAMMP_AUTH_KEY", "DISCORD_BOT_TOKEN", "DUCKDNS_TOKEN", "NTFY_TOPIC", "WAKE_TOPIC", "USERS_KEY", "TELEGRAM_TOKEN", "CUSTOM_WEBHOOK", "SUPPORTER_KEY"}
 ID_RE = re.compile(r"[a-z0-9]{1,12}")
 RELEASE_BASE = "https://github.com/BeamMP/BeamMP-Server/releases/latest/download/"
 
@@ -458,6 +459,45 @@ def flood_protect(state, ports):
     return {"ok": True, "msg": "Flood protection is on for port%s %s" % ("s" if len(ports) > 1 else "", pl)}
 
 
+GUARD_TABLE = "beammp_easyserver_guard"
+
+
+def guard_block(ports, ips):
+    """BeamMP-only guard: drop everything from these addresses to the game ports.
+    Called with the whole list each time; an empty list removes the rules."""
+    if not shutil.which("nft"):
+        return {"ok": False, "msg": "The BeamMP-only guard needs nftables (sudo apt install nftables)"}
+    try:
+        ports = sorted({int(p) for p in ports or []})
+        assert len(ports) <= 64 and all(1024 <= p <= 65535 for p in ports)
+        v4, v6 = [], []
+        for ip in list(ips or [])[:5000]:
+            a = ipaddress.ip_address(str(ip))
+            if a.is_private or a.is_loopback or a.is_link_local:
+                continue
+            (v4 if a.version == 4 else v6).append(str(a))
+    except (TypeError, ValueError, AssertionError):
+        return {"ok": False, "msg": "bad list"}
+    run(["nft", "delete", "table", "inet", GUARD_TABLE])
+    if not ports or not (v4 or v6):
+        return {"ok": True, "msg": "nothing blocked"}
+    pl = ", ".join(str(p) for p in ports)
+    sets = ""
+    rules = ""
+    if v4:
+        sets += "  set bad4 { type ipv4_addr; elements = { %s } }\n" % ", ".join(v4)
+        rules += "    ip saddr @bad4 th dport { %s } counter drop\n" % pl
+    if v6:
+        sets += "  set bad6 { type ipv6_addr; elements = { %s } }\n" % ", ".join(v6)
+        rules += "    ip6 saddr @bad6 th dport { %s } counter drop\n" % pl
+    text = "table inet %s {\n%s  chain input {\n    type filter hook input priority -20; policy accept;\n%s  }\n}\n" % (
+        GUARD_TABLE, sets, rules)
+    r = run(["nft", "-f", "-"], input=text)
+    if r.returncode != 0:
+        return {"ok": False, "msg": "Couldn't update the guard: " + (r.stderr.strip()[-200:] or "nft failed")}
+    return {"ok": True, "msg": "%d addresses blocked" % (len(v4) + len(v6))}
+
+
 def flood_status():
     if not shutil.which("nft"):
         return {"ok": True, "active": False, "dropped": 0}
@@ -646,6 +686,8 @@ def handle(req):
         return flood_protect(req.get("state"), req.get("ports") or [])
     if a == "flood-status":
         return flood_status()
+    if a == "guard-block":
+        return guard_block(req.get("ports"), req.get("ips"))
     if a in ("start", "stop", "restart"):
         return systemctl(a, unit_for(req.get("server")))
     if a == "create-server":
