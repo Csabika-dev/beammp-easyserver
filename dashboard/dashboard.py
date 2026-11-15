@@ -40,6 +40,9 @@ from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 EASY_VERSION = "1.14.0"
+# Paid extras (supporter licence, Experimental for supporters only). Off = EasyServer is fully free:
+# no supporter box, and everyone can pick the Rolling release (newest code). Turn on again later.
+PAID_FEATURES = False
 REPO = "Csabika-dev/beammp-easyserver"
 BEAMMP_REPO = "BeamMP/BeamMP-Server"
 # Supporter licences are sold through Lemon Squeezy. Their licence API needs no
@@ -150,6 +153,7 @@ DEFAULT_SETTINGS = {
     "invite_note": "",             # an extra line for the "Copy invite" message (rules, Discord link ...)
     "supporter": {},               # the supporter licence (key itself is a secret): instance, plan, last check
     "early_access": True,          # supporters: Experimental versions (newest features first, pre-releases) - supporters only
+    "rolling": False,              # free mode (PAID_FEATURES off): hear about the Rolling release (newest code) too
 }
 SECURITY_FILE = os.path.join(DATA_DIR, "security.json")
 GUARD_FILE = os.path.join(DATA_DIR, "guard.json")                 # what the guard knows (blocked, good players)
@@ -2771,7 +2775,10 @@ def newer(a, b):
 
 
 def update_channel():
-    """Experimental versions (pre-releases, newest features first) are a supporter perk; everyone else gets Stable."""
+    """"experimental" = also hear about newer versions than Stable: the Rolling release (free mode, anyone who
+    picks it) or Experimental versions (paid mode, a supporter perk). Everyone else gets Stable."""
+    if not PAID_FEATURES:
+        return "experimental" if APP.settings.get("rolling") else "stable"
     return "experimental" if supporter_active() and APP.settings.get("early_access") else "stable"
 
 
@@ -2779,10 +2786,26 @@ EXPERIMENTAL_INFO = "https://csabika-dev.github.io/beammp-easyserver/experimenta
 SUPPORTER_DOWNLOADS = "https://app.lemonsqueezy.com/my-orders"
 
 
+ROLLING_RAW = "https://raw.githubusercontent.com/%s/main/dashboard/dashboard.py"
+ROLLING_ZIP = "https://github.com/%s/archive/refs/heads/main.zip"
+
+
+def rolling_version(repo):
+    """The Rolling release (newest code on main, free for everyone), as (version, where to download it)."""
+    req = urllib.request.Request(ROLLING_RAW % repo, headers={"User-Agent": "BeamMP-EasyServer/" + EASY_VERSION})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        head = r.read(16 * 1024).decode("utf-8", "replace")
+    m = re.search(r'^EASY_VERSION = "(\d+\.\d+\.\d+)"', head, re.M)
+    return (m.group(1), ROLLING_ZIP % repo) if m else None
+
+
 def github_prerelease(repo):
-    """The newest Experimental version (supporters only), as (version, where to download it).
+    """The newest version past Stable, as (version, where to download it): the Rolling release when
+    EasyServer is fully free, otherwise the newest Experimental version (supporters only).
     Experimental builds aren't public on GitHub; the website just says which one is out, and
     supporters download it from their Lemon Squeezy order."""
+    if not PAID_FEATURES:
+        return rolling_version(repo)
     req = urllib.request.Request(EXPERIMENTAL_INFO, headers={"User-Agent": "BeamMP-EasyServer/" + EASY_VERSION})
     with urllib.request.urlopen(req, timeout=20) as r:
         info = json.loads(r.read(64 * 1024))
@@ -7020,7 +7043,10 @@ class App:
             else:
                 res["notified_server"] = prev.get("notified_server")
             if res.get("easy_early") and prev.get("notified_early") != res["easy_early"]:
-                if res["channel"] == "experimental":
+                if res["channel"] == "experimental" and not PAID_FEATURES:
+                    self.notifier.add("update", "Rolling release: EasyServer %s is out" % res["easy_early"],
+                                      "The newest features, may have bugs. Download: %s" % res.get("easy_early_url"), "info")
+                elif res["channel"] == "experimental":
                     self.notifier.add("update", "Experimental: EasyServer %s is out" % res["easy_early"],
                                       "The newest features, not fully tested yet. Download it from your supporter order: %s" % res.get("easy_early_url"), "info")
                 else:
@@ -8449,6 +8475,8 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---------- supporter licence
     def get_supporter(self, q):
+        if not PAID_FEATURES:
+            return self.send(200, {"off": True})
         sup = APP.settings.get("supporter") or {}
         self.send(200, {"active": supporter_active(), "shop_open": bool(LS_STORE_ID), "url": SUPPORT_URL,
                         "status": sup.get("status"), "plan": sup.get("plan"), "expires_at": sup.get("expires_at"),
@@ -8499,6 +8527,7 @@ class Handler(BaseHTTPRequestHandler):
         up["repo"] = REPO
         up["channel"] = update_channel()
         up["supporter"] = bool(supporter_active())
+        up["paid"] = PAID_FEATURES
         if up["channel"] != "experimental":
             up.pop("easy_early", None)
         self.send(200, up)
@@ -8508,9 +8537,9 @@ class Handler(BaseHTTPRequestHandler):
         if b.get("channel") is not None:
             if b["channel"] not in ("stable", "experimental"):
                 return self.fail(400, "channel must be stable or experimental")
-            if b["channel"] == "experimental" and not supporter_active():
+            if PAID_FEATURES and b["channel"] == "experimental" and not supporter_active():
                 return self.fail(403, "Experimental versions are for supporters - Settings -> Supporter")
-            APP.settings.update_one("early_access", b["channel"] == "experimental")
+            APP.settings.update_one("early_access" if PAID_FEATURES else "rolling", b["channel"] == "experimental")
             if b["channel"] == "stable":
                 with LOCK:
                     APP.updates.pop("easy_early", None)
