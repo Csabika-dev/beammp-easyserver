@@ -48,12 +48,11 @@ jobs:
           cat notes.md
 
       - name: Publish release
+        # Tags with a dash (v1.14.0-experimental.1) are Experimental builds: a supporter perk that is
+        # kept off GitHub (built and stored privately). Only Stable tags get a public release.
+        if: ${{ !contains(github.ref_name, '-') }}
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*.zip
           body_path: notes.md
-          # tags with a dash (v1.14.0-experimental.1) are experimental: a supporter perk, so they stay a
-          # draft (not public) pre-release - the files go to supporters, never "Latest"
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          draft: ${{ contains(github.ref_name, '-') }}
-          make_latest: ${{ !contains(github.ref_name, '-') }}
+          make_latest: true
