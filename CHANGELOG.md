@@ -11,6 +11,8 @@
 - **Mod browser** (Mods → Browse mods): look through the official BeamNG mod repository by category (vehicles, maps, skins, props ...) sorted by downloads, rating or date, search it, or paste a link to any mod page - then **Install**. The mod is downloaded, virus-checked like an upload and ready for players; mods you already have are marked.
 - **Supporter licence** (Settings): EasyServer stays completely free. Once supporter licences are on sale, a licence key turns on early access to preview versions. The key is stored encrypted, checked once a day, and can be moved to another computer.
 - **New logo** in the dashboard, the phone app icon and the website.
+- **The installer asks how friends outside your home should get in**, in plain words: *Do it for me* (the dashboard opens the game port on your router only when needed - the new default), *I'll do it myself* (the install window shows your router's address, the port and what to type in, and the help page opens), or *Not now*. Changeable later on the Health page.
+- Fixed: the Windows installer said "The dashboard did not start" when the dashboard was running with HTTPS on.
 
 
 ## 1.13.0 - Command suggestions in the chat
