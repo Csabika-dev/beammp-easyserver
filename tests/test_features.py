@@ -250,6 +250,11 @@ class ModBrowserInstall(unittest.TestCase):
 
 @unittest.skipUnless(not D.IS_WIN, "live tests run on Linux")
 class Supporter(unittest.TestCase):
+    def setUp(self):
+        paid = mock.patch.object(D, "PAID_FEATURES", True)    # the supporter licence only exists in paid mode
+        paid.start()
+        self.addCleanup(paid.stop)
+
     @classmethod
     def setUpClass(cls):
         cls.base = harness.start()
