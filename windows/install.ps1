@@ -143,18 +143,14 @@ function Install-Guard($esDir) {
 function Test-Dashboard([string]$esDir) {
     for ($i = 0; $i -lt 20; $i++) {
         Start-Sleep -Seconds 1
+        # Any program accepting connections on the port counts. (An HTTP check fails
+        # when HTTPS is on: Windows PowerShell does not trust the self-signed certificate.)
+        $c = New-Object System.Net.Sockets.TcpClient
         try {
-            $r = Invoke-WebRequest -Uri "http://127.0.0.1:$DashPort/api/session" -UseBasicParsing -TimeoutSec 3
-            if ($r.StatusCode -eq 200) { Ok "Dashboard is running on port $DashPort"; return $true }
-        } catch {
-            # HTTPS turned on earlier: any answer at all means it runs
-            try {
-                Invoke-WebRequest -Uri "https://127.0.0.1:$DashPort/api/session" -UseBasicParsing -TimeoutSec 3 | Out-Null
+            if ($c.ConnectAsync('127.0.0.1', $DashPort).Wait(2000) -and $c.Connected) {
                 Ok "Dashboard is running on port $DashPort"; return $true
-            } catch {
-                if ($_.Exception.Response) { Ok "Dashboard is running on port $DashPort"; return $true }
             }
-        }
+        } catch { } finally { $c.Dispose() }
     }
     Warn "The dashboard did not start (nothing answers on port $DashPort)."
     $log = Join-Path $esDir 'data\dashboard.log'
