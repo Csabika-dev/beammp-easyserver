@@ -143,6 +143,7 @@ class UpdateChannel(unittest.TestCase):
 
     def test_switch_channel(self):
         self.addCleanup(lambda: D.APP.settings.update({"early_access": True}))
+        paid = mock.patch.object(D, "PAID_FEATURES", True); paid.start(); self.addCleanup(paid.stop)
         with mock.patch.object(D, "github_latest", lambda repo: "1.13.0"), \
                 mock.patch.object(D, "github_prerelease", lambda repo: ("9.9.9", "https://example.invalid/x")):
             with mock.patch.object(D, "supporter_active", lambda: False):
@@ -161,6 +162,37 @@ class UpdateChannel(unittest.TestCase):
                 self.assertNotIn("easy_early", d)
                 st, d, _ = self.owner.call("/api/updates")
                 self.assertEqual(d["channel"], "stable")
+
+    def test_rolling_for_everyone_when_free(self):
+        self.addCleanup(lambda: D.APP.settings.update({"rolling": False}))
+        with mock.patch.object(D, "PAID_FEATURES", False), \
+                mock.patch.object(D, "supporter_active", lambda: False), \
+                mock.patch.object(D, "github_latest", lambda repo: "1.13.0"), \
+                mock.patch.object(D, "rolling_version", lambda repo: ("9.9.9", "https://example.invalid/main.zip")):
+            st, d, _ = self.owner.call("/api/updates")
+            self.assertEqual(d["channel"], "stable")
+            self.assertFalse(d["paid"])
+            st, d, _ = self.owner.call("/api/updates/check", {"channel": "experimental"})
+            self.assertEqual(st, 200, d)                        # no supporter licence needed
+            self.assertEqual(d["easy_early"], "9.9.9")
+            self.assertTrue(D.APP.settings.get("rolling"))
+            st, d, _ = self.owner.call("/api/supporter")
+            self.assertEqual(d, {"off": True})                  # supporter box hidden
+            st, d, _ = self.owner.call("/api/updates/check", {"channel": "stable"})
+            self.assertNotIn("easy_early", d)
+
+    def test_rolling_version_reads_main(self):
+        class R:
+            def __init__(self, b): self.b = b
+            def read(self, n=-1): return self.b
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        body = b'#!/usr/bin/env python3\nEASY_VERSION = "1.15.0"\nREPO = "x/y"\n'
+        with mock.patch.object(D.urllib.request, "urlopen", lambda req, timeout=0: R(body)):
+            v, url = D.rolling_version("x/y")
+        self.assertEqual(v, "1.15.0")
+        self.assertTrue(url.endswith("/x/y/archive/refs/heads/main.zip"))
+
 
 if __name__ == "__main__":
     unittest.main()
