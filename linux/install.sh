@@ -916,6 +916,43 @@ EOF
     if ask_yn "Turn on the web dashboard?" Y; then page="yes"; else page="no"; fi
   fi
 
+  # How friends outside the home get in, in plain words
+  if [[ "$page" != "no" && $OPT_UNATTENDED -eq 0 ]]; then
+    local cur="1" dj="$DATA_DIR/dashboard.json"
+    if [[ -f "$dj" ]] && ! grep -q '"upnp_on": true' "$dj"; then cur="2"; fi
+    echo
+    echo "  ${C_BOLD}Letting friends join from anywhere${C_RESET}"
+    echo "  Friends on your Wi-Fi can join straight away. Friends somewhere else need your router"
+    echo "  to let them through to this computer on port ${PORT} (this is called port forwarding)."
+    echo
+    echo "    1) Do it for me (recommended)"
+    echo "       The dashboard asks your router to open port ${PORT} for this computer (UPnP) - no router"
+    echo "       settings page needed. It only opens when you invite friends (Copy invite, or /join in"
+    echo "       Discord) and closes by itself 30 minutes after the last player leaves. Only this one"
+    echo "       game port is touched. If your router says no, the Health page shows how to do it by hand."
+    echo "    2) I'll do it myself - at the end you get exactly what to type into your router."
+    echo "    3) Not now - only people on your Wi-Fi can join. Nothing changes on your router."
+    local pick; pick=$(ask "Choose 1, 2 or 3" "$cur")
+    case "$pick" in 2) PORTS_CHOICE=manual;; 3) PORTS_CHOICE=later;; *) PORTS_CHOICE=auto;; esac
+    mkdir -p "$DATA_DIR"
+    python3 - "$dj" "$PORTS_CHOICE" <<'PY'
+import json, os, sys
+path, choice = sys.argv[1], sys.argv[2]
+try:
+    with open(path, encoding="utf-8") as f:
+        d = json.load(f)
+except (OSError, ValueError):
+    d = {}
+d["upnp_on"] = choice == "auto"
+if choice == "auto":
+    d["upnp_mode"] = "needed"
+tmp = path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as f:
+    json.dump(d, f, indent=2)
+os.replace(tmp, path)
+PY
+  fi
+
   local f
   for f in dashboard.py webui.html modscan.py tlsgen.py upnp.py guard.py; do
     fetch_file "dashboard/$f" "$es/dashboard/$f"
@@ -1110,8 +1147,24 @@ ${C_GREEN}${C_BOLD}  All done!${C_RESET}
 
   Friends on the same Wi-Fi/network connect to:  ${C_BOLD}${LAN_IP:-?}:${PORT}${C_RESET}
   Friends over the internet connect to:          ${C_BOLD}${PUB_IP}:${PORT}${C_RESET}
-    -> for internet play, forward port ${PORT} (TCP + UDP) on your router
-       to ${LAN_IP:-this computer}. Search "<your router model> port forwarding".
+
+EOF
+GW_IP=$(ip route show default 2>/dev/null | awk '/default/ {print $3; exit}')
+if [[ "${PORTS_CHOICE:-}" == auto && "$MODPAGE_ON" == 1 ]]; then
+  echo "    -> The dashboard opens port ${PORT} on your router when you invite friends"
+  echo "       (Copy invite, or /join in Discord) and closes it 30 minutes after the last player leaves."
+  echo "       Check that your router said yes: dashboard -> Health -> Automatic port forwarding."
+elif [[ "${PORTS_CHOICE:-manual}" != later ]]; then
+  echo "    -> Set up port forwarding on your router:"
+  echo "       1. Open your router's settings page: http://${GW_IP:-192.168.0.1}  (the login is often on a sticker on the router)"
+  echo "       2. Find \"Port forwarding\" (sometimes called \"Virtual server\" or \"NAT\")."
+  echo "       3. Add a rule: port ${PORT} - protocol TCP and UDP (or Both) - to ${LAN_IP:-this computer}"
+  echo "       4. Save. Test it on the dashboard's Health page."
+  echo "       Stuck? https://csabika-dev.github.io/beammp-easyserver/help.html#friends-cant-join"
+else
+  echo "    -> Not set up yet. When you want it: dashboard -> Health -> Automatic port forwarding."
+fi
+cat <<EOF
 
 ${C_BOLD}  Dashboard (manage everything from any PC or phone):${C_RESET}
 EOF
