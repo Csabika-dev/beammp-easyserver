@@ -9,7 +9,7 @@
 
 **▶ [Watch the setup video on YouTube](https://youtu.be/DWD9HcW1OIc)** - from download to a running server in about 2 minutes.
 
-**Host your own BeamNG.drive multiplayer (BeamMP) server in one click, on Windows or Linux - and run it from a web dashboard on your PC or phone.**
+**Host your own BeamNG.drive multiplayer (BeamMP) server in one click, on Windows, Linux or a Mac - and run it from a web dashboard on your PC or phone.**
 
 No config files and no command line needed. The installer downloads the newest official BeamMP server, asks a few simple questions (name, map, player count), sets everything up and starts it. After that you do everything in the dashboard: mods, maps, players, moderation, Discord, backups, health checks and more.
 
@@ -23,6 +23,7 @@ No config files and no command line needed. The installer downloads the newest o
 2. **Install:**
    - **Windows:** download `BeamMP-EasyServer-Windows.zip` from the [latest release](https://github.com/Csabika-dev/beammp-easyserver/releases/latest), extract it, double-click `Install-BeamMP-Server.bat`.
    - **Linux:** `curl -fsSL https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/stable/linux/install.sh | sudo bash`
+   - **Mac (experimental, Rolling release only - not in Stable):** `curl -fsSL https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/main/mac/install.sh | bash` - see [Mac](#mac-experimental).
 
    **Which version?** Everyone gets **Stable** - the tested version (the release marked *Latest*, and the commands above).
 3. **Open the dashboard** at `http://localhost:30815` on the server computer (Windows: the **BeamMP Dashboard** shortcut), create your password, and you're running. From other devices at home use `http://<server-ip>:30815`.
@@ -32,7 +33,7 @@ Then work through the [guides](#-guides) below - start with [Let friends join ov
 ## Contents
 
 - [The dashboard at a glance](#️-the-dashboard-at-a-glance)
-- [Installing](#installing) - [Windows](#windows) · [Linux](#linux-recommended-for-a-dedicated-server)
+- [Installing](#installing) - [Windows](#windows) · [Linux](#linux-recommended-for-a-dedicated-server) · [Mac](#mac-experimental)
 - [📖 Guides](#-guides) - step by step for every feature
 - [Feature reference](#feature-reference) - cars & chat, moderation, anti-bot, privacy
 - [Mod virus check](#️-mod-virus-check) · [Encrypted keys](#-your-keys-are-encrypted) · [Security](#how-its-built-security)
@@ -166,6 +167,29 @@ Run `bash install.sh --help` for all options.
 ---
 
 ---
+
+### Mac (experimental)
+
+> **Experimental:** Mac support is only in the Rolling release for now - it isn't part of Stable yet and hasn't been tested on many Macs. Expect rough edges.
+
+BeamMP doesn't make a server for macOS, so EasyServer runs the **official Linux server in a small Linux VM** ([Lima](https://lima-vm.io), free and open source) that starts with your Mac. Players and the dashboard connect to your Mac as usual - the Mac passes the game port on to the VM. Good for a Mac mini that's on all day anyway.
+
+Needs macOS 13 or newer (Apple Silicon or Intel) and [Homebrew](https://brew.sh). Open **Terminal** and paste - as your normal user, not with sudo:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/main/mac/install.sh | bash
+```
+
+It installs Lima and miniupnpc with Homebrew, makes the VM (2 CPU cores, 2 GB of memory, up to 20 GB of disk; it can't see your Mac's files), runs the normal Linux installer inside it, and asks:
+
+- **How friends outside your home get in.** *Do it for me*: your Mac asks the router to keep the game port open to the Mac (UPnP), checked every 20 minutes. Or set up port forwarding yourself (TCP + UDP to your Mac's address) - the installer shows what to type.
+- **Keep the Mac awake while plugged in** - a sleeping Mac kicks everyone.
+
+Then open the **BeamMP Dashboard** shortcut on your desktop (`http://localhost:30815`), or `http://<your-mac-ip>:30815` from your phone.
+
+Update: run the same command again. Remove everything (the VM, with its mods and settings): add `-s -- --uninstall`, so `... | bash -s -- --uninstall`.
+
+Good to know: the BeamMP-only guard isn't available on a Mac (every player reaches the VM through the Mac, so they all look like the same address), and "Only open the port when needed" is replaced by "keep it open while the Mac is on". The Mac version is experimental - [tell us](https://github.com/Csabika-dev/beammp-easyserver/discussions) how it goes.
 
 ## 📖 Guides
 
