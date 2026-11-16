@@ -50,6 +50,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+export PATH="$ES_HOME/lima/bin:$PATH"     # Lima installed by us (when Homebrew can't be used)
 [ "$(uname -s)" = "Darwin" ] || die "This installer is for macOS. On Linux use linux/install.sh, on Windows the .bat installer."
 [ "$(id -u)" -ne 0 ] || die "Run this as your normal user, not with sudo - it asks for your password only when it needs it."
 MACOS_MAJOR=$(sw_vers -productVersion | cut -d. -f1)
@@ -100,31 +101,45 @@ EOF
 
 # ---- 1. tools ------------------------------------------------------------------
 step "Checking the tools"
-BREW=$(brew_bin)
-if [ -z "$BREW" ]; then
-  cat <<EOF
-
-  EasyServer uses ${B}Homebrew${N} (the usual way to install tools on a Mac) to get Lima.
-  Install Homebrew first - paste this into Terminal and follow what it says:
-
-    /bin/bash -c "\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-
-  Then run the EasyServer command again.
-EOF
-  exit 1
+lima_major() { limactl --version 2>/dev/null | sed -E 's/.* v?([0-9]+)\..*/\1/' | head -1; }
+install_lima_direct() {  # Lima's official Mac build from GitHub into ~/.beammp-easyserver/lima - no admin rights needed
+  local tag ver arch file tmp
+  tag=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/lima-vm/lima/releases/latest | sed 's#.*/tag/##')
+  ver="${tag#v}"; [ -n "$ver" ] || die "Couldn't find the newest Lima version (no internet?)."
+  case "$(uname -m)" in arm64) arch=arm64;; *) arch=x86_64;; esac
+  file="lima-$ver-Darwin-$arch.tar.gz"; tmp=$(mktemp -d)
+  echo "  Downloading Lima $ver from github.com/lima-vm/lima..."
+  curl -fsSL -o "$tmp/$file" "https://github.com/lima-vm/lima/releases/download/$tag/$file" \
+    && curl -fsSL -o "$tmp/SHA256SUMS" "https://github.com/lima-vm/lima/releases/download/$tag/SHA256SUMS" \
+    || die "Couldn't download Lima."
+  ( cd "$tmp" && awk -v f="$file" '$2==f || $2=="*"f {print $1"  "f}' SHA256SUMS | grep . | shasum -a 256 -c - >/dev/null 2>&1 ) \
+    || { rm -rf "$tmp"; die "The Lima download didn't match its checksum - not installing it. Try again later."; }
+  rm -rf "$ES_HOME/lima"; mkdir -p "$ES_HOME/lima"
+  tar -xzf "$tmp/$file" -C "$ES_HOME/lima" || die "Couldn't unpack Lima."
+  rm -rf "$tmp"
+}
+mkdir -p "$ES_HOME"
+BREW=$(brew_bin); BREW_OK=0
+if [ -n "$BREW" ]; then
+  eval "$("$BREW" shellenv)"
+  [ -w "$("$BREW" --prefix)" ] && BREW_OK=1    # on some Macs Homebrew belongs to another user account
 fi
-eval "$("$BREW" shellenv)"
-need=""; command -v limactl >/dev/null || need="$need lima"; command -v upnpc >/dev/null || need="$need miniupnpc"
-if [ -n "$need" ]; then
-  echo "  Installing$need with Homebrew (can take a few minutes)..."
-  "$BREW" install $need >/dev/null || die "Homebrew couldn't install$need. Run: brew install$need"
+if [ "$(lima_major)" -lt 2 ] 2>/dev/null || ! command -v limactl >/dev/null; then
+  if [ "$BREW_OK" = 1 ]; then
+    echo "  Installing Lima with Homebrew (can take a few minutes)..."
+    { "$BREW" install lima >/dev/null 2>&1 || "$BREW" upgrade lima >/dev/null 2>&1; } || install_lima_direct
+  else
+    install_lima_direct
+  fi
 fi
-LIMA_MAJOR=$(limactl --version 2>/dev/null | sed -E 's/.* ([0-9]+)\..*/\1/' | head -1)
-if [ "${LIMA_MAJOR:-0}" -lt 2 ]; then
-  echo "  Updating Lima (2.0 or newer is needed for the game's UDP traffic)..."
-  "$BREW" upgrade lima >/dev/null || die "Couldn't update Lima. Run: brew upgrade lima"
+[ "$(lima_major)" -ge 2 ] 2>/dev/null || die "Lima 2.0 or newer is needed (the game's UDP traffic needs it). Found: $(limactl --version 2>/dev/null || echo none)"
+UPNP_OK=0
+if command -v upnpc >/dev/null; then UPNP_OK=1
+elif [ "$BREW_OK" = 1 ] && "$BREW" install miniupnpc >/dev/null 2>&1; then UPNP_OK=1; fi
+if [ "$UPNP_OK" = 1 ]; then ok "Lima $(limactl --version | awk '{print $NF}') and miniupnpc are ready"
+else ok "Lima $(limactl --version | awk '{print $NF}') is ready"
+     warn "Automatic port opening needs miniupnpc from Homebrew, which can't be installed for your user on this Mac."
 fi
-ok "Lima $(limactl --version | awk '{print $NF}') and miniupnpc are ready"
 
 IP=$(mac_ip)
 [ -n "$IP" ] || warn "Couldn't find this Mac's network address - is it connected to your router?"
@@ -148,7 +163,9 @@ if [ "$MODE" = "install" ]; then
     2) I'll do it myself - at the end you get exactly what to type into your router.
     3) Not now - only people on your Wi-Fi can join. Nothing changes on your router.
 EOF
+  [ "$UPNP_OK" = 1 ] || { echo "    (1 isn't available on this Mac - it needs Homebrew. Pick 2 or 3.)"; [ "$cur" = 1 ] && cur=2; }
   case "$(ask "Choose 1, 2 or 3" "$cur")" in 2) PORTS=manual;; 3) PORTS=later;; *) PORTS=auto;; esac
+  if [ "$PORTS" = auto ] && [ "$UPNP_OK" != 1 ]; then PORTS=manual; warn "Automatic opening isn't available here - you'll get the steps to do it by hand."; fi
 fi
 
 # ---- 3. the Linux VM -------------------------------------------------------------
@@ -200,6 +217,7 @@ cat >"$ES_HOME/agent.sh" <<'AGENT'
 # Runs at login and every 20 minutes: keeps the VM running, tells the dashboard this Mac's
 # address, and (if chosen) asks the router to keep the game port open to this Mac.
 for b in /opt/homebrew/bin/brew /usr/local/bin/brew; do [ -x "$b" ] && eval "$("$b" shellenv)" && break; done
+export PATH="$HOME/.beammp-easyserver/lima/bin:$PATH"
 . "$HOME/.beammp-easyserver/config"
 st=$(limactl list --format '{{.Status}}' "$VM" 2>/dev/null || true)
 [ "$st" = "Running" ] || limactl start "$VM" --tty=false </dev/null >/dev/null 2>&1 || exit 0
@@ -207,7 +225,7 @@ ifc=$(route -n get default 2>/dev/null | awk '/interface:/ {print $2; exit}')
 IP=""; [ -n "$ifc" ] && IP=$(ipconfig getifaddr "$ifc" 2>/dev/null)
 [ -n "$IP" ] || IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null)
 upnp="off"; err=""
-if [ "$PORTS_CHOICE" = "auto" ] && [ -n "$IP" ]; then
+if [ "$PORTS_CHOICE" = "auto" ] && [ -n "$IP" ] && command -v upnpc >/dev/null; then
   out=$( { upnpc -e "BeamMP EasyServer" -a "$IP" "$PORT" "$PORT" TCP; upnpc -e "BeamMP EasyServer" -a "$IP" "$PORT" "$PORT" UDP; } 2>&1 )
   if [ "$(printf '%s\n' "$out" | grep -c 'is redirected to')" -ge 2 ]; then upnp="ok"
   else upnp="failed"; err=$(printf '%s\n' "$out" | grep -iE 'no igd|fail|error|conflict' | head -1 | tr -d '"\\' | cut -c1-160)
