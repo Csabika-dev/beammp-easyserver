@@ -39,7 +39,7 @@ import zipfile
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-EASY_VERSION = "1.14.0"
+EASY_VERSION = "1.15.0"
 # Paid extras (supporter licence, Experimental for supporters only). Off = EasyServer is fully free:
 # no supporter box, and everyone can pick the Rolling release (newest code). Turn on again later.
 PAID_FEATURES = False
@@ -76,6 +76,7 @@ SERVERS_DIR = os.path.join(SERVER_DIR, "servers")   # extra servers live in serv
 UPLOAD_TMP = os.path.join(DATA_DIR, "uploading")
 TLS_DIR = os.path.join(DATA_DIR, "tls")
 SETTINGS_FILE = os.path.join(DATA_DIR, "dashboard.json")
+HOST_FILE = os.path.join(DATA_DIR, "host.json")   # written by the Mac installer when this Linux runs in a small VM on a Mac
 NOTIF_FILE = os.path.join(DATA_DIR, "notifications.json")
 STATE_FILE = os.path.join(DATA_DIR, "state.json")
 os.environ.setdefault("MODSCAN_CACHE", os.path.join(DATA_DIR, "scancache.json"))
@@ -2188,7 +2189,39 @@ def analytics(max_players):
 
 
 # ----------------------------------------------------------------------------- network checks
+_HOST = {"t": 0.0, "v": {}}
+
+
+def host_info():
+    """What the Mac installer tells us when this Linux runs in a small VM on a Mac (host.json, refreshed by the
+    Mac's login agent): {"platform": "mac", "lan_ip": "<the Mac's address>", "ports": "auto|manual|later",
+    "upnp": "ok|failed|off", "upnp_at": <time>, "upnp_error": "..."}. Empty everywhere else."""
+    if time.time() - _HOST["t"] > 30:
+        try:
+            with open(HOST_FILE, encoding="utf-8") as f:
+                v = json.load(f)
+            _HOST["v"] = v if isinstance(v, dict) else {}
+        except (OSError, ValueError):
+            _HOST["v"] = {}
+        _HOST["t"] = time.time()
+    return _HOST["v"]
+
+
+def on_mac():
+    return host_info().get("platform") == "mac"
+
+
+def mac_lan_ip():
+    ip = str(host_info().get("lan_ip") or "")
+    try:
+        return ip if ipaddress.ip_address(ip).version == 4 else None
+    except ValueError:
+        return None
+
+
 def lan_ip():
+    if on_mac() and mac_lan_ip():
+        return mac_lan_ip()     # players reach the Mac, which forwards to this VM
     ips = [i for i in tlsgen.local_ips() if i != "127.0.0.1"]
     return ips[0] if ips else "127.0.0.1"
 
@@ -6084,7 +6117,7 @@ class App:
         saved = 0
         while True:
             time.sleep(1)
-            if not self.settings.get("guard_on") or relay_on():
+            if not self.settings.get("guard_on") or relay_on() or on_mac():
                 if self.guard_applied != ((), ()):
                     self.guard_apply()
                 time.sleep(4)
@@ -6113,7 +6146,7 @@ class App:
 
     def guard_apply(self):
         """Hand the block list to the firewall (Linux root helper / Windows firewall task)."""
-        on = bool(self.settings.get("guard_on")) and not relay_on()
+        on = bool(self.settings.get("guard_on")) and not relay_on() and not on_mac()
         with self.guard_lock:
             ports = tuple(self.guard_ports()) if on else ()
             ips = tuple(self.guard.block_list()) if on else ()
@@ -8339,6 +8372,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def get_upnp(self, q):
         app = APP
+        if on_mac():
+            h = host_info()
+            return self.send(200, {"mac": True, "on": h.get("ports") == "auto", "relay": relay_on(), "state": {"ports": [], "error": h.get("upnp_error")},
+                                   "mac_upnp": h.get("upnp") or "off", "mac_upnp_at": int(h.get("upnp_at") or 0), "mac_ip": mac_lan_ip(),
+                                   "mode": "always", "open_until": 0, "is_open": h.get("upnp") == "ok", "players": app.upnp_players(),
+                                   "idle": UPNP_IDLE, "ports": [{"port": p, "proto": pr} for p, pr in app.upnp_ports()]})
         st = app.upnp_state
         if q.get("check") == "1" or st is None:
             st = app.upnp_apply(fresh=True) if app.settings.get("upnp_on") and not relay_on() else self._upnp_probe()
@@ -8388,6 +8427,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, {"ok": bool(ok), "on": True, "note": note if ok else (st.get("error") or "The router refused: " +
                              "; ".join("%s %s: %s" % (r["port"], r["proto"], r["error"]) for r in st["ports"] if not r["ok"])), "state": st})
         on = bool(b.get("on"))
+        if on and on_mac():
+            return self.fail(400, "On a Mac the Mac itself opens the port (always, while it's on). To change that, run the Mac installer again.")
         if on and relay_on():
             return self.fail(400, "\"Hide my IP\" is on - players join through the relay, so nothing needs to be opened on your router.")
         if on:
@@ -8451,7 +8492,8 @@ class Handler(BaseHTTPRequestHandler):
                        for ip, b in sorted(g.blocked.items(), key=lambda x: -x[1]["at"])][:200]
             out = {"on": bool(app.settings.get("guard_on")), "relay": relay_on(), "blocked": blocked, "count": len(g.blocked),
                    "total": g.total, "players_known": len(g.good), "error": app.guard_err,
-                   "strikes": guard.STRIKES, "window": guard.WINDOW, "stay": guard.STAY, "platform": "windows" if IS_WIN else "linux"}
+                   "strikes": guard.STRIKES, "window": guard.WINDOW, "stay": guard.STAY,
+                   "platform": "windows" if IS_WIN else "mac" if on_mac() else "linux", "mac": on_mac()}
         out.update(app.guard_status())
         self.send(200, out)
 
@@ -9803,6 +9845,8 @@ class Handler(BaseHTTPRequestHandler):
                 os.environ["VT_API_KEY"] = k
             else:
                 os.environ.pop("VT_API_KEY", None)
+        if upd.get("guard_on") and on_mac():
+            return self.fail(400, "The BeamMP-only guard doesn't work on a Mac yet: players reach the server through the Mac, so they all look like one address.")
         if upd:
             app.settings.update(upd)
         if "flood_protect" in upd:
