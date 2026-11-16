@@ -1103,6 +1103,16 @@ VIEWS.network = async m => {
   const upnpCard = async check => {
     const b = $("#upnpbox"); if (!b) return;
     let d; try { d = await api("/api/upnp" + (check ? "?check=1" : "")); } catch (e) { b.innerHTML = `<p class="small muted">${esc(e.message)}</p>`; return; }
+    if (d.mac) {
+      const ports = [...new Set(d.ports.map(x => x.port))].join(", "), ip = d.mac_ip ? ipb(esc(d.mac_ip)) : "your Mac";
+      const badge = d.relay ? `<span class="badge">Not needed</span>` : !d.on ? `<span class="badge">Off</span>` : d.mac_upnp === "ok" ? `<span class="badge good">Port ${esc(ports)} open</span>` : `<span class="badge warn">Problem</span>`;
+      b.innerHTML = `<div class="row"><b>Automatic port forwarding</b><span class="spacer"></span>${badge}</div>
+        <p class="small muted" style="margin:8px 0 0">${d.relay ? "\"Hide my IP\" is on: players join through the relay, so nothing has to be opened on your router." :
+          d.on ? (d.mac_upnp === "ok" ? `Your Mac asks the router to keep port ${esc(ports)} (TCP + UDP) open to ${ip} while the Mac is on, and checks it every 20 minutes${d.mac_upnp_at ? " (last time " + fmtTime(d.mac_upnp_at) + ")" : ""}.`
+                 : `Your Mac asked the router to open port ${esc(ports)} but it said no${d.state && d.state.error ? " (" + esc(d.state.error) + ")" : ""}. Forward port ${esc(ports)} TCP + UDP to ${ip} by hand in your router's settings page, or turn on "Hide my IP" (Settings).`)
+               : `Forward port ${esc(ports)} TCP + UDP to ${ip} in your router's settings page (search "<i>your router model</i> port forwarding"). Or run the Mac installer again and pick <b>Do it for me</b> to have the Mac open it.`}</p>`;
+      return;
+    }
     const st = d.state || {}, rows = st.ports || [], ports = [...new Set(d.ports.map(x => x.port))].join(", ");
     const needed = d.mode === "needed", sleeping = d.on && needed && !d.is_open && !st.error;
     const allOk = d.on && rows.length && rows.every(r => r.ok) && !st.error;
@@ -2024,6 +2034,7 @@ VIEWS.settings = async m => {
     const b = $("#guardbox"); if (!b) return;
     let g; try { g = await api("/api/guard"); } catch (e) { b.textContent = e.message; return; }
     const warn = g.on && !g.relay && !g.enforced ? `<div class="banner warn" style="margin:8px 0 0"><span class="small">${g.error ? esc(g.error) : g.platform === "windows" ? "The firewall task isn't running yet, so nothing is actually blocked. Run Update-BeamMP-Server.bat once (it sets it up)." : "The server helper didn't answer."}</span></div>` : "";
+    if (g.mac) { b.innerHTML = `<p class="muted">Not available on a Mac yet: players reach the server through the Mac, so they all look like the same address.</p>`; if ($("#guard_on")) $("#guard_on").disabled = true; return; }
     b.innerHTML = (g.relay ? `<p class="muted">Not needed while "Hide my IP" is on.</p>` : !g.on ? "" :
       `<p class="muted" style="margin:6px 0 0">Watching. ${g.count ? `<b>${g.count}</b> blocked right now` : "Nobody blocked right now"} · ${g.total} blocked so far · ${g.players_known} addresses known as players.</p>${warn}
        ${g.blocked.length ? `<div style="margin-top:6px">${g.blocked.map(x => `<div class="check"><span class="mark bad">✕</span><div><b>${ipb(esc(x.ip))}</b> <span class="muted">until ${fmtTime(x.until)} - ${esc(x.why)}</span> <button class="btn sm" data-unblock="${esc(x.ip)}">Unblock</button></div></div>`).join("")}</div>
