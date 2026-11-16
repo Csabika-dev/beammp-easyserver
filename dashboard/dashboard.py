@@ -8493,7 +8493,7 @@ class Handler(BaseHTTPRequestHandler):
             out = {"on": bool(app.settings.get("guard_on")), "relay": relay_on(), "blocked": blocked, "count": len(g.blocked),
                    "total": g.total, "players_known": len(g.good), "error": app.guard_err,
                    "strikes": guard.STRIKES, "window": guard.WINDOW, "stay": guard.STAY,
-                   "platform": "windows" if IS_WIN else "mac" if on_mac() else "linux", "mac": on_mac()}
+                   "platform": "mac" if on_mac() else "windows" if IS_WIN else "linux", "mac": on_mac()}
         out.update(app.guard_status())
         self.send(200, out)
 
