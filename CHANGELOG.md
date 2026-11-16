@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.15.0 - Mac support (experimental, Rolling release only - not in Stable yet)
+
+- **Host on a Mac** (macOS 13+, Apple Silicon or Intel): `curl -fsSL https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/main/mac/install.sh | bash`. BeamMP has no macOS server, so EasyServer runs the official Linux server in a small Lima VM that starts with your Mac and can't see your files. The Mac passes the game ports (TCP + UDP) and the dashboard on to the VM, can keep the game port open on your router with UPnP (checked every 20 minutes), and can keep itself awake while plugged in. The dashboard shows your Mac's address in invites and on the Health page. The BeamMP-only guard isn't available on a Mac. Update by running the command again; `--uninstall` removes it.
+
 ## 1.14.0 - One-click port forwarding, invites, mod browser
 
 - **Only open the port when it's needed** (the new default): the router port opens when you copy an invite, press Open, or a friend types `/join` in your Discord, stays open while anyone plays and closes 30 minutes after the last player leaves. "Always open" is one click away on the Health page.
