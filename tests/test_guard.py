@@ -194,5 +194,64 @@ class UpdateChannel(unittest.TestCase):
         self.assertTrue(url.endswith("/x/y/archive/refs/heads/main.zip"))
 
 
+class MacHost(unittest.TestCase):
+    """EasyServer on a Mac: the Linux server runs in a small VM and the Mac tells the dashboard about itself."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.base = harness.start()
+        cls.owner = harness.owner()
+
+    def setUp(self):
+        info = {"platform": "mac", "lan_ip": "192.168.1.50", "ports": "auto", "upnp": "ok", "upnp_at": 1794700000}
+        p = mock.patch.object(D, "host_info", lambda: info)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_lan_ip_is_the_macs(self):
+        self.assertTrue(D.on_mac())
+        self.assertEqual(D.lan_ip(), "192.168.1.50")
+
+    def test_upnp_card_comes_from_the_mac(self):
+        st, d, _ = self.owner.call("/api/upnp")
+        self.assertEqual(st, 200, d)
+        self.assertTrue(d["mac"])
+        self.assertTrue(d["on"])
+        self.assertEqual(d["mac_upnp"], "ok")
+        self.assertEqual(d["mac_ip"], "192.168.1.50")
+        st, d, _ = self.owner.call("/api/upnp", {"on": True})
+        self.assertEqual(st, 400)                       # the VM can't reach the router: the Mac does it
+        st, d, _ = self.owner.call("/api/upnp", {"open_for": 7200})
+        self.assertEqual(st, 200)                       # Copy invite keeps working
+
+    def test_guard_is_off_on_a_mac(self):
+        st, d, _ = self.owner.call("/api/guard")
+        self.assertTrue(d["mac"])
+        self.assertEqual(d["platform"], "mac")
+        st, d, _ = self.owner.call("/api/settings", {"guard_on": True})
+        self.assertEqual(st, 400)
+        self.assertFalse(D.APP.settings.get("guard_on"))
+
+    def test_bad_address_is_ignored(self):
+        with mock.patch.object(D, "host_info", lambda: {"platform": "mac", "lan_ip": "not-an-ip"}):
+            self.assertNotEqual(D.lan_ip(), "not-an-ip")
+
+
+class HostFile(unittest.TestCase):
+    def test_reads_and_caches(self):
+        import json, tempfile
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "host.json")
+        with open(path, "w") as f:
+            json.dump({"platform": "mac", "lan_ip": "10.0.0.7"}, f)
+        with mock.patch.object(D, "HOST_FILE", path), mock.patch.dict(D._HOST, {"t": 0.0, "v": {}}):
+            self.assertEqual(D.host_info()["lan_ip"], "10.0.0.7")
+            os.remove(path)
+            self.assertEqual(D.host_info()["lan_ip"], "10.0.0.7")     # cached for 30 s
+        with mock.patch.object(D, "HOST_FILE", path), mock.patch.dict(D._HOST, {"t": 0.0, "v": {}}):
+            self.assertEqual(D.host_info(), {})                       # no file: not a Mac
+            self.assertFalse(D.on_mac())
+
+
 if __name__ == "__main__":
     unittest.main()
