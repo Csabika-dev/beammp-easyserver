@@ -15,7 +15,7 @@
 # =============================================================================
 set -euo pipefail
 
-EASY_VERSION="1.14.0"
+EASY_VERSION="1.15.0"
 INSTALL_DIR="/opt/beammp-server"
 SERVICE_USER="beammp"
 DASH_USER="beammp-dash"
@@ -916,8 +916,31 @@ EOF
     if ask_yn "Turn on the web dashboard?" Y; then page="yes"; else page="no"; fi
   fi
 
+  # Inside the small Linux VM that the Mac installer makes: the Mac asks about ports and opens them itself
+  if [[ "${EASY_HOST:-}" == mac ]]; then
+    PORTS_CHOICE="${EASY_MAC_PORTS:-manual}"
+    mkdir -p "$DATA_DIR"
+    python3 - "$DATA_DIR" "$PORTS_CHOICE" "${EASY_HOST_LAN_IP:-}" <<'PY'
+import json, os, sys, time
+d, ports, ip = sys.argv[1], sys.argv[2], sys.argv[3]
+def merge(name, upd):
+    path = os.path.join(d, name)
+    try:
+        with open(path, encoding="utf-8") as f:
+            cur = json.load(f)
+    except (OSError, ValueError):
+        cur = {}
+    cur.update(upd)
+    with open(path + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(cur, f, indent=2)
+    os.replace(path + ".tmp", path)
+merge("dashboard.json", {"upnp_on": False, "guard_on": False})   # the Mac does the port; the guard can't see real IPs
+merge("host.json", {"platform": "mac", "lan_ip": ip, "ports": ports, "t": int(time.time())})
+PY
+  fi
+
   # How friends outside the home get in, in plain words
-  if [[ "$page" != "no" && $OPT_UNATTENDED -eq 0 ]]; then
+  if [[ "$page" != "no" && $OPT_UNATTENDED -eq 0 && "${EASY_HOST:-}" != mac ]]; then
     local cur="1" dj="$DATA_DIR/dashboard.json"
     if [[ -f "$dj" ]] && ! grep -q '"upnp_on": true' "$dj"; then cur="2"; fi
     echo
@@ -1139,6 +1162,7 @@ else
 fi
 
 LAN_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+[[ "${EASY_HOST:-}" == mac && -n "${EASY_HOST_LAN_IP:-}" ]] && LAN_IP="$EASY_HOST_LAN_IP"   # players reach the Mac
 PUB_IP=$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || echo "unknown")
 
 cat <<EOF
@@ -1150,7 +1174,9 @@ ${C_GREEN}${C_BOLD}  All done!${C_RESET}
 
 EOF
 GW_IP=$(ip route show default 2>/dev/null | awk '/default/ {print $3; exit}')
-if [[ "${PORTS_CHOICE:-}" == auto && "$MODPAGE_ON" == 1 ]]; then
+if [[ "${EASY_HOST:-}" == mac ]]; then
+  echo "    -> Port forwarding: the Mac installer explains this in a moment."
+elif [[ "${PORTS_CHOICE:-}" == auto && "$MODPAGE_ON" == 1 ]]; then
   echo "    -> The dashboard opens port ${PORT} on your router when you invite friends"
   echo "       (Copy invite, or /join in Discord) and closes it 30 minutes after the last player leaves."
   echo "       Check that your router said yes: dashboard -> Health -> Automatic port forwarding."
