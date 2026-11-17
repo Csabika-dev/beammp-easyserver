@@ -51,11 +51,18 @@ New-Item -ItemType Directory -Force -Path $Dir | Out-Null
 $py = Join-Path $Dir 'python\python.exe'
 if (-not (Test-Path $py)) {
     Write-Host '  Downloading portable Python (about 10 MB)...'
-    $zip = Join-Path $env:TEMP 'beammp-wake-python.zip'
+    $zip = Join-Path $env:TEMP ('beammp-wake-python-' + [guid]::NewGuid().ToString('N') + '.zip')
     try { Invoke-WebRequest -Uri $PythonUrl -OutFile $zip -UseBasicParsing } catch { Fail "Download failed: $($_.Exception.Message)" }
     Expand-Archive -Path $zip -DestinationPath (Join-Path $Dir 'python') -Force
     Remove-Item $zip -ErrorAction SilentlyContinue
     if (-not (Test-Path $py)) { Fail 'Portable Python could not be unpacked' }
+    # the helper runs as Windows itself: only run a Python that carries the Python Software Foundation's signature
+    $sig = Get-AuthenticodeSignature -LiteralPath $py
+    $subject = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { '' }
+    if ($sig.Status -ne 'Valid' -or $subject -notmatch [regex]::Escape('O=Python Software Foundation')) {
+        Remove-Item -LiteralPath (Join-Path $Dir 'python') -Recurse -Force -ErrorAction SilentlyContinue
+        Fail "The downloaded Python is not correctly signed (status: $($sig.Status)). It was deleted - check your internet connection and try again."
+    }
 }
 Ok 'Portable Python ready'
 
