@@ -3185,6 +3185,13 @@ def ip_is_loopback(ip):
         return False
 
 
+def at_server(ip):
+    """True when the request really comes from the server computer itself. On a Mac the server runs in a
+    small VM and EVERY connection (other devices included) arrives through the Mac's port forwarder as
+    127.0.0.1 - so there, a local address proves nothing and gets no special trust."""
+    return ip_is_loopback(ip) and not on_mac()
+
+
 # ============================================================================= the app
 # ----------------------------------------------------------------------------- Discord bot (slash commands)
 # /status for everyone; /start, /stop and /restart for people with "Manage
@@ -7103,7 +7110,7 @@ class App:
         with LOCK:
             if self.locked.get(key, 0) > t:
                 return True
-            if ip_is_loopback(ip):
+            if at_server(ip):
                 return False            # someone sitting at the server itself
             if not ip_is_lan(ip):
                 self.global_fails = [x for x in self.global_fails if x > t - 600]
@@ -7134,7 +7141,7 @@ class App:
             self.fails[key] = f
             if not ip_is_lan(ip):
                 self.global_fails.append(t)
-            elif not ip_is_loopback(ip):
+            elif not at_server(ip):
                 self.lan_fails = getattr(self, "lan_fails", []) + [t]
             if len(f) >= 5:
                 self.locked[key] = t + 900
@@ -7361,7 +7368,7 @@ class Handler(BaseHTTPRequestHandler):
                             "They were blocked." % (re.sub(r"[^\w.:\-\[\]]", "?", host)[:80] or "none", self.ip))
             self.send(421, "Open the dashboard by its address (for example http://192.168.1.20:30815).", "text/plain")
             return False
-        if not app.secrets.has("MODS_PASSWORD") and not ip_is_loopback(self.ip):
+        if not app.secrets.has("MODS_PASSWORD") and not at_server(self.ip):
             path, _ = self.route()
             if path.startswith("/api/") and path not in ("/api/session",):
                 self.send(403, {"ok": False, "error": "Set a password first - open the dashboard on the server computer itself."})
@@ -7523,7 +7530,7 @@ class Handler(BaseHTTPRequestHandler):
             "user": sess.get("user", "owner") if sess else None, "role": sess.get("role", "owner") if sess else None,
             "supporter": bool(sess) and supporter_active(),
             "needs_setup": not app.secrets.has("MODS_PASSWORD"),
-            "setup_allowed": ip_is_loopback(self.ip) and host_name(self.headers.get("Host")) in ("localhost", "127.0.0.1", "::1"),
+            "setup_allowed": at_server(self.ip) and host_name(self.headers.get("Host")) in ("localhost", "127.0.0.1", "::1"),
             "totp": app.secrets.has("TOTP_SECRET"),
             "version": EASY_VERSION, "platform": "windows" if IS_WIN else "linux",
             "https": self.https,
@@ -7531,8 +7538,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def api_setup(self, q):
         app = APP
-        if app.secrets.has("MODS_PASSWORD") or not ip_is_loopback(self.ip):
-            return self.fail(403, "Setup is only possible once, on the server computer itself")
+        if app.secrets.has("MODS_PASSWORD") or not at_server(self.ip):
+            return self.fail(403, "Setup is only possible once, on the server computer itself"
+                             + (" (on a Mac: run the installer again, it sets the password)" if on_mac() else ""))
         host = host_name(self.headers.get("Host"))
         origin = self.headers.get("Origin")
         if host not in ("localhost", "127.0.0.1", "::1") or (
@@ -9914,6 +9922,10 @@ class Handler(BaseHTTPRequestHandler):
         want_https = bool(b.get("https", app.settings.get("https")))
         want_remote = bool(b.get("remote_enabled", app.settings.get("remote_enabled")))
         if want_remote:
+            if on_mac():
+                # every visitor looks like 127.0.0.1 there, so "home network only" rules can't be enforced
+                return self.fail(400, "Internet access to the dashboard isn't available on a Mac yet. "
+                                      "Don't forward the dashboard port on your router either.")
             want_https = True
             if not app.secrets.has("TOTP_SECRET"):
                 return self.fail(400, "Set up two-step login first")
