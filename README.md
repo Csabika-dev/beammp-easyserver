@@ -17,6 +17,20 @@ No config files and no command line needed. The installer downloads the newest o
 
 > Not affiliated with or endorsed by the BeamMP team. This only automates the setup of the official [BeamMP server](https://github.com/BeamMP/BeamMP-Server).
 
+## What you get (30-second version)
+
+- **⚡ Set up in about 5 minutes** - one installer for Windows or Linux (Mac is experimental). No config files, no command line.
+- **📱 Dashboard on your PC or phone** - start / stop / restart, switch the map in one click, see who's online.
+- **🧩 Mods made easy** - drag & drop, every mod virus-checked, browse the BeamNG mod repository, one-click updates.
+- **🔌 Friends can join** - a health check tells you what's wrong (AuthKey, port, firewall) and can open the port on your router in one click.
+- **🛡️ Moderation** - kick, mute, ban, friends-only or invite-only, anti-bot and chat filter presets, in-game admin commands.
+- **🎮 Extras for players** - `/tp`, `/repair`, map votes, events, map rotation, playtime stats and records.
+- **🔔 Notifications & Discord** - crashes, joins and updates on Discord, email, phone or Telegram; a Discord bot with `/status`, `/start`, `/join`.
+- **💾 Safe by default** - automatic backups, encrypted keys, two-step login, users with roles (admin / moderator / viewer).
+- **💸 Free** - open source, no ads, no account.
+
+Details for every item are further down - or watch the [setup video](https://youtu.be/DWD9HcW1OIc).
+
 ## Quick start
 
 1. **Get a free AuthKey** at [keymaster.beammp.com](https://keymaster.beammp.com) (log in with Discord → **Keys** → **+** → copy it).
@@ -32,6 +46,7 @@ Then work through the [guides](#-guides) below - start with [Let friends join ov
 
 ## Contents
 
+- [What you get (30-second version)](#what-you-get-30-second-version)
 - [The dashboard at a glance](#️-the-dashboard-at-a-glance)
 - [Installing](#installing) - [Windows](#windows) · [Linux](#linux-recommended-for-a-dedicated-server) · [Mac](#mac-experimental)
 - [📖 Guides](#-guides) - step by step for every feature
@@ -174,7 +189,7 @@ Run `bash install.sh --help` for all options.
 
 BeamMP doesn't make a server for macOS, so EasyServer runs the **official Linux server in a small Linux VM** ([Lima](https://lima-vm.io), free and open source) that starts with your Mac. Players and the dashboard connect to your Mac as usual - the Mac passes the game port on to the VM. Good for a Mac mini that's on all day anyway.
 
-Needs macOS 13 or newer (Apple Silicon or Intel) and [Homebrew](https://brew.sh). Open **Terminal** and paste - as your normal user, not with sudo:
+Needs macOS 13 or newer (Apple Silicon or Intel). [Homebrew](https://brew.sh) is used if you have it; without it the installer downloads Lima itself (checksum-verified) and automatic port opening isn't offered. Open **Terminal** and paste - as your normal user, not with sudo:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/main/mac/install.sh | bash
@@ -188,6 +203,8 @@ It installs Lima and miniupnpc with Homebrew, makes the VM (2 CPU cores, 2 GB of
 Then open the **BeamMP Dashboard** shortcut on your desktop (`http://localhost:30815`), or `http://<your-mac-ip>:30815` from your phone.
 
 Update: run the same command again. Remove everything (the VM, with its mods and settings): add `-s -- --uninstall`, so `... | bash -s -- --uninstall`.
+
+**Security on a Mac:** every connection reaches the VM through the Mac, so players and dashboard visitors all look like the same local address. That means: **never forward the dashboard port (30815) on your router** (the "home network only" rules can't tell the internet from your Wi-Fi there, and "Internet access" is switched off on a Mac), bans by IP address and the per-connection player limit don't work (bans by name do), and wrong-password lockouts apply to everyone at once.
 
 Good to know: the BeamMP-only guard isn't available on a Mac (every player reaches the VM through the Mac, so they all look like the same address), and "Only open the port when needed" is replaced by "keep it open while the Mac is on". The Mac version is experimental - [tell us](https://github.com/Csabika-dev/beammp-easyserver/discussions) how it goes.
 
