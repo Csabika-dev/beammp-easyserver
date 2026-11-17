@@ -194,6 +194,14 @@ class UpdateChannel(unittest.TestCase):
         self.assertTrue(url.endswith("/x/y/archive/refs/heads/main.zip"))
 
 
+class AtServer(unittest.TestCase):
+    def test_loopback_counts_everywhere_else(self):
+        with mock.patch.object(D, "host_info", lambda: {}):
+            self.assertTrue(D.at_server("127.0.0.1"))
+            self.assertTrue(D.at_server("::ffff:127.0.0.1"))
+            self.assertFalse(D.at_server("192.168.1.20"))
+
+
 class MacHost(unittest.TestCase):
     """EasyServer on a Mac: the Linux server runs in a small VM and the Mac tells the dashboard about itself."""
 
@@ -223,6 +231,14 @@ class MacHost(unittest.TestCase):
         self.assertEqual(st, 400)                       # the VM can't reach the router: the Mac does it
         st, d, _ = self.owner.call("/api/upnp", {"open_for": 7200})
         self.assertEqual(st, 200)                       # Copy invite keeps working
+
+    def test_local_address_is_not_trusted_on_a_mac(self):
+        # every device reaches the VM through the Mac's port forwarder as 127.0.0.1
+        self.assertFalse(D.at_server("127.0.0.1"))
+        self.assertFalse(D.at_server("::1"))
+        st, d, _ = self.owner.call("/api/remote", {"remote_enabled": True})
+        self.assertEqual(st, 400, d)
+        self.assertIn("Mac", d["error"])
 
     def test_guard_is_off_on_a_mac(self):
         st, d, _ = self.owner.call("/api/guard")
