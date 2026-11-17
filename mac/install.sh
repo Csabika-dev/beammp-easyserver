@@ -298,6 +298,9 @@ cat <<EOF
   If macOS asks whether "limactl" may accept incoming network connections, click ${B}Allow${N} -
   that's how players reach the server.
 
+  ${Y}Only forward the game port ($PORT) on your router - never the dashboard port ($DASH_PORT).${N}
+  On a Mac the dashboard can't tell visitors from the internet apart from your home network.
+
   Dashboard:  ${B}http://localhost:$DASH_PORT${N} on this Mac (shortcut on your desktop),
               or ${B}http://${IP:-this-mac}:$DASH_PORT${N} from your phone. The password was shown above.
   Update:     run the same command again.   Remove:  ... | bash -s -- --uninstall
