@@ -3,6 +3,10 @@
 ## 1.15.0 - Mac support (experimental, Rolling release only - not in Stable yet)
 
 - **Host on a Mac** (macOS 13+, Apple Silicon or Intel): `curl -fsSL https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/main/mac/install.sh | bash`. BeamMP has no macOS server, so EasyServer runs the official Linux server in a small Lima VM that starts with your Mac and can't see your files. The Mac passes the game ports (TCP + UDP) and the dashboard on to the VM, can keep the game port open on your router with UPnP (checked every 20 minutes), and can keep itself awake while plugged in. The dashboard shows your Mac's address in invites and on the Health page. The BeamMP-only guard isn't available on a Mac. Update by running the command again; `--uninstall` removes it.
+- **Security (found in a review of every feature):**
+  - Mac: the dashboard no longer gives "you're sitting at the server" trust to local connections on a Mac (there, every device arrives through the Mac's port forwarder as a local address), and "Internet access" to the dashboard can't be switched on. Don't forward the dashboard port on a Mac.
+  - Wake helper (Windows): the downloaded Python must carry the Python Software Foundation's signature before it's used, like in the main installer.
+  - Website: the visit counter script is pinned to a fixed version with an integrity check, so a changed script can't run on the download page.
 
 ## 1.14.0 - One-click port forwarding, invites, mod browser
 
