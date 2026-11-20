@@ -6334,7 +6334,7 @@ TEAM_ANY_SERVER = {"/api/servers", "/api/me", "/api/me/password", "/api/me/2fa/b
                    "/api/me/2fa/disable", "/api/devices", "/api/logout"}
 ROLES_FILE = os.path.join(DATA_DIR, "roles.json")
 INVITES_FILE = os.path.join(DATA_DIR, "team-invites.json")
-INVITE_DAYS = 7
+INVITE_HOURS = 1        # an invite link only works for a short time: less time for it to leak
 _TEAM_LOCK = threading.Lock()
 
 
@@ -10899,12 +10899,12 @@ class Handler(BaseHTTPRequestHandler):
         for r in (sv or {}).values():
             check_role_exists(r)
         try:
-            days = max(1, min(30, int(b.get("days") or INVITE_DAYS)))
+            hours = max(1, min(72, int(b.get("hours") or INVITE_HOURS)))
         except (TypeError, ValueError):
-            days = INVITE_DAYS
+            hours = INVITE_HOURS
         tok = secrets.token_urlsafe(32)
         inv = {"id": secrets.token_hex(4), "hash": invite_hash(tok), "role": role, "servers": sv, "remote": bool(b.get("remote")),
-               "created": now(), "expires": now() + days * 86400, "by": self.sess.get("user", "owner"),
+               "created": now(), "expires": now() + hours * 3600, "by": self.sess.get("user", "owner"),
                "note": clean_msg(b.get("note"))[:60]}
         with _TEAM_LOCK:
             items = load_invites()
@@ -10917,7 +10917,7 @@ class Handler(BaseHTTPRequestHandler):
         net = (dashboard_url().split("?")[0].rstrip("/") + "/#team=" + tok) if st.get("remote_enabled") else ""
         self.send(200, {"ok": True, "link": net if inv["remote"] and net else lan, "lan_link": lan, "internet_link": net,
                         "expires": inv["expires"],
-                        "note": "Send the link to them. It works once, for %d day%s." % (days, "" if days == 1 else "s")})
+                        "note": "Send the link to them now. It works once and stops working in %d hour%s." % (hours, "" if hours == 1 else "s")})
 
     def _invite_or_fail(self, tok):
         if APP.is_locked(self.ip):
