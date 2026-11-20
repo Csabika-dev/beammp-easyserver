@@ -804,6 +804,9 @@ install_mods() {
   # Mods folder: group-writable so your own user can drop files in it
   chgrp "$SERVICE_USER" "$INSTALL_DIR/Resources/Client" "$INSTALL_DIR/Resources/Client-disabled"
   chmod 2775 "$INSTALL_DIR/Resources/Client" "$INSTALL_DIR/Resources/Client-disabled"
+  # Server plugins: the dashboard (owner only) installs, turns off and removes them here
+  chgrp "$SERVICE_USER" "$INSTALL_DIR/Resources/Server"
+  chmod 2775 "$INSTALL_DIR/Resources/Server"
   local du; du=$(desktop_user)
   if [[ -n "$du" ]]; then
     usermod -aG "$SERVICE_USER" "$du" || true
