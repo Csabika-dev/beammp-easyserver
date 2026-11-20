@@ -723,6 +723,7 @@ VIEWS.config = async m => {
       ${SERVER === "main" ? `<label class="toggle"><input type="checkbox" id="rs_auto" ${rs.auto_update ? "checked" : ""}><span><b>Install BeamMP updates automatically</b><small>At the scheduled restart, if a new BeamMP server version is out. All servers use the same BeamMP program, so the others restart too.${rs.update_available ? " <b>An update is available now.</b>" : ""}</small></span></label>` : ""}
       <div class="row" style="margin-top:12px"><button class="btn primary" id="rs_save">Save restarts</button></div>
     </div>
+    <div id="vehrules"></div>
     <div id="cfg111"></div>
     <div id="cfg17"></div>
     <div id="evcard"></div>
@@ -819,6 +820,7 @@ VIEWS.config = async m => {
     try { const r = await api("/api/joinalerts", { json: body }); toast(r.note); if (!test) show("config"); } catch (e) { toast(e.message); }
   };
   loadCfg17();
+  loadVeh();
   loadCfg111();
   loadEvents();
   $("#rs_save").onclick = async () => {
@@ -875,7 +877,7 @@ VIEWS.mods = async m => {
       <label class="toggle" style="margin-top:10px"><input type="checkbox" id="lightmode" ${d.light ? "checked" : ""}><span><b>Light mode: only send the map being played</b><small>Map mods for other maps wait and come back by themselves when you switch to their map (Config, map vote, rotation or events). Mods that aren't maps are always sent. Players join much faster on servers with several map mods</small></span></label>
       <label class="toggle" style="margin-top:10px"><input type="checkbox" id="descsize" ${d.desc_modsize ? "checked" : ""}><span><b>Show the download size in the server description</b><small>Adds "| Mods: ${esc(d.download ? fmtSize(d.download) : "0")}" to the end of the description in the BeamMP server list and keeps it up to date. Takes effect after the server restarts</small></span></label></div>
     <div class="card tight"><table><thead><tr><th>Mod</th><th class="num">Size</th><th></th></tr></thead><tbody>
-      ${d.mods.length ? d.mods.map(x => `<tr><td><b class="${x.enabled ? "" : "muted"}">${esc(x.name)}</b>${x.builtin ? '<span class="badge good">EasyServer tools</span>' : `<span class="badge ${B[x.safety][0]}">${B[x.safety][1]}</span>`}${x.enabled ? "" : x.parked ? '<span class="badge">waiting - light mode</span>' : '<span class="badge">off</span>'}${x.maps.map(mp => `<span class="badge">map: ${esc(mp)}</span>`).join("")}${U[x.name] ? (U[x.name].update ? `<span class="badge warn">update ${esc(U[x.name].have || "?")} → ${esc(U[x.name].latest || "new")}</span>` : `<span class="badge good">up to date${U[x.name].have ? " (" + esc(U[x.name].have) + ")" : ""}</span>`) : ""}
+      ${d.mods.length ? d.mods.map(x => `<tr><td><b class="${x.enabled ? "" : "muted"}">${esc(x.name)}</b>${x.builtin ? '<span class="badge good">EasyServer tools</span>' : `<span class="badge ${B[x.safety][0]}">${B[x.safety][1]}</span>`}${x.enabled ? "" : x.parked ? '<span class="badge">waiting - light mode</span>' : '<span class="badge">off</span>'}${x.maps.map(mp => `<span class="badge">map: ${esc(mp)}</span>`).join("")}${(x.needs || []).length ? `<span class="badge warn" title="This mod adds parts to a vehicle that isn't in the game or in your other mods, so it does nothing on its own. Add the mod that has this vehicle.">needs the mod for: ${esc(x.needs.join(", "))}</span>` : ""}${U[x.name] ? (U[x.name].update ? `<span class="badge warn">update ${esc(U[x.name].have || "?")} → ${esc(U[x.name].latest || "new")}</span>` : `<span class="badge good">up to date${U[x.name].have ? " (" + esc(U[x.name].have) + ")" : ""}</span>`) : ""}
         ${x.reasons.length ? `<div class="small" style="color:var(--warn-ink);margin-top:4px">${x.reasons.map(esc).join("<br>")}</div>` : ""}</td>
         <td class="num muted">${fmtSize(x.size)}</td>
         <td class="num"><div class="row" style="justify-content:flex-end">${U[x.name] && U[x.name].update ? `<button class="btn sm primary" data-upd="${esc(x.name)}">Update</button><a class="btn sm" href="${esc(U[x.name].page)}" target="_blank" rel="noopener noreferrer">Page</a>` : ""}${x.maps.length && (x.enabled || x.parked) ? `<button class="btn sm" data-map="${esc(x.maps[0])}">Use map</button>` : ""}${x.builtin ? `<span class="small muted">Config → In-game tools</span>` : `${x.parked ? "" : `<button class="btn sm" data-a="toggle" data-n="${esc(x.name)}">${x.enabled ? "Turn off" : "Turn on"}</button>`}<button class="btn sm danger" data-a="delete" data-n="${esc(x.name)}">Delete</button>`}</div></td></tr>`).join("")
@@ -883,11 +885,14 @@ VIEWS.mods = async m => {
     </tbody></table></div>
     <div class="card" style="margin-top:16px"><h2>Modpack</h2><p class="small muted">One .zip with every mod that's turned on, plus a list with checksums. Share it with another server owner, move mods to another server, or give it to players with slow internet so they can copy the mods before joining.</p>
       <div class="row" style="flex-wrap:wrap"><a class="btn sm" href="/api/modpack?srv=${encodeURIComponent(SERVER)}" download ${d.mods.some(x => x.enabled) ? "" : 'aria-disabled="true" style="pointer-events:none;opacity:.5"'}>Download modpack</a>
-        ${SESSION.role === "owner" || !SESSION.role ? `<button class="btn sm" id="mpimp">Import a modpack…</button><input type="file" id="mpfile" accept=".zip" hidden>` : ""}<span class="small muted" id="mpres"></span></div></div>
+        ${SESSION.role === "owner" || !SESSION.role ? `<button class="btn sm" id="mpimp">Import a modpack…</button><input type="file" id="mpfile" accept=".zip" hidden>` : ""}<button class="btn sm" id="mpcode">Share code…</button><span class="small muted" id="mpres"></span></div></div>
+    <div id="plugcard"></div>
     <div class="row" style="margin-top:12px;flex-wrap:wrap"><button class="btn sm" id="rescan">Re-check all mods</button><button class="btn sm" id="modupd">Check for updates</button>
       <label class="toggle" style="margin:0 0 0 8px"><input type="checkbox" id="modupd_on" ${mu.on !== false ? "checked" : ""}><span><b>Check every day</b><small>Mods from the BeamNG repository${mu.checked ? " · last check " + esc(ago(mu.checked)) : ""}</small></span></label></div>
     ${d.quarantine.length ? `<h2 style="margin-top:26px">⛔ Blocked mods (quarantine)</h2><div class="card tight"><table><tbody>${d.quarantine.map(q => `<tr><td><b>${esc(q.name)}</b><div class="small" style="color:var(--crit-ink);white-space:pre-wrap">${esc(q.why)}</div></td><td class="num"><button class="btn sm danger" data-a="qdelete" data-n="${esc(q.name)}">Delete</button></td></tr>`).join("")}</tbody></table></div>` : ""}`;
   $("#mb_open").onclick = () => modBrowser();
+  $("#mpcode").onclick = () => modpackCode();
+  loadPlugins();
   const D = $("#drop");
   D.onclick = () => $("#file").click();
   $("#file").onchange = e => upload([...e.target.files]);
@@ -1308,6 +1313,131 @@ async function loadMaint() {
   if ($("#mt_on")) $("#mt_on").onclick = () => confirm("Start maintenance? Only admins and the listed players can join until you end it.") && go("on");
   if ($("#mt_off")) $("#mt_off").onclick = () => go("off");
   if ($("#mt_save")) $("#mt_save").onclick = () => go("on");
+}
+
+/* ---------------- 1.15: server plugins (Mods page) */
+async function loadPlugins() {
+  const el = $("#plugcard"); if (!el) return;
+  let d; try { d = await api("/api/plugins"); } catch (e) { el.innerHTML = ""; return; }
+  const inst = Object.fromEntries(d.installed.filter(p => !p.id.startsWith("file-") && !p.id.startsWith("manual-")).map(p => [p.id, p]));
+  const errs = p => p.errors ? `<div class="small" style="color:var(--crit-ink)">${p.errors} Lua error${p.errors === 1 ? "" : "s"} in the log: <span class="mono">${esc(p.last_error)}</span></div>` : "";
+  el.innerHTML = `<div class="card" style="margin-top:16px"><h2>Server plugins</h2>
+    <p class="small muted">Plugins add game modes and tools that run on the server (Lua scripts in Resources/Server). EasyServer downloads each one from its author's own GitHub page, shows you what goes where, and installs it only when you say so. <b>A plugin can do anything the server can</b> - only install ones you trust. Restart the server after a change.</p>
+    ${d.writable ? "" : `<div class="banner warn">EasyServer can't write to Resources/Server yet. Run the installer once more - it updates the folder permissions.</div>`}
+    ${d.installed.length ? `<h3>Installed</h3><table><tbody>${d.installed.map(p => `<tr><td><b class="${p.on ? "" : "muted"}">${esc(p.name)}</b> ${p.on ? "" : '<span class="badge">off</span>'}${p.catalog ? "" : '<span class="badge warn">not from the list</span>'}
+        <div class="small muted">${p.author ? "By " + esc(p.author) + " · " : ""}${esc(p.version || "")}${p.client.length ? " · players download: " + esc(p.client.join(", ")) : ""}${p.page ? ` · <a href="${esc(p.page)}" target="_blank" rel="noopener noreferrer">page</a>` : ""}</div>${errs(p)}</td>
+        <td class="num">${d.owner ? `<div class="row" style="justify-content:flex-end;gap:6px"><button class="btn sm" data-ptog="${esc(p.id)}" data-on="${p.on ? 0 : 1}">${p.on ? "Turn off" : "Turn on"}</button><button class="btn sm danger" data-prm="${esc(p.id)}" data-n="${esc(p.name)}">Remove</button></div>` : ""}</td></tr>`).join("")}</tbody></table>` : ""}
+    ${d.other.length ? `<h3>Copied in by hand</h3><table><tbody>${d.other.map(p => `<tr><td><b>${esc(p.folder)}</b>${errs(p)}</td><td class="num">${d.owner ? `<button class="btn sm" data-padopt="${esc(p.folder)}">Manage</button>` : ""}</td></tr>`).join("")}</tbody></table>` : ""}
+    ${d.own_errors ? `<div class="banner warn">EasyServer's own plugin has ${d.own_errors} Lua error(s) in the log - another plugin may be interfering. Check Logs.</div>` : ""}
+    <h3>Community plugins</h3>
+    <div class="grid g2" style="gap:10px">${d.catalog.map(p => `<div class="card tight" style="padding:12px 14px"><div class="row"><b>${esc(p.name)}</b><span class="spacer"></span>${inst[p.id] ? `<span class="badge good">installed</span>` : ""}</div>
+      <div class="small">${esc(p.about)}</div>
+      <div class="small muted" style="margin-top:4px">By <b>${esc(p.author)}</b> · <a href="${esc(p.page)}" target="_blank" rel="noopener noreferrer">${esc(p.repo)}</a>${p.license ? " · License: " + esc(p.license) : ""}</div>
+      ${p.notes.length ? `<ul class="small" style="margin:6px 0 0 16px;padding:0">${p.notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}
+      ${d.owner ? `<div class="row" style="margin-top:8px"><button class="btn sm ${inst[p.id] ? "" : "primary"}" data-pget="${esc(p.id)}">${inst[p.id] ? "Update" : "Install…"}</button></div>` : ""}</div>`).join("")}</div>
+    <p class="small muted" style="margin-top:8px">Plugins belong to their authors - thank them on their pages! Missing one? It can be added to the list on GitHub.</p>
+    ${d.owner ? `<div class="row" style="margin-top:6px"><button class="btn sm" id="pl_up">Install a plugin from a .zip file…</button><input type="file" id="pl_file" accept=".zip" hidden></div>` : ""}
+  </div>`;
+  const review = j => new Promise(res => {
+    const pl = j.plan;
+    const bg = modal(`<h2 style="margin-top:0">Install ${esc(j.name)}?</h2>
+      <p class="small muted">${esc(j.version || "")} · ${fmtSize(j.size || 0)} · SHA-256 <span class="mono">${esc((j.sha256 || "").slice(0, 16))}…</span></p>
+      <p class="small"><b>Goes on the server</b> (Resources/Server):</p><ul class="small">${pl.server.map(s => `<li><span class="mono">${esc(s.folder)}</span> - ${s.files} files, ${s.lua} Lua script${s.lua === 1 ? "" : "s"}</li>`).join("") || "<li>nothing</li>"}</ul>
+      <p class="small"><b>Players download</b> (Resources/Client, virus-checked):</p><ul class="small">${pl.client.map(c => `<li class="mono">${esc(c)}</li>`).join("") || "<li>nothing</li>"}</ul>
+      ${pl.skipped ? `<p class="small muted">${pl.skipped} other file(s) (readme, licence …) are left out.</p>` : ""}
+      ${j.entry ? "" : `<label class="toggle"><input type="checkbox" id="pl_trust"><span><b>I trust this plugin's author</b><small>It isn't on the list. A server plugin can read and change files the server can reach.</small></span></label>`}
+      <div class="row" style="margin-top:12px"><button class="btn primary" id="pl_ok">Install</button><button class="btn" data-x>Cancel</button></div>`);
+    bg.querySelector("[data-x]").onclick = () => { bg.remove(); res(false); };
+    $("#pl_ok", bg).onclick = async () => {
+      try { const r = await api("/api/plugins/install", { json: { job: j.job, trust: $("#pl_trust", bg) ? $("#pl_trust", bg).checked : false } }); toast(r.note, 9000); bg.remove(); res(true); }
+      catch (e) { toast(e.message, 8000); }
+    };
+  });
+  el.querySelectorAll("[data-pget]").forEach(b => b.onclick = async () => {
+    b.disabled = true; b.textContent = "Starting…";
+    let r; try { r = await api("/api/plugins/fetch", { json: { id: b.dataset.pget } }); } catch (e) { b.disabled = false; b.textContent = "Install…"; return toast(e.message, 7000); }
+    const tick = async () => {
+      let j; try { j = await api("/api/plugins/job?job=" + r.job); } catch (e) { b.disabled = false; return toast(e.message); }
+      if (!j.finished) { b.textContent = j.total ? Math.round(100 * j.done / j.total) + "%" : j.done ? fmtSize(j.done) : j.state; return setTimeout(tick, 800); }
+      b.disabled = false; b.textContent = "Install…";
+      if (!j.ok) return toast(j.error, 10000);
+      if (await review(j)) loadPlugins();
+    };
+    tick();
+  });
+  if ($("#pl_up")) {
+    $("#pl_up").onclick = () => $("#pl_file").click();
+    $("#pl_file").onchange = async e => {
+      const f = e.target.files[0]; if (!f) return;
+      const r = await fetch("/api/plugins/upload?name=" + encodeURIComponent(f.name), { method: "PUT", headers: { "X-ES-CSRF": CSRF, "X-ES-Server": SERVER }, body: f });
+      let j = {}; try { j = await r.json(); } catch (x) {}
+      e.target.value = "";
+      if (!r.ok) return toast(j.error || "Upload failed", 9000);
+      if (await review(j)) loadPlugins();
+    };
+  }
+  el.querySelectorAll("[data-ptog]").forEach(b => b.onclick = async () => { try { const r = await api("/api/plugins/toggle", { json: { id: b.dataset.ptog, on: b.dataset.on === "1" } }); toast(r.note, 7000); loadPlugins(); } catch (e) { toast(e.message, 7000); } });
+  el.querySelectorAll("[data-prm]").forEach(b => b.onclick = async () => {
+    if (!confirm(`Remove ${b.dataset.n}? Its files are deleted from the server (its saved data too, if it keeps any in its folder).`)) return;
+    try { const r = await api("/api/plugins/remove", { json: { id: b.dataset.prm } }); toast(r.note, 7000); loadPlugins(); } catch (e) { toast(e.message, 7000); }
+  });
+  el.querySelectorAll("[data-padopt]").forEach(b => b.onclick = async () => { try { await api("/api/plugins/adopt", { json: { folder: b.dataset.padopt } }); loadPlugins(); } catch (e) { toast(e.message, 7000); } });
+}
+
+async function modpackCode() {
+  let d; try { d = await api("/api/modpack/code"); } catch (e) { return toast(e.message); }
+  const bg = modal(`<div class="row"><h2 style="margin:0">Mod pack code</h2><span class="spacer"></span><button class="btn sm" data-x>Close</button></div>
+    <p class="small muted">A short code instead of a big file. Another EasyServer owner pastes it and gets the same mods straight from the BeamNG repository (each one virus-checked).</p>
+    ${d.code ? `<textarea id="mpc_t" readonly rows="3" class="mono">${esc(d.code)}</textarea><div class="row" style="margin-top:6px"><button class="btn sm primary" id="mpc_copy">Copy code</button><span class="small muted">${d.count} mod${d.count === 1 ? "" : "s"}</span></div>` : `<p class="small">None of your mods come from the BeamNG repository, so there's nothing to put in a code - use "Download modpack" instead.</p>`}
+    ${d.not_included.length ? `<p class="small muted">Not in the code (not from the repository): ${esc(d.not_included.join(", "))} - send these as a modpack file.</p>` : ""}
+    <label class="f" style="margin-top:12px"><span>Got a code? Paste it here</span><textarea id="mpc_in" rows="3" class="mono" placeholder="ES1-…" spellcheck="false"></textarea></label>
+    <div class="row"><button class="btn sm" id="mpc_go">Install these mods</button></div>`);
+  bg.querySelector("[data-x]").onclick = () => bg.remove();
+  if ($("#mpc_copy", bg)) $("#mpc_copy", bg).onclick = async () => toast(await copyText(d.code) ? "Code copied" : "Select the code and press Ctrl+C");
+  $("#mpc_go", bg).onclick = async () => {
+    try { const r = await api("/api/modpack/code", { json: { code: $("#mpc_in", bg).value } }); toast(r.note, 10000); bg.remove(); } catch (e) { toast(e.message, 8000); }
+  };
+}
+
+/* ---------------- 1.15: vehicle rules (Config) */
+async function loadVeh() {
+  const el = $("#vehrules"); if (!el) return;
+  let v; try { v = await api("/api/vehicles"); } catch (e) { el.innerHTML = ""; return; }
+  const r = v.rules, act = v.activity;
+  const blockedSet = new Set(v.blocked.map(b => b.jbm.toLowerCase()));
+  const sugg = v.mods.filter(m => (m.heavy || m.kind !== "car") && !blockedSet.has(m.jbm.toLowerCase()));
+  const kindBadge = k => k === "unknown" ? "" : `<span class="badge ${/heavy/.test(k) ? "warn" : ""}">${esc(k)}</span>`;
+  el.innerHTML = `<div class="card" style="margin-top:16px" id="vehcard"><div class="row"><h2 style="margin:0">Vehicle rules: block props, heavy cars &amp; spawn spam</h2><span class="spacer"></span>
+      <span class="pill ${r.on ? "good" : ""}"><span class="dot"></span>${r.on ? v.blocked.length + " blocked" : "Off"}</span></div>
+    <p class="small muted">The server refuses a blocked car or prop before anyone sees it, and tells the player why. Works within 10 seconds, no restart, no extra mod for players.</p>
+    <div class="grid g2" style="gap:10px">${v.presets.map(p => `<div class="card tight" style="padding:12px 14px;${p.id === v.preset ? "border-color:var(--accent)" : ""}"><div class="row"><b>${esc(p.label)}</b><span class="spacer"></span><button class="btn sm" data-vpre="${esc(p.id)}" ${p.id === v.preset ? "disabled" : ""}>${p.id === v.preset ? "In use" : "Use"}</button></div><div class="small muted">${esc(p.about)}</div></div>`).join("")}</div>
+    <label class="toggle" style="margin-top:12px"><input type="checkbox" id="vr_on" ${r.on ? "checked" : ""}><span><b>Vehicle rules on</b><small>Turn off to allow everything without losing your choices</small></span></label>
+    <label class="toggle"><input type="checkbox" id="vr_props" ${r.props ? "checked" : ""}><span><b>Block props</b><small>Cones, barrels, balls, ramps, walls … (${v.base.props.length} game props + prop mods)</small></span></label>
+    <label class="toggle"><input type="checkbox" id="vr_hprops" ${r.heavyprops ? "checked" : ""}><span><b>Block big physics props</b><small>Crushers, spinners, giant rollers, shipping containers, bridges - the usual cause of sudden server-wide lag</small></span></label>
+    <label class="toggle"><input type="checkbox" id="vr_trail" ${r.trailers ? "checked" : ""}><span><b>Block trailers</b><small>Caravans, flatbeds, tankers, dry vans …</small></span></label>
+    <label class="toggle"><input type="checkbox" id="vr_hmods" ${r.heavymods ? "checked" : ""}><span><b>Block heavy mod cars (auto-detected)</b><small>EasyServer looks inside your car mods and counts how complex they are (over ${v.heavy_limits.nodes.toLocaleString()} nodes or ${v.heavy_limits.beams.toLocaleString()} beams). Very complex cars make everyone's game slower.</small></span></label>
+    <label class="toggle"><input type="checkbox" id="vr_exempt" ${r.exempt ? "checked" : ""}><span><b>Admins may spawn anything</b><small>Admins are set under Moderation</small></span></label>
+    <div class="grid g2" style="gap:12px">
+      <label class="f" style="margin:0"><span>Seconds between spawns</span><input type="number" id="vr_cd" min="0" max="3600" value="${esc(r.cooldown)}"><small>0 = no wait</small></label>
+      <label class="f" style="margin:0"><span>Max spawns per minute</span><input type="number" id="vr_spam" min="0" max="120" value="${esc(r.spam)}"><small>Stops spawn spam. 0 = no limit</small></label></div>
+    <label class="f"><span>Also block these cars (model names)</span><input type="text" id="vr_cars" value="${esc(r.cars.join(", "))}" placeholder="e.g. bolide, sbr" spellcheck="false"><small>Use the Block buttons below, or type model names separated by commas</small></label>
+    <label class="toggle"><input type="checkbox" id="vr_only" ${r.only ? "checked" : ""}><span><b>Only allow these cars</b><small>One-make racing: everything else is refused</small></span></label>
+    <label class="f"><span>Allowed cars (when "only" is on)</span><input type="text" id="vr_allow" value="${esc(r.allow.join(", "))}" placeholder="e.g. covet" spellcheck="false"></label>
+    <div class="row"><button class="btn primary sm" id="vr_save">Save rules</button></div>
+    ${sugg.length ? `<h3 style="margin-top:16px">Found in your mods</h3><p class="small muted">Auto-detected props, trailers and heavy cars that are still allowed.</p>
+      <table><tbody>${sugg.slice(0, 20).map(m => `<tr><td><b>${esc(m.name || m.jbm)}</b> <span class="small muted mono">${esc(m.jbm)}</span> ${kindBadge((m.heavy && m.kind === "car" ? "heavy " : "") + m.kind)}<div class="small muted">${esc(m.mod)} · ${m.nodes.toLocaleString()} nodes, ${m.beams.toLocaleString()} beams</div></td><td class="num"><button class="btn sm" data-vblk="${esc(m.jbm)}">Block</button></td></tr>`).join("")}</tbody></table>` : ""}
+    <h3 style="margin-top:16px">Spawned on this server (last ${act.days} days)</h3>
+    ${act.seen.length ? `<table><tbody>${act.seen.slice(0, 25).map(s => `<tr><td><span class="mono">${esc(s.jbm)}</span> ${kindBadge(s.kind)}${s.blocked ? '<span class="badge bad">blocked</span>' : ""}<div class="small muted">${s.count}× by ${s.players} player${s.players === 1 ? "" : "s"} · last ${esc(fmtTime(s.last))}</div></td>
+        <td class="num">${r.cars.some(c => c.toLowerCase() === s.jbm.toLowerCase()) ? `<button class="btn sm" data-vunb="${esc(s.jbm)}">Allow</button>` : s.blocked ? "" : `<button class="btn sm" data-vblk="${esc(s.jbm)}">Block</button>`}</td></tr>`).join("")}</tbody></table>`
+      : `<p class="small muted">Nothing yet - the list fills up as players spawn cars.</p>`}
+    ${act.blocked.length || act.spam.length ? `<h3 style="margin-top:16px">Refused lately</h3><ul class="small">${act.blocked.slice(0, 10).map(b => `<li>${esc(fmtTime(b.t))}: <b>${esc(b.name)}</b> tried <span class="mono">${esc(b.jbm)}</span> (${esc(b.why)})</li>`).join("")}${act.spam.slice(0, 5).map(b => `<li>${esc(fmtTime(b.t))}: <b>${esc(b.name)}</b> spawned too many cars in a minute</li>`).join("")}</ul>` : ""}
+  </div>`;
+  const list = id => $(id).value.split(/[\s,]+/).map(x => x.trim()).filter(Boolean);
+  $("#vr_save").onclick = async () => {
+    try { const x = await api("/api/vehicles", { json: { on: $("#vr_on").checked, props: $("#vr_props").checked, heavyprops: $("#vr_hprops").checked, trailers: $("#vr_trail").checked, heavymods: $("#vr_hmods").checked, exempt: $("#vr_exempt").checked, only: $("#vr_only").checked, cooldown: $("#vr_cd").value, spam: $("#vr_spam").value, cars: list("#vr_cars"), allow: list("#vr_allow") } }); toast(x.note, 7000); loadVeh(); } catch (e) { toast(e.message, 6000); }
+  };
+  el.querySelectorAll("[data-vpre]").forEach(b => b.onclick = async () => { try { const x = await api("/api/vehicles/preset", { json: { preset: b.dataset.vpre } }); toast(x.note, 6000); loadVeh(); } catch (e) { toast(e.message, 6000); } });
+  el.querySelectorAll("[data-vblk],[data-vunb]").forEach(b => b.onclick = async () => { const blk = !!b.dataset.vblk; try { const x = await api("/api/vehicles/block", { json: { jbm: b.dataset.vblk || b.dataset.vunb, block: blk } }); toast(x.note, 6000); loadVeh(); } catch (e) { toast(e.message, 6000); } });
 }
 
 /* ---------------- 1.11: security presets + config history (Config) */
