@@ -9,7 +9,7 @@
 - **Server plugins** (Mods → Server plugins): install community plugins - CareerMP, freeRoamMP, BeamJoy Sandbox (Revived), BeamMP Environment Sync, CobaltEssentials - straight from their authors' GitHub pages. You see what goes where (server folders, client mods) before anything is installed; client mods get the virus check; plugins can be updated, turned off and on, or removed, and Lua errors are shown next to each one. Plugins you copied in by hand show up too. Installing from a .zip file is possible after confirming you trust the author. Owner only, because plugins run with the server's rights. Each plugin is credited to its author with a link and its licence; the list lives in `docs/plugins.json`, so anyone can suggest one.
 - **Mod pack code** (Mods → Share code): a short text code with your BeamNG repository mods instead of a big file. Another EasyServer pastes it and gets the same mods, downloaded one by one and virus-checked.
 - **Run the server as a team** (Settings → Users & roles):
-  - **Invite links:** pick a role → send a link → they choose their own name and password. One use, 7 days, revocable.
+  - **Invite links:** pick a role → send a link → they choose their own name and password. One use, expires after 1 hour, revocable.
   - **Custom roles** with tick-boxes: Players, Start & stop, Maps & events, Mods, Server config, Dashboard settings.
   - **Per-server access:** a different role on each server, or no access at all to some.
   - **From the internet:** chosen accounts can log in from anywhere when they have their own two-step login (set up under **My account**, or while accepting an internet invite). Revoking it logs them out at once.
