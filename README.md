@@ -367,7 +367,7 @@ Moderators can do this too.
 <summary><b>Give friends their own login (admins, moderators, viewers)</b></summary>
 
 **Settings → Users & roles** (only you, the owner, see this):
-1. **Invite someone:** pick a role (and, with several servers, which server) → **Make invite link** → send it. They choose their own name and password - you never see it. The link works once and runs out after 7 days; open invites can be revoked. Or add an account yourself under *Or add an account yourself*.
+1. **Invite someone:** pick a role (and, with several servers, which server) → **Make invite link** → send it. They choose their own name and password - you never see it. The link works once and stops working after 1 hour, so a leaked link is useless soon; open invites can be revoked. Or add an account yourself under *Or add an account yourself*.
 2. Roles:
 
 | Role | Can |
