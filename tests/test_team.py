@@ -97,6 +97,7 @@ class Team(unittest.TestCase):
     def test_invite_link(self):
         st, r, _ = self.owner.call("/api/teaminvite", {"role": "moderator", "servers": {"main": "moderator"}})
         self.assertEqual(st, 200, r)
+        self.assertLessEqual(r["expires"] - D.now(), 3600)                 # an hour, not days
         tok = r["link"].split("#team=")[1]
         guest = Client(self.base)
         st, info, _ = guest.call("/api/teaminvite/info?t=" + tok)
@@ -126,6 +127,8 @@ class Team(unittest.TestCase):
         tok = r["link"].split("#team=")[1]
         with mock.patch.object(D, "ip_is_remote", lambda ip: True):
             self.assertEqual(guest.call("/api/teaminvite/info?t=" + tok)[0], 403)
+        with mock.patch.object(D, "now", lambda: D.time.time().__int__() + 3601):          # an hour later
+            self.assertEqual(guest.call("/api/teaminvite/info?t=" + tok)[0], 404)
         self.owner.call("/api/teaminvite", {"action": "revoke", "id": self.owner.call("/api/users")[1]["invites"][0]["id"]})
         for n in ("invited1", "invited3"):
             self.owner.call("/api/users", {"action": "delete", "name": n})
