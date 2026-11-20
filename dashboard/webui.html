@@ -1850,7 +1850,7 @@ async function loadUsers() {
         ${u.totp ? `<button class="btn sm" data-u2fa="${esc(u.name)}">Reset two-step</button>` : ""}
         <button class="btn sm" data-upw="${esc(u.name)}">New password</button><button class="btn sm" data-udis="${esc(u.name)}">${u.disabled ? "Enable" : "Disable"}</button><button class="btn sm danger" data-udel="${esc(u.name)}">Delete</button></div></div>`).join("") : `<p class="small muted">No extra accounts yet.</p>`}
     <h3 style="margin-top:16px">Invite someone</h3>
-    <p class="small muted">Easiest: send a link. They pick their own name and password${d.remote_enabled ? " (and set up two-step login if they may log in from the internet)" : ""} - you never handle their password. The link works once and runs out after 7 days.</p>
+    <p class="small muted">Easiest: send a link. They pick their own name and password${d.remote_enabled ? " (and set up two-step login if they may log in from the internet)" : ""} - you never handle their password. The link works once and stops working after 1 hour, so send it right away.</p>
     <div class="row" style="gap:8px;flex-wrap:wrap"><label class="small">Role ${roleSel('id="iv_role"', "moderator")}</label>
       ${many ? `<label class="small">Servers <select id="iv_srv" style="width:auto"><option value="all">All servers</option>${d.servers.map(s => `<option value="${esc(s.id)}">Only ${esc(s.name)}</option>`).join("")}</select></label>` : ""}
       <label class="small" style="display:flex;gap:4px;align-items:center"><input type="checkbox" id="iv_remote" ${d.remote_enabled ? "" : "disabled"}> May log in from the internet${d.remote_enabled ? "" : " (turn on Internet access first)"}</label>
