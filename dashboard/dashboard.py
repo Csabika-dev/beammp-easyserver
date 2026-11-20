@@ -6224,8 +6224,9 @@ USER_RE = re.compile(r"[A-Za-z0-9_.\-]{2,24}")
 MOD_WRITE = {"/api/players/act", "/api/bans/add", "/api/bans/remove", "/api/allowlist", "/api/server/action",
              "/api/notifications/read", "/api/notifications/clear", "/api/security/ack", "/api/logout",
              "/api/events/stop", "/api/map", "/api/maintenance"}
-VIEWER_WRITE = {"/api/logout", "/api/notifications/read", "/api/logs/explain", "/api/devices"}
-OWNER_WRITE = {"/api/plugins/fetch", "/api/plugins/upload", "/api/plugins/install", "/api/plugins/toggle", "/api/plugins/remove", "/api/plugins/adopt", "/api/users", "/api/password", "/api/2fa/begin", "/api/2fa/confirm", "/api/2fa/disable", "/api/remote",
+VIEWER_WRITE = {"/api/logout", "/api/notifications/read", "/api/logs/explain", "/api/devices",
+                "/api/me/password", "/api/me/2fa/begin", "/api/me/2fa/confirm", "/api/me/2fa/disable"}
+OWNER_WRITE = {"/api/roles", "/api/teaminvite", "/api/plugins/fetch", "/api/plugins/upload", "/api/plugins/install", "/api/plugins/toggle", "/api/plugins/remove", "/api/plugins/adopt", "/api/users", "/api/password", "/api/2fa/begin", "/api/2fa/confirm", "/api/2fa/disable", "/api/remote",
                "/api/authkey", "/api/import", "/api/power/helper", "/api/servers/delete", "/api/statuspage", "/api/supporter"}
 ADMIN_GET = {"/api/export", "/api/backups/download", "/api/phoneapp", "/api/ntfy", "/api/power/offline",
              "/api/health/report", "/api/health/saved", "/api/users", "/api/activity", "/api/modpack", "/api/integrations", "/api/statuspage"}
@@ -6273,7 +6274,7 @@ def load_users():
     d = read_json(USERS_FILE, {})
     if not isinstance(d, dict) or not isinstance(d.get("users"), list):
         return []
-    users = [x for x in d["users"] if isinstance(x, dict) and USER_RE.fullmatch(str(x.get("name", ""))) and x.get("role") in ROLES]
+    users = [x for x in d["users"] if isinstance(x, dict) and USER_RE.fullmatch(str(x.get("name", ""))) and role_ok(x.get("role"))]
     want = _users_sig(d["users"])
     if not want or not hmac.compare_digest(want, str(d.get("sig") or "")):
         if users and APP and not getattr(APP, "users_alerted", False):
@@ -6303,6 +6304,250 @@ def save_users(users):
 def find_user(name):
     name = str(name or "").lower()
     return next((u for u in load_users() if u["name"].lower() == name), None)
+
+
+# ----------------------------------------------------------------------------- team access: custom roles, per-server access, invites, 2FA per account
+# Permission groups a custom role can tick. Built-in roles keep their fixed rules (required_role).
+PERM_GROUPS = [
+    ("players", "Players", "Kick, mute, ban, unban, who can join"),
+    ("server", "Start & stop", "Start, stop, restart, maintenance mode, restart schedule"),
+    ("map", "Maps & events", "Switch the map, map rotation, map votes, events"),
+    ("mods", "Mods", "Add, update, turn off and delete mods"),
+    ("config", "Server config", "Config page: rules, vehicle rules, chat, messages, presets"),
+    ("settings", "Dashboard settings", "Notifications, backups, Discord, updates, sleep - for every server on this computer"),
+]
+PERM_IDS = [g[0] for g in PERM_GROUPS]
+_PG_EXACT = {
+    "/api/players/act": "players", "/api/players/clear": "players", "/api/bans/add": "players", "/api/bans/remove": "players",
+    "/api/allowlist": "players",
+    "/api/server/action": "server", "/api/maintenance": "server", "/api/restarts": "server",
+    "/api/map": "map", "/api/rotation": "map", "/api/mapvote": "map", "/api/events": "map", "/api/events/stop": "map",
+    "/api/modbrowser/install": "mods", "/api/modpack/code": "mods", "/api/modpack": "mods",
+    "/api/config/save": "config", "/api/config/restore": "config", "/api/config/validate": "config", "/api/preset": "config",
+    "/api/template": "config", "/api/tools": "config", "/api/vehicles": "config", "/api/vehicles/preset": "config",
+    "/api/vehicles/block": "config", "/api/moderation": "config", "/api/messages": "config", "/api/timed": "config",
+    "/api/extras": "config", "/api/joinalerts": "config", "/api/invite": "config", "/api/resources": "config",
+}
+CUSTOM_ROLE_RE = re.compile(r"c_[a-z0-9]{6,12}")
+# not about one server: an account limited to some servers may use them whichever server is picked
+TEAM_ANY_SERVER = {"/api/servers", "/api/me", "/api/me/password", "/api/me/2fa/begin", "/api/me/2fa/confirm",
+                   "/api/me/2fa/disable", "/api/devices", "/api/logout"}
+ROLES_FILE = os.path.join(DATA_DIR, "roles.json")
+INVITES_FILE = os.path.join(DATA_DIR, "team-invites.json")
+INVITE_DAYS = 7
+_TEAM_LOCK = threading.Lock()
+
+
+def perm_group(method, path):
+    """Which tick-box a request needs (None = anyone logged in, "owner" = never grantable)."""
+    need = required_role(method, path)
+    if need == "viewer":
+        return None
+    if need == "owner":
+        return "owner"
+    if path in _PG_EXACT:
+        return _PG_EXACT[path]
+    if path.startswith("/api/mods/"):
+        return "mods"
+    return "settings"
+
+
+def _team_sig(kind, data):
+    base = APP.secrets.get("USERS_KEY") if APP else ""
+    if not base:
+        return ""
+    key = hmac.new(base.encode(), kind.encode(), hashlib.sha256).digest()
+    return hmac.new(key, json.dumps(data, sort_keys=True).encode(), hashlib.sha256).hexdigest()
+
+
+def _team_load(path, kind):
+    d = read_json(path, {})
+    if not isinstance(d, dict) or not isinstance(d.get("items"), list):
+        return []
+    want = _team_sig(kind, d["items"])
+    if not want or not hmac.compare_digest(want, str(d.get("sig") or "")):
+        return []
+    return [x for x in d["items"] if isinstance(x, dict)]
+
+
+def _team_save(path, kind, items):
+    if not APP.secrets.has("USERS_KEY"):
+        APP.secrets.set("USERS_KEY", secrets.token_hex(32))
+    write_json(path, {"items": items, "sig": _team_sig(kind, items)})
+    if not IS_WIN:
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+
+
+def load_roles():
+    out = []
+    for r in _team_load(ROLES_FILE, "custom-roles"):
+        if CUSTOM_ROLE_RE.fullmatch(str(r.get("id", ""))) and isinstance(r.get("perms"), list):
+            out.append({"id": r["id"], "name": clean_msg(r.get("name"))[:40] or r["id"],
+                        "perms": [p for p in r["perms"] if p in PERM_IDS]})
+    return out
+
+
+def save_roles(roles):
+    _team_save(ROLES_FILE, "custom-roles", roles)
+
+
+def role_ok(role):
+    return role in ("admin", "moderator", "viewer") or bool(CUSTOM_ROLE_RE.fullmatch(str(role or "")))
+
+
+def user_role_for(u, server_id):
+    """The role an extra account has on one server, or None (no access)."""
+    sv = u.get("servers")
+    if isinstance(sv, dict):
+        r = sv.get(server_id)
+        return r if role_ok(r) else None
+    return u.get("role")
+
+
+def team_allows(u, server_id, method, path, roles=None):
+    """(ok, message) for an extra account doing method+path on server_id."""
+    role = user_role_for(u, server_id)
+    if role is None:
+        return False, "Your account has no access to this server."
+    limited = isinstance(u.get("servers"), dict)
+    grp = perm_group(method, path)
+    if grp == "owner":
+        return False, "Only the owner can do that."
+    if limited and grp == "settings":
+        return False, "Your account only has access to some servers, so it can't change the dashboard settings."
+    if role in ROLES:
+        need = required_role(method, path)
+        if ROLES[role] < ROLES[need]:
+            return False, "Your account (%s) can't do that - ask an admin or the owner." % role
+        return True, ""
+    if grp is None:
+        return True, ""
+    cr = next((r for r in (roles if roles is not None else load_roles()) if r["id"] == role), None)
+    if not cr or grp not in cr["perms"]:
+        return False, "Your role (%s) doesn't include \"%s\" - ask the owner." % (
+            cr["name"] if cr else "deleted role", dict((g[0], g[1]) for g in PERM_GROUPS).get(grp, grp))
+    return True, ""
+
+
+# --- two-step login for extra accounts. The key is stored encrypted with the accounts key.
+def _seal(plain, kind="totp"):
+    base = APP.secrets.get("USERS_KEY")
+    nonce = secrets.token_bytes(16)
+    key = hmac.new(base.encode(), kind.encode(), hashlib.sha256).digest()
+    data = plain.encode()
+    stream = b"".join(hmac.new(key, nonce + struct.pack(">I", i), hashlib.sha256).digest() for i in range(len(data) // 32 + 1))
+    ct = bytes(a ^ b for a, b in zip(data, stream))
+    mac = hmac.new(key, nonce + ct, hashlib.sha256).hexdigest()[:32]
+    return "v1:%s:%s:%s" % (nonce.hex(), ct.hex(), mac)
+
+
+def _unseal(sealed, kind="totp"):
+    try:
+        v, n, c, mac = str(sealed).split(":")
+        nonce, ct = bytes.fromhex(n), bytes.fromhex(c)
+        key = hmac.new(APP.secrets.get("USERS_KEY").encode(), kind.encode(), hashlib.sha256).digest()
+        if v != "v1" or not hmac.compare_digest(hmac.new(key, nonce + ct, hashlib.sha256).hexdigest()[:32], mac):
+            return ""
+        stream = b"".join(hmac.new(key, nonce + struct.pack(">I", i), hashlib.sha256).digest() for i in range(len(ct) // 32 + 1))
+        return bytes(a ^ b for a, b in zip(ct, stream)).decode()
+    except (ValueError, AttributeError, UnicodeDecodeError):
+        return ""
+
+
+_USER_TOTP_LAST = {}
+
+
+def user_totp_ok(u, code):
+    secret = _unseal(u.get("totp", "")) if u.get("totp") else ""
+    if not secret:
+        return False
+    code = re.sub(r"\s", "", str(code or ""))
+    if not re.fullmatch(r"\d{6}", code):
+        return False
+    step = now() // 30
+    for c in (step - 1, step, step + 1):
+        if hmac.compare_digest(totp_code(secret, c), code):
+            with LOCK:
+                k = u["name"].lower()
+                if c <= _USER_TOTP_LAST.get(k, 0):
+                    return False
+                _USER_TOTP_LAST[k] = c
+            return True
+    return False
+
+
+def new_totp(label):
+    secret = base64.b32encode(secrets.token_bytes(20)).decode().rstrip("=")
+    lab = urllib.parse.quote("BeamMP EasyServer:%s" % label[:40])
+    uri = "otpauth://totp/%s?secret=%s&issuer=BeamMP%%20EasyServer" % (lab, secret)
+    try:
+        qr_size, qr_path = qr_svg_path(uri)
+    except ValueError:
+        qr_size, qr_path = 0, ""
+    return secret, {"secret": " ".join(secret[i:i + 4] for i in range(0, len(secret), 4)), "uri": uri,
+                    "qr_size": qr_size, "qr_path": qr_path}
+
+
+def totp_matches(secret, code):
+    code = re.sub(r"\s", "", str(code or ""))
+    step = now() // 30
+    return bool(re.fullmatch(r"\d{6}", code)) and any(hmac.compare_digest(totp_code(secret, c), code) for c in (step - 1, step, step + 1))
+
+
+def ip_is_remote(ip):
+    try:
+        return ipaddress.ip_address(ip).is_global
+    except ValueError:
+        return True
+
+
+# --- invite links
+def load_invites():
+    t = now()
+    return [x for x in _team_load(INVITES_FILE, "team-invites")
+            if isinstance(x.get("hash"), str) and isinstance(x.get("expires"), int) and x["expires"] > t and not x.get("used")]
+
+
+def save_invites(items):
+    _team_save(INVITES_FILE, "team-invites", items)
+
+
+def invite_hash(tok):
+    return hashlib.sha256(("team-invite:" + str(tok)).encode()).hexdigest()
+
+
+def find_invite(tok):
+    if not re.fullmatch(r"[\w-]{30,60}", str(tok or "")):
+        return None
+    h = invite_hash(tok)
+    return next((x for x in load_invites() if hmac.compare_digest(x["hash"], h)), None)
+
+
+def clean_servers_map(raw):
+    """{server id: role} limited to existing servers, or None for "all servers"."""
+    if raw is None or raw == "all":
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("servers must be \"all\" or a list of servers with a role each")
+    with LOCK:
+        known = set(INSTANCES)
+    out = {}
+    for sid, role in raw.items():
+        if sid in known and role_ok(role):
+            out[sid] = role
+    if not out:
+        raise ValueError("Pick at least one server")
+    return out
+
+
+def check_role_exists(role, roles=None):
+    if role in ("admin", "moderator", "viewer"):
+        return
+    if not any(r["id"] == role for r in (roles if roles is not None else load_roles())):
+        raise ValueError("Pick a role")
 
 
 # ----------------------------------------------------------------------------- remembered devices ("stay logged in")
@@ -6408,7 +6653,7 @@ def device_login(tok, ip):
                 local = not ipaddress.ip_address(ip).is_global
             except ValueError:
                 local = False
-            if not u or u.get("disabled") or not local:
+            if not u or u.get("disabled") or (not local and not (u.get("remote") and u.get("totp"))):
                 return None
             user, role = u["name"], u["role"]
         t = now()
@@ -7914,13 +8159,14 @@ class App:
             if not s or s["last"] < t - 7200 or s["created"] < t - 43200:
                 self.sessions.pop(tok, None)
                 return None
-        if s.get("user", "owner") != "owner":   # an extra account: still there? role changed?
+        if s.get("user", "owner") != "owner":   # an extra account: still there? role changed? still allowed from outside?
             u = find_user(s["user"])
-            if not u or u.get("disabled"):
+            if not u or u.get("disabled") or (ip_is_remote(s.get("ip", "")) and not (u.get("remote") and u.get("totp"))):
                 with LOCK:
                     self.sessions.pop(tok, None)
                 return None
             s["role"] = u["role"]
+            s["_u"] = u
         with LOCK:
             s["last"] = t
         return s
@@ -8146,7 +8392,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.page()
             if method == "GET" and path in APP_FILES:
                 return self.app_file(path)
-            public = {("GET", "/api/session"), ("POST", "/api/login"), ("POST", "/api/setup")}
+            public = {("GET", "/api/session"), ("POST", "/api/login"), ("POST", "/api/setup"),
+                      ("GET", "/api/teaminvite/info"), ("POST", "/api/teaminvite/accept")}
             if (method, path) in public:
                 return getattr(self, "api_" + path[5:].replace("/", "_"))(q)
             if method in ("GET", "HEAD") and path in ("/status", "/status.json"):
@@ -8159,17 +8406,30 @@ class Handler(BaseHTTPRequestHandler):
             fn = getattr(self, "%s_%s" % (method.lower(), path[5:].replace("/", "_").replace("-", "_")), None)
             if not fn:
                 return self.fail(404, "not found")
-            self.sess = sess
             _TL.user = sess.get("user", "owner")
-            role = sess.get("role", "owner")
-            need = required_role(method, path)
-            if ROLES.get(role, 0) < ROLES[need]:
-                return self.fail(403, "Your account (%s) can't do that - ask %s." % (role, "the owner" if need == "owner" else "an admin"))
-            if method != "GET":
-                APP.last_use = now()
             want = self.headers.get("X-ES-Server") or q.get("srv") or "main"
             with LOCK:
                 known = want in INSTANCES
+            if sess.get("role", "owner") == "owner" or sess.get("user", "owner") == "owner":
+                need = required_role(method, path)
+                if ROLES.get(sess.get("role", "owner"), 0) < ROLES[need]:
+                    return self.fail(403, "Only the owner can do that.")
+                self.sess = sess
+            else:
+                u = sess.get("_u") or find_user(sess["user"])
+                if not u:
+                    return self.fail(401, "Please log in")
+                if path in TEAM_ANY_SERVER and known and not user_role_for(u, want):
+                    with LOCK:                   # pages about the account, not a server: use one it may see
+                        want = next((i for i in INSTANCES if user_role_for(u, i)), want)
+                ok, msg = team_allows(u, want if known else "main", method, path)
+                if not ok:
+                    return self.fail(403, msg)
+                # handlers see the role this account has on the server it is working on
+                self.sess = dict(sess, role=user_role_for(u, want if known else "main") or "viewer")
+                self.sess_real = sess
+            if method != "GET":
+                APP.last_use = now()
             if not known:
                 return self.fail(404, "That server doesn't exist (any more)")
             use_server(want)
@@ -8235,6 +8495,24 @@ class Handler(BaseHTTPRequestHandler):
                    "Cache-Control": "max-age=20"})
 
     # ---------- public endpoints
+    def session_server_roles(self, sess):
+        """{server id: role} for an extra account (custom roles as their name), so the page shows the right tabs."""
+        if not sess or sess.get("user", "owner") == "owner":
+            return None
+        u = find_user(sess["user"])
+        if not u:
+            return {}
+        names = {r["id"]: r for r in load_roles()}
+        with LOCK:
+            ids = list(INSTANCES)
+        out = {}
+        for sid in ids:
+            r = user_role_for(u, sid)
+            if r:
+                out[sid] = {"role": r, "name": names[r]["name"] if r in names else r,
+                            "perms": names[r]["perms"] if r in names else None}
+        return out
+
     def api_session(self, q):
         app = APP
         sess = app.session(self.cookie("es_session"))
@@ -8253,6 +8531,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send(200, {
             "logged_in": bool(sess), "csrf": sess["csrf"] if sess else None,
             "user": sess.get("user", "owner") if sess else None, "role": sess.get("role", "owner") if sess else None,
+            "server_roles": self.session_server_roles(sess),
             "supporter": bool(sess) and supporter_active(),
             "needs_setup": not app.secrets.has("MODS_PASSWORD"),
             "setup_allowed": at_server(self.ip) and host_name(self.headers.get("Host")) in ("localhost", "127.0.0.1", "::1"),
@@ -8324,30 +8603,30 @@ class Handler(BaseHTTPRequestHandler):
         self.send(200, {"ok": True}, extra={"Set-Cookie": self.login_cookies(tok, "owner", b.get("remember") is True)})
 
     def login_user(self, uname, pw):
-        """Extra accounts (admin / moderator / viewer). They only work from the home network:
-        logging in from the internet stays protected by the owner's password + two-step code."""
+        """Extra accounts. From the home network with their password (and their two-step code if they set
+        one up). From the internet only when the owner allowed it for this account AND it has two-step login."""
         app = APP
-        try:
-            local = not ipaddress.ip_address(self.ip).is_global
-        except ValueError:
-            local = False
+        local = not ip_is_remote(self.ip)
         u = find_user(uname)
-        ok = bool(u) and not u.get("disabled") and check_password(pw, u.get("pw", ""))
+        ok_pw = bool(u) and not u.get("disabled") and check_password(pw, u.get("pw", ""))
+        # the code is only checked when the password is right; the answer is the same either way
+        ok = ok_pw and (not u.get("totp") or user_totp_ok(u, (self._json or {}).get("code")))
         if not ok:
             time.sleep(0.7)
             app.login_failed(self.ip)
             activity(uname[:24], "Failed login", "dashboard", self.ip, "main", ok=False)
-            return self.fail(401, "Wrong name or password")
-        if not local:
+            return self.fail(401, "Wrong name, password or two-step code", need_code=True)
+        if not local and not (u.get("remote") and u.get("totp")):
             activity(u["name"], "Login refused (from the internet)", "dashboard", self.ip, "main", ok=False)
-            return self.fail(403, "Extra accounts can only log in from the home network. From the internet, only the owner can log in.")
+            return self.fail(403, "This account can only log in from the home network. The owner can allow internet "
+                                  "access for it (Settings → Users), and it needs two-step login.")
         users = load_users()
         for x in users:
             if x["name"].lower() == u["name"].lower():
                 x["last_login"] = now()
         save_users(users)
         tok = app.new_session(self.ip, u["name"], u["role"])
-        activity(u["name"], "Logged in", "dashboard", self.ip, "main")
+        activity(u["name"], "Logged in" + ("" if local else " (from the internet)"), "dashboard", self.ip, "main")
         b = self._json or {}
         self.send(200, {"ok": True}, extra={"Set-Cookie": self.login_cookies(tok, u["name"], b.get("remember") is True)})
 
@@ -8392,6 +8671,9 @@ class Handler(BaseHTTPRequestHandler):
     def get_servers(self, q):
         with LOCK:
             insts = list(INSTANCES.values())
+        if self.sess.get("user", "owner") != "owner":
+            u = find_user(self.sess["user"]) or {}
+            insts = [i for i in insts if user_role_for(u, i.id)]
         out = []
         for inst in insts:
             use_server(inst.id)
@@ -10489,8 +10771,15 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---------- users + activity log
     def get_users(self, q):
-        self.send(200, {"users": [{k: u.get(k) for k in ("name", "role", "created", "last_login", "disabled")} for u in load_users()],
-                        "roles": ["admin", "moderator", "viewer"]})
+        self.send(200, {"users": [dict({k: u.get(k) for k in ("name", "role", "created", "last_login", "disabled", "remote")},
+                                       servers=u.get("servers") if isinstance(u.get("servers"), dict) else "all",
+                                       totp=bool(u.get("totp")), invited_by=u.get("invited_by"))
+                                  for u in load_users()],
+                        "roles": ["admin", "moderator", "viewer"], "custom_roles": load_roles(),
+                        "perm_groups": [{"id": g[0], "name": g[1], "about": g[2]} for g in PERM_GROUPS],
+                        "servers": [{"id": i.id, "name": i.name} for i in sorted(INSTANCES.values(), key=lambda i: (i.id != "main", i.id))],
+                        "invites": [{k: x.get(k) for k in ("id", "role", "servers", "remote", "created", "expires", "note")} for x in load_invites()],
+                        "remote_enabled": bool(APP.settings.get("remote_enabled"))})
 
     def post_users(self, q):
         b = self.body_json()
@@ -10500,40 +10789,283 @@ class Handler(BaseHTTPRequestHandler):
         users = load_users()
         u = next((x for x in users if x["name"].lower() == name.lower()), None)
         role = b.get("role")
+        kick = False
         if act == "add":
             if u:
                 raise ValueError("That name is taken")
             if len(users) >= 50:
                 raise ValueError("At most 50 accounts")
-            if role not in ("admin", "moderator", "viewer"):
-                raise ValueError("Pick a role")
+            check_role_exists(role)
             pw = str(b.get("password") or "")
             if len(pw) < 10:
                 raise ValueError("Use a password with at least 10 characters")
-            users.append({"name": name, "role": role, "pw": hash_password(pw), "created": now(), "last_login": 0})
+            nu = {"name": name, "role": role, "pw": hash_password(pw), "created": now(), "last_login": 0}
+            sv = clean_servers_map(b.get("servers"))
+            if sv:
+                nu["servers"] = sv
+            users.append(nu)
         elif not u:
             raise ValueError("No such account")
         elif act == "role":
-            if role not in ("admin", "moderator", "viewer"):
-                raise ValueError("Pick a role")
+            check_role_exists(role)
             u["role"] = role
+        elif act == "servers":
+            sv = clean_servers_map(b.get("servers"))
+            for r in (sv or {}).values():
+                check_role_exists(r)
+            if sv:
+                u["servers"] = sv
+            else:
+                u.pop("servers", None)
+        elif act == "remote":
+            u["remote"] = bool(b.get("remote"))
+            kick = not u["remote"]
+        elif act == "reset_2fa":
+            u.pop("totp", None)
+            kick = True
         elif act == "password":
             pw = str(b.get("password") or "")
             if len(pw) < 10:
                 raise ValueError("Use a password with at least 10 characters")
             u["pw"] = hash_password(pw)
-            with LOCK:                           # log them out everywhere
-                APP.sessions = {k: v for k, v in APP.sessions.items() if v.get("user", "").lower() != name.lower()}
-            forget_devices(name)
+            kick = True
         elif act == "disable":
             u["disabled"] = not u.get("disabled")
         elif act == "delete":
             users = [x for x in users if x is not u]
+            kick = True
+        else:
+            raise ValueError("unknown action")
+        save_users(users)
+        if kick:                                 # log them out everywhere
             with LOCK:
                 APP.sessions = {k: v for k, v in APP.sessions.items() if v.get("user", "").lower() != name.lower()}
             forget_devices(name)
-        else:
-            raise ValueError("unknown action")
+        note = "Saved"
+        if act == "remote" and u.get("remote"):
+            note = ("Saved. %s can log in from the internet once two-step login is set up on their account%s." %
+                    (name, "" if u.get("totp") else " (they do that under My account, at home)"))
+            if not APP.settings.get("remote_enabled"):
+                note += " Internet access to the dashboard is off - turn it on under Settings first."
+        self.send(200, {"ok": True, "note": note})
+
+    # ---------- custom roles
+    def post_roles(self, q):
+        b = self.body_json()
+        act = b.get("action")
+        with _TEAM_LOCK:
+            roles = load_roles()
+            if act == "save":
+                rid = str(b.get("id") or "")
+                name = clean_msg(b.get("name"))[:40].strip()
+                perms = [p for p in (b.get("perms") or []) if p in PERM_IDS]
+                if not name:
+                    raise ValueError("Give the role a name")
+                if name.lower() in ("owner", "admin", "moderator", "viewer"):
+                    raise ValueError("That name is used by a built-in role")
+                if rid:
+                    r = next((x for x in roles if x["id"] == rid), None)
+                    if not r:
+                        raise ValueError("No such role")
+                    r.update(name=name, perms=perms)
+                else:
+                    if len(roles) >= 20:
+                        raise ValueError("At most 20 custom roles")
+                    rid = "c_" + secrets.token_hex(4)
+                    roles.append({"id": rid, "name": name, "perms": perms})
+            elif act == "delete":
+                rid = str(b.get("id") or "")
+                used = [u["name"] for u in load_users() if u.get("role") == rid or rid in (u.get("servers") or {}).values()]
+                used += ["an invite"] if any(x.get("role") == rid or rid in (x.get("servers") or {}).values() for x in load_invites()) else []
+                if used:
+                    raise ValueError("Still in use by: %s. Give them another role first." % ", ".join(used[:5]))
+                roles = [x for x in roles if x["id"] != rid]
+            else:
+                raise ValueError("unknown action")
+            save_roles(roles)
+        self.send(200, {"ok": True, "id": rid})
+
+    # ---------- invite links for the team
+    def post_teaminvite(self, q):
+        b = self.body_json()
+        if b.get("action") == "revoke":
+            with _TEAM_LOCK:
+                items = [x for x in load_invites() if x.get("id") != str(b.get("id") or "")]
+                save_invites(items)
+            return self.send(200, {"ok": True})
+        role = b.get("role")
+        check_role_exists(role)
+        sv = clean_servers_map(b.get("servers"))
+        for r in (sv or {}).values():
+            check_role_exists(r)
+        try:
+            days = max(1, min(30, int(b.get("days") or INVITE_DAYS)))
+        except (TypeError, ValueError):
+            days = INVITE_DAYS
+        tok = secrets.token_urlsafe(32)
+        inv = {"id": secrets.token_hex(4), "hash": invite_hash(tok), "role": role, "servers": sv, "remote": bool(b.get("remote")),
+               "created": now(), "expires": now() + days * 86400, "by": self.sess.get("user", "owner"),
+               "note": clean_msg(b.get("note"))[:60]}
+        with _TEAM_LOCK:
+            items = load_invites()
+            if len(items) >= 20:
+                raise ValueError("At most 20 open invites - revoke an old one")
+            items.append(inv)
+            save_invites(items)
+        st = APP.settings
+        lan = "%s://%s:%s/#team=%s" % ("https" if st.get("https") else "http", lan_ip(), st.get("port"), tok)
+        net = (dashboard_url().split("?")[0].rstrip("/") + "/#team=" + tok) if st.get("remote_enabled") else ""
+        self.send(200, {"ok": True, "link": net if inv["remote"] and net else lan, "lan_link": lan, "internet_link": net,
+                        "expires": inv["expires"],
+                        "note": "Send the link to them. It works once, for %d day%s." % (days, "" if days == 1 else "s")})
+
+    def _invite_or_fail(self, tok):
+        if APP.is_locked(self.ip):
+            self.fail(429, "Too many wrong attempts. Try again in 15 minutes.")
+            return None
+        inv = find_invite(tok)
+        if not inv:
+            time.sleep(0.5)
+            APP.login_failed(self.ip)
+            self.fail(404, "This invite link doesn't work any more (used, revoked or expired). Ask for a new one.")
+            return None
+        if ip_is_remote(self.ip) and not inv.get("remote"):
+            self.fail(403, "This invite only works on the server's home network.")
+            return None
+        return inv
+
+    _INVITE_TOTP = {}
+
+    def api_teaminvite_info(self, q):
+        inv = self._invite_or_fail(q.get("t"))
+        if not inv:
+            return
+        names = {r["id"]: r["name"] for r in load_roles()}
+        out = {"role": names.get(inv["role"], inv["role"]), "remote": inv["remote"], "server": server_name() or "BeamMP server",
+               "servers": None if not inv.get("servers") else [INSTANCES[s].name for s in inv["servers"] if s in INSTANCES]}
+        if inv["remote"]:                        # internet access needs two-step login from the start
+            secret, pub = new_totp("team")
+            with LOCK:
+                Handler._INVITE_TOTP[inv["hash"]] = (secret, now())
+                for k in [k for k, v in Handler._INVITE_TOTP.items() if now() - v[1] > 3600]:
+                    Handler._INVITE_TOTP.pop(k, None)
+            out["totp"] = pub
+        self.send(200, out)
+
+    def api_teaminvite_accept(self, q):
+        origin = self.headers.get("Origin")
+        if origin and urllib.parse.urlparse(origin).netloc != self.headers.get("Host", ""):
+            return self.fail(403, "Security check failed - open the link again")
+        b = self.body_json(4096)
+        inv = self._invite_or_fail(b.get("t"))
+        if not inv:
+            return
+        name, pw = str(b.get("name") or "").strip(), str(b.get("password") or "")
+        if not USER_RE.fullmatch(name) or name.lower() == "owner":
+            return self.fail(400, "Names are 2-24 letters, numbers, dots, dashes or underscores")
+        if len(pw) < 10:
+            return self.fail(400, "Use a password with at least 10 characters")
+        totp = ""
+        if inv["remote"]:
+            with LOCK:
+                pend = Handler._INVITE_TOTP.get(inv["hash"])
+            if not pend or not totp_matches(pend[0], b.get("code")):
+                return self.fail(400, "That two-step code is wrong - check the time on your phone and try again")
+            totp = pend[0]
+        with _TEAM_LOCK:
+            if not find_invite(b.get("t")):
+                return self.fail(404, "This invite link was just used")
+            users = load_users()
+            if any(x["name"].lower() == name.lower() for x in users):
+                return self.fail(400, "That name is taken - pick another")
+            if len(users) >= 50:
+                return self.fail(400, "This dashboard has the most accounts it can have")
+            nu = {"name": name, "role": inv["role"], "pw": hash_password(pw), "created": now(), "last_login": 0,
+                  "remote": inv["remote"], "invited_by": inv.get("by")}
+            if inv.get("servers"):
+                nu["servers"] = inv["servers"]
+            if totp:
+                nu["totp"] = _seal(totp)
+            users.append(nu)
+            save_users(users)
+            items = load_invites()
+            for x in items:
+                if x["hash"] == inv["hash"]:
+                    x["used"] = now()
+            save_invites([x for x in items if not x.get("used")])
+        with LOCK:
+            Handler._INVITE_TOTP.pop(inv["hash"], None)
+        activity(name, "Joined the team with an invite (%s)" % inv["role"], "dashboard", self.ip, "main")
+        APP.notifier.add("team", "%s joined the dashboard team" % name, "They used an invite link and can now log in.", "info")
+        self.send(200, {"ok": True})
+
+    # ---------- my account (extra accounts)
+    def _me(self):
+        if self.sess.get("user", "owner") == "owner":
+            raise ValueError("The owner changes these under Settings")
+        u = find_user(self.sess["user"])
+        if not u:
+            raise ValueError("No such account")
+        return u
+
+    def get_me(self, q):
+        if self.sess.get("user", "owner") == "owner":
+            return self.send(200, {"owner": True})
+        u = self._me()
+        self.send(200, {"name": u["name"], "totp": bool(u.get("totp")), "remote": bool(u.get("remote")),
+                        "remote_enabled": bool(APP.settings.get("remote_enabled")), "roles": self.session_server_roles(self.sess_real)})
+
+    def post_me_password(self, q):
+        u = self._me()
+        b = self.body_json()
+        if not check_password(str(b.get("current") or ""), u.get("pw", "")):
+            time.sleep(0.7)
+            APP.login_failed(self.ip)
+            raise ValueError("Your current password is wrong")
+        pw = str(b.get("new") or "")
+        if len(pw) < 10:
+            raise ValueError("Use a password with at least 10 characters")
+        users = load_users()
+        for x in users:
+            if x["name"].lower() == u["name"].lower():
+                x["pw"] = hash_password(pw)
+        save_users(users)
+        forget_devices(u["name"])
+        self.send(200, {"ok": True})
+
+    def post_me_2fa_begin(self, q):
+        u = self._me()
+        secret, pub = new_totp(u["name"])
+        self.sess_real["pending_totp"] = secret
+        self.send(200, pub)
+
+    def post_me_2fa_confirm(self, q):
+        u = self._me()
+        secret = self.sess_real.get("pending_totp")
+        if not secret:
+            return self.fail(400, "Start the setup again")
+        if not totp_matches(secret, self.body_json().get("code")):
+            return self.fail(400, "That code is wrong - check the time on your phone and try again")
+        users = load_users()
+        for x in users:
+            if x["name"].lower() == u["name"].lower():
+                x["totp"] = _seal(secret)
+        save_users(users)
+        self.sess_real.pop("pending_totp", None)
+        self.send(200, {"ok": True})
+
+    def post_me_2fa_disable(self, q):
+        u = self._me()
+        if not check_password(str(self.body_json().get("password") or ""), u.get("pw", "")):
+            time.sleep(0.7)
+            APP.login_failed(self.ip)
+            raise ValueError("Wrong password")
+        if u.get("remote") and ip_is_remote(self.ip):
+            raise ValueError("You're logged in from the internet - turn it off at home, or ask the owner")
+        users = load_users()
+        for x in users:
+            if x["name"].lower() == u["name"].lower():
+                x.pop("totp", None)
         save_users(users)
         self.send(200, {"ok": True})
 
