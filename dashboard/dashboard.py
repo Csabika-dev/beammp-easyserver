@@ -12,6 +12,7 @@ Standard library only. Runs on Linux (systemd service, as the unprivileged
 Not affiliated with the BeamMP team.
 """
 import base64
+import binascii
 import hashlib
 import hmac
 from html import escape as html_escape
@@ -36,6 +37,7 @@ import urllib.parse
 import urllib.request
 import uuid
 import zipfile
+import zlib
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -1154,6 +1156,10 @@ def zip_maps(path):
 
 def list_mods():
     out = []
+    try:
+        needs = mod_needs()
+    except Exception:
+        needs = {}
     for folder, enabled in ((I().CLIENT_DIR, True), (I().DISABLED_DIR, False)):
         try:
             names = sorted(os.listdir(folder), key=str.lower)
@@ -1166,7 +1172,7 @@ def list_mods():
                 out.append({"name": n, "size": os.path.getsize(p), "enabled": enabled,
                             "parked": not enabled and n in parked_maps(I()), "builtin": n == TOOLS_MOD,
                             "maps": zip_maps(p) or [], "safety": r["verdict"] if r else "unchecked",
-                            "reasons": r["reasons"] if r else []})
+                            "reasons": r["reasons"] if r else [], "needs": needs.get(n, []) if enabled else []})
     return out
 
 
@@ -1675,6 +1681,10 @@ def fmt_bytes(n):
 def refresh_mod_desc():
     """Keep "| Mods: 1.2 GB" at the end of the server description up to date
     (when that's turned on), so players see the download size before joining."""
+    try:
+        veh_sync()
+    except Exception as e:
+        print("vehicle rules: couldn't update for the new mods: %s" % short_err(e), file=sys.stderr)
     on = bool(I().meta.get("desc_modsize"))
     text = APP.read_config_text()
     desc = toml_parse(text)[0].get("General", {}).get("Description", "")
@@ -3988,6 +3998,695 @@ def ensure_tools_mod(inst=None):
     return how
 
 
+# ----------------------------------------------------------------------------- vehicle rules (Config -> Vehicle rules)
+# Read by the EasyServerStats plugin (vehicles.txt). The plugin cancels a spawn
+# or a swap to a blocked model, so the car never appears for anyone.
+# Base-game model names ("jbeam" names). A wrong or old name in these lists
+# does nothing - it just never matches.
+BASE_CARS = ("autobello", "barstow", "bastion", "bluebuck", "bolide", "burnside", "bx", "citybus", "covet", "etk800",
+             "etkc", "etki", "fullsize", "hopper", "lansdale", "legran", "md_series", "midsize", "midtruck", "miramar",
+             "moonhawk", "pessima", "pickup", "pigeon", "racetruck", "roamer", "rockbouncer", "sbr", "scintilla",
+             "sunburst", "us_semi", "van", "vivace", "wendover", "wigeon")
+BASE_TRAILERS = ("boxutility", "boxutility_large", "caravan", "cargotrailer", "dolly", "dryvan", "flatbed",
+                 "frameless_dump", "tanker", "tiltdeck")
+BASE_PROPS = ("ball", "barrels", "barrier", "blockwall", "bollard", "cannon", "chair", "christmas_tree", "cones", "couch",
+              "flail", "gate", "haybale", "inflated_mat", "kickplate", "mattress", "metal_box", "metal_ramp", "piano",
+              "rocks", "roadsigns", "sawhorse", "streetlight", "tirestacks", "tirewall", "trafficbarrel", "tube", "wall",
+              "weightpad", "woodcrate", "woodplanks")
+# Big physics props - the usual reason a whole server suddenly lags.
+BASE_HEAVY_PROPS = ("large_angletoy", "large_bridge", "large_cannon", "large_crusher", "large_hamster_wheel", "large_roller",
+                    "large_spinner", "large_tilt", "large_tire", "shipping_container", "suspensionbridge", "testroller")
+JBM_RE = re.compile(r"[A-Za-z0-9_.\-]{1,80}")
+VEH_DEFAULTS = {"on": False, "cooldown": 0, "spam": 0, "exempt": True, "only": False, "props": False, "trailers": False,
+                "heavyprops": False, "heavymods": False, "cars": [], "allow": []}
+VEH_PRESETS = {
+    "anything": ("Anything goes", "No limits - every car and prop is allowed.",
+                 {"on": False, "props": False, "trailers": False, "heavyprops": False, "heavymods": False, "cooldown": 0, "spam": 0}),
+    "chill": ("No chaos", "Props and heavy mod cars off, spawn spam stopped. Good for public servers.",
+              {"on": True, "props": True, "trailers": False, "heavyprops": True, "heavymods": True, "cooldown": 5, "spam": 6}),
+    "racing": ("Racing", "No props or trailers, no heavy cars, 10 s between spawns.",
+               {"on": True, "props": True, "trailers": True, "heavyprops": True, "heavymods": True, "cooldown": 10, "spam": 4}),
+    "roleplay": ("Roleplay", "Trailers allowed for jobs, props and heavy cars off, 30 s between spawns.",
+                 {"on": True, "props": True, "trailers": False, "heavyprops": True, "heavymods": True, "cooldown": 30, "spam": 4}),
+}
+# A car mod is "heavy" from these counts (all parts in the mod, so it's an upper estimate).
+HEAVY_NODES, HEAVY_BEAMS = 4000, 24000
+_MODVEH_CACHE = {}
+
+
+def clean_jbm(v):
+    v = str(v or "").strip()
+    return v if JBM_RE.fullmatch(v) else None
+
+
+def _jbeam_counts(text):
+    """Rough node and beam counts of a .jbeam file (rows of the "nodes" and "beams" tables)."""
+    nodes = beams = 0
+    for m in re.finditer(r'"(nodes|beams)"\s*:\s*\[', text):
+        i, depth, start = m.end(), 1, m.end()
+        while i < len(text) and depth:
+            c = text[i]
+            if c == "[":
+                depth += 1
+            elif c == "]":
+                depth -= 1
+            i += 1
+        body = text[start:i]
+        if m.group(1) == "nodes":
+            nodes += len(re.findall(r'\[\s*"[^"\n]+"\s*,\s*-?\d', body))
+        else:
+            beams += len(re.findall(r'\[\s*"(?!id1:")[^"\n]+"\s*,\s*"[^"\n]+"', body))
+    return nodes, beams
+
+
+def mod_vehicles(path):
+    """The vehicles in a mod zip: [{jbm, name, type, nodes, beams, heavy}]. Cached per file version."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return []
+    key = (path, st.st_size, int(st.st_mtime))
+    if key in _MODVEH_CACHE:
+        return _MODVEH_CACHE[key]
+    found = {}
+    try:
+        with zipfile.ZipFile(path) as z:
+            budget = 96 * 1024 ** 2
+            for zi in z.infolist():
+                m = re.match(r"^vehicles/([^/]+)/(.+)$", zi.filename, re.I)
+                if not m or zi.is_dir() or not JBM_RE.fullmatch(m.group(1)) or m.group(1).lower() == "common":
+                    continue
+                v = found.setdefault(m.group(1).lower(), {"jbm": m.group(1), "name": "", "type": "", "nodes": 0, "beams": 0,
+                                                          "defines": False})
+                fn = m.group(2).lower()
+                if fn.startswith("info") and fn.endswith(".json") and "/" not in fn and zi.file_size < 256 * 1024 and not v["type"]:
+                    v["defines"] = True
+                    try:
+                        raw = z.read(zi).decode("utf-8", "replace")
+                        raw = re.sub(r"(?m)^\s*//.*$", "", raw)
+                        raw = re.sub(r",\s*([}\]])", r"\1", raw)
+                        info = json.loads(raw)
+                        if isinstance(info, dict):
+                            v["type"] = str(info.get("Type") or "")[:20]
+                            v["name"] = (str(info.get("Brand") or "") + " " + str(info.get("Name") or "")).strip()[:80]
+                    except (ValueError, zipfile.BadZipFile, OSError, RuntimeError):
+                        pass
+                elif fn.endswith(".jbeam") and zi.file_size <= 8 * 1024 ** 2 and budget > 0:
+                    budget -= zi.file_size
+                    try:
+                        n, b = _jbeam_counts(z.read(zi).decode("utf-8", "replace"))
+                    except (zipfile.BadZipFile, OSError, RuntimeError):
+                        continue
+                    v["nodes"] += n
+                    v["beams"] += b
+    except (zipfile.BadZipFile, OSError):
+        return []
+    out = []
+    for v in found.values():
+        t = v["type"].lower()
+        v["kind"] = "prop" if t == "prop" else "trailer" if t == "trailer" else "car"
+        v["heavy"] = v["nodes"] >= HEAVY_NODES or v["beams"] >= HEAVY_BEAMS
+        out.append(v)
+    out.sort(key=lambda x: x["jbm"].lower())
+    if len(_MODVEH_CACHE) > 400:
+        _MODVEH_CACHE.clear()
+    _MODVEH_CACHE[key] = out
+    return out
+
+
+BASE_ALL = {j.lower() for j in BASE_CARS + BASE_TRAILERS + BASE_PROPS + BASE_HEAVY_PROPS}
+
+
+def mod_needs(inst=None):
+    """{mod file: [models it adds parts to that neither the game nor another enabled mod has]}.
+    A "mod of a mod" (extra parts for someone else's car) does nothing without that car's mod."""
+    inst = inst or I()
+    per, have = {}, set(BASE_ALL)
+    try:
+        names = os.listdir(inst.CLIENT_DIR)
+    except OSError:
+        return {}
+    for n in names:
+        p = os.path.join(inst.CLIENT_DIR, n)
+        if n.lower().endswith(".zip") and n != TOOLS_MOD and os.path.isfile(p) and not os.path.islink(p):
+            vs = mod_vehicles(p)
+            per[n] = vs
+            have.update(v["jbm"].lower() for v in vs if v.get("defines"))
+    out = {}
+    for n, vs in per.items():
+        miss = sorted({v["jbm"] for v in vs if not v.get("defines") and v["jbm"].lower() not in have}, key=str.lower)
+        if miss:
+            out[n] = miss[:10]
+    return out
+
+
+def server_mod_vehicles(inst=None):
+    """{jbm lower: vehicle + "mod"} for the enabled mods of a server (only mods that add the vehicle itself)."""
+    inst = inst or I()
+    out = {}
+    try:
+        names = sorted(os.listdir(inst.CLIENT_DIR), key=str.lower)
+    except OSError:
+        return out
+    for n in names:
+        p = os.path.join(inst.CLIENT_DIR, n)
+        if n.lower().endswith(".zip") and n != TOOLS_MOD and os.path.isfile(p) and not os.path.islink(p):
+            for v in mod_vehicles(p):
+                if v.get("defines"):
+                    out.setdefault(v["jbm"].lower(), dict(v, mod=n))
+    return out
+
+
+def read_veh(inst=None):
+    inst = inst or I()
+    d = json.loads(json.dumps(VEH_DEFAULTS))
+    for line in shared_read(os.path.join(inst.STATS_DIR, "vehicles.txt"), 256 * 1024).splitlines():
+        m = re.fullmatch(r"\s*(\w+)\s*=\s*(.*?)\s*", line)
+        if not m:
+            continue
+        k, v = m.groups()
+        if k in ("on", "only", "props", "trailers", "heavyprops", "heavymods"):
+            d[k] = v.lower() == "on"
+        elif k == "exempt":
+            d[k] = v.lower() != "off"
+        elif k == "cooldown" and v.isdigit() and int(v) <= 3600:
+            d[k] = int(v)
+        elif k == "spam" and v.isdigit() and int(v) <= 120:
+            d[k] = int(v)
+        elif k in ("car", "allow") and clean_jbm(v):
+            lst = d["cars" if k == "car" else "allow"]
+            if v.lower() not in [x.lower() for x in lst] and len(lst) < 500:
+                lst.append(v)
+    return d
+
+
+def veh_blocklist(d, inst=None):
+    """[(model, reason)] the plugin should refuse, from the settings and the server's mods."""
+    out = {}
+    if d["props"]:
+        for j in BASE_PROPS:
+            out[j] = "props are turned off"
+    if d["heavyprops"]:
+        for j in BASE_HEAVY_PROPS:
+            out[j] = "big physics props are turned off"
+    if d["trailers"]:
+        for j in BASE_TRAILERS:
+            out[j] = "trailers are turned off"
+    for v in server_mod_vehicles(inst).values():
+        if d["props"] and v["kind"] == "prop":
+            out.setdefault(v["jbm"], "props are turned off")
+        elif d["trailers"] and v["kind"] == "trailer":
+            out.setdefault(v["jbm"], "trailers are turned off")
+        elif d["heavymods"] and v["heavy"]:
+            out.setdefault(v["jbm"], "this car is too heavy for the server")
+    for j in d["cars"]:
+        out[j] = "the server owner blocked it"
+    return sorted(out.items(), key=lambda kv: kv[0].lower())
+
+
+def write_veh(d, inst=None):
+    inst = inst or I()
+    lines = ["# Managed by the BeamMP EasyServer dashboard (Config -> Vehicle rules).",
+             "on=%s" % ("on" if d["on"] else "off"), "cooldown=%d" % d["cooldown"], "spam=%d" % d["spam"],
+             "exempt=%s" % ("on" if d["exempt"] else "off"), "only=%s" % ("on" if d["only"] else "off")]
+    for k in ("props", "trailers", "heavyprops", "heavymods"):
+        lines.append("%s=%s" % (k, "on" if d[k] else "off"))
+    lines += ["car=" + j for j in d["cars"]]
+    lines += ["allow=" + j for j in d["allow"]]
+    lines += ["block=%s\t%s" % (j, why) for j, why in veh_blocklist(d, inst)]
+    shared_write(os.path.join(inst.STATS_DIR, "vehicles.txt"), "\n".join(lines) + "\n")
+
+
+def veh_sync(inst=None):
+    """Rewrite vehicles.txt after mods changed, so new prop / heavy mods are covered."""
+    inst = inst or I()
+    if os.path.exists(os.path.join(inst.STATS_DIR, "vehicles.txt")):
+        write_veh(read_veh(inst), inst)
+
+
+def veh_preset_match(d):
+    for pid, (_, _, vals) in VEH_PRESETS.items():
+        if all(d.get(k) == v for k, v in vals.items()) and (pid != "anything" or not d["cars"]):
+            return pid
+    return None
+
+
+def veh_activity(days=7):
+    """What players spawned here lately, and what the rules refused."""
+    since = now() - days * 86400
+    seen, blocked, spam = {}, [], []
+    for e in read_events(since):
+        ev = e.get("ev")
+        if ev not in ("spawn", "vehblock", "vehspam"):
+            continue
+        name = clean_player_name(e.get("name"))
+        if ev == "vehspam":
+            spam.append({"t": e["t"], "name": name, "count": e.get("count") if isinstance(e.get("count"), int) else 0})
+            continue
+        j = clean_jbm(e.get("jbm"))
+        if not j:
+            continue
+        if ev == "spawn":
+            s = seen.setdefault(j.lower(), {"jbm": j, "count": 0, "players": set(), "last": 0})
+            s["count"] += 1
+            s["players"].add(name)
+            s["last"] = e["t"]
+        else:
+            blocked.append({"t": e["t"], "name": name, "jbm": j, "why": str(e.get("why") or "")[:80]})
+    top = sorted(seen.values(), key=lambda s: -s["count"])[:60]
+    for s in top:
+        s["players"] = len(s["players"])
+    return {"seen": top, "blocked": blocked[-30:][::-1], "spam": spam[-20:][::-1], "days": days}
+
+
+def veh_kind(j, mods):
+    lj = j.lower()
+    if lj in mods:
+        v = mods[lj]
+        return ("heavy " if v["heavy"] and v["kind"] == "car" else "") + v["kind"]
+    if lj in BASE_HEAVY_PROPS:
+        return "heavy prop"
+    if lj in BASE_PROPS:
+        return "prop"
+    if lj in BASE_TRAILERS:
+        return "trailer"
+    if lj in BASE_CARS:
+        return "car"
+    return "unknown"
+
+
+# ----------------------------------------------------------------------------- server plugins (Plugins page)
+# A curated list of community plugins (docs/plugins.json on the website, with a
+# built-in copy). EasyServer downloads a plugin from its author's own GitHub
+# page, shows what will go where, and installs it only after the owner agrees.
+# Plugins run with the server's rights, so only the owner may install them.
+PLUGIN_CATALOG_URL = "https://csabika-dev.github.io/beammp-easyserver/plugins.json"
+PLUGIN_CATALOG = {'format': 'beammp-easyserver-plugins',
+ 'version': 1,
+ 'about': 'Server plugins EasyServer can install. Each one belongs to its author - EasyServer only downloads it from '
+          "the author's own GitHub page. Want yours listed? Open a pull request that adds it here.",
+ 'plugins': [{'id': 'careermp',
+              'name': 'CareerMP',
+              'author': 'StanleyDudek',
+              'repo': 'StanleyDudek/CareerMP',
+              'source': 'release',
+              'about': "BeamNG.drive's own Career Mode on your server. Saves stay on each player's PC.",
+              'notes': ['Needs MaxCars 100 or more and the West Coast USA map.',
+                        "Its README says it doesn't work with BeamNG.drive 0.39 yet - check before installing."],
+              'license': "See the author's page"},
+             {'id': 'freeroammp',
+              'name': 'freeRoamMP',
+              'author': 'StanleyDudek',
+              'repo': 'StanleyDudek/freeRoamMP',
+              'source': 'release',
+              'about': "The game's Freeroam mode with missions: deliveries, police, stunts.",
+              'notes': ['Some missions spawn many objects - set a high MaxCars.',
+                        "Its README says it doesn't work with BeamNG.drive 0.39 yet - check before installing."],
+              'license': "See the author's page"},
+             {'id': 'envsync',
+              'name': 'BeamMP Environment Sync',
+              'author': 'Evan Mulawski',
+              'repo': 'EvanMulawski/BeamMP-EnvSync',
+              'source': 'release',
+              'about': 'Everyone sees the same time of day and weather, set by the server.',
+              'notes': ['Work in progress, says its author.'],
+              'license': 'MIT'},
+             {'id': 'cobaltessentials',
+              'name': 'CobaltEssentials',
+              'author': 'Preston Elam (CobaltTetra), maintained by StanleyDudek',
+              'repo': 'StanleyDudek/CobaltEssentials',
+              'source': 'branch',
+              'folder': 'CobaltEssentials',
+              'about': 'The classic admin toolkit: permission groups, commands, RCON.',
+              'notes': ["It has its own admins, bans and commands - they overlap with EasyServer's Moderation page. "
+                        'Use one or the other.',
+                        'After installing, type "ce setgroup YourName owner" in the server console.'],
+              'license': 'All rights reserved by the author - downloaded from their page, not shipped with '
+                         'EasyServer'},
+             {'id': 'beamjoy',
+              'name': 'BeamJoy Sandbox (Revived)',
+              'author': 'Samaël (my-name-is-samael), continued by CaptainNugget',
+              'repo': 'foodcache3/BeamJoy-Revived',
+              'source': 'release',
+              'about': 'All-in-one sandbox framework with an in-game admin menu, updated for BeamNG.drive 0.39.',
+              'notes': ["Remove any other BeamJoy version first - they don't mix.",
+                        "It has its own admin system - it overlaps with EasyServer's Moderation page."],
+              'license': "See the author's page"}]}
+PLUGIN_REPO_RE = re.compile(r"[A-Za-z0-9_.\-]{1,60}/[A-Za-z0-9_.\-]{1,100}")
+PLUGIN_FOLDER_RE = re.compile(r"[A-Za-z0-9_.\-]{1,64}")
+PLUGIN_ID_RE = re.compile(r"[a-z0-9_\-]{1,40}")
+PLUGIN_HOSTS = ("github.com", "api.github.com", "codeload.github.com", "objects.githubusercontent.com",
+                "release-assets.githubusercontent.com")
+PLUGIN_MAX = 300 * 1024 ** 2
+PLUGINS_FILE = os.path.join(DATA_DIR, "plugins.json")
+PLUGIN_JOBS = {}
+_PLUGCAT = {"t": 0, "data": None}
+OWN_PLUGIN = "EasyServerStats"
+
+
+def plugin_entry_ok(p):
+    if not isinstance(p, dict) or not PLUGIN_ID_RE.fullmatch(str(p.get("id", ""))):
+        return None
+    if not PLUGIN_REPO_RE.fullmatch(str(p.get("repo", ""))) or p.get("source", "release") not in ("release", "branch"):
+        return None
+    if p.get("folder") and not PLUGIN_FOLDER_RE.fullmatch(str(p["folder"])):
+        return None
+    txt = lambda k, n: re.sub(r"[\x00-\x1f]", " ", str(p.get(k) or ""))[:n]
+    return {"id": p["id"], "name": txt("name", 60) or p["id"], "author": txt("author", 120), "repo": p["repo"],
+            "source": p.get("source", "release"), "folder": p.get("folder") or "", "about": txt("about", 300),
+            "license": txt("license", 120), "page": "https://github.com/" + p["repo"],
+            "notes": [re.sub(r"[\x00-\x1f]", " ", str(n))[:240] for n in (p.get("notes") or [])[:5] if isinstance(n, str)]}
+
+
+def plugin_catalog():
+    """The catalog from the website (refreshed every 6 hours), or the copy built into this version."""
+    if _PLUGCAT["data"] and now() - _PLUGCAT["t"] < 6 * 3600:
+        return _PLUGCAT["data"]
+    data = PLUGIN_CATALOG
+    try:
+        req = urllib.request.Request(PLUGIN_CATALOG_URL, headers={"User-Agent": "BeamMP-EasyServer/" + EASY_VERSION})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            d = json.loads(r.read(512 * 1024).decode("utf-8"))
+        if isinstance(d, dict) and d.get("format") == "beammp-easyserver-plugins" and isinstance(d.get("plugins"), list):
+            data = d
+    except (OSError, ValueError):
+        pass
+    out = [e for e in (plugin_entry_ok(p) for p in data.get("plugins", [])[:200]) if e]
+    _PLUGCAT.update(t=now(), data=out)
+    return out
+
+
+def _plug_read():
+    try:
+        with open(PLUGINS_FILE, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _plug_write(d):
+    tmp = PLUGINS_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(d, f, indent=1)
+    os.replace(tmp, PLUGINS_FILE)
+
+
+def plugin_records(inst=None):
+    return _plug_read().get((inst or I()).id, {})
+
+
+def plugin_server_dir(inst=None):
+    return os.path.join((inst or I()).RES, "Server")
+
+
+def plugin_off_dir(inst=None):
+    return os.path.join(DATA_DIR, "plugins-off", (inst or I()).id)
+
+
+def _zip_member_ok(zi):
+    n = zi.filename.replace("\\", "/")
+    if n.startswith("/") or re.match(r"^[A-Za-z]:", n) or any(p in ("..",) for p in n.split("/")):
+        return False
+    if (zi.external_attr >> 16) & 0o170000 == 0o120000:      # symbolic link
+        return False
+    return True
+
+
+def plugin_plan(path, folder_hint=""):
+    """What a plugin zip would install: {"server": {folder: [files]}, "client": [zip names], "skipped": n}.
+    Understands Resources/Server + Resources/Client, Server + Client, and a bare plugin folder."""
+    with zipfile.ZipFile(path) as z:
+        infos = [zi for zi in z.infolist() if not zi.is_dir()]
+        if len(infos) > 5000:
+            raise RuntimeError("This file has more than 5000 files - that's not a normal plugin.")
+        for zi in infos:
+            if not _zip_member_ok(zi):
+                raise RuntimeError("The file contains an unsafe path (%s) - not installed." % zi.filename[:120])
+        names = [zi.filename.replace("\\", "/") for zi in infos]
+    server, client, used = {}, [], set()
+    for n in names:
+        m = re.match(r"^(?:[^/]+/)*?(?:Resources/)?Server/([^/]+)/(.+)$", n)
+        if m and not re.search(r"(^|/)Client/", n.split("Server/")[0]):
+            server.setdefault(m.group(1), []).append((n, m.group(2)))
+            used.add(n)
+            continue
+        m = re.match(r"^(?:[^/]+/)*?(?:Resources/)?Client/([^/]+\.zip)$", n, re.I)
+        if m:
+            client.append((n, m.group(1)))
+            used.add(n)
+    if not server and not client:
+        # a bare plugin: the folder that holds .lua files at its top
+        tops = sorted({n.rsplit("/", 1)[0] if "/" in n else "" for n in names if n.lower().endswith(".lua")}, key=len)
+        if tops:
+            root = tops[0]
+            folder = folder_hint or (root.rsplit("/", 1)[-1] if root else "") or os.path.splitext(os.path.basename(path))[0]
+            folder = re.sub(r"-(master|main)$", "", folder)
+            pre = root + "/" if root else ""
+            for n in names:
+                if n.startswith(pre) and not re.search(r"(^|/)\.(git|github)(/|$)", n[len(pre):]):
+                    server.setdefault(folder, []).append((n, n[len(pre):]))
+                    used.add(n)
+    for f in list(server):
+        if not PLUGIN_FOLDER_RE.fullmatch(f):
+            raise RuntimeError("The plugin folder name \"%s\" isn't allowed." % f[:60])
+        if f.lower() == OWN_PLUGIN.lower():
+            raise RuntimeError("The file tries to replace EasyServer's own plugin - not installed.")
+    for _, c in client:
+        if not safe_zip_name(c) or c == TOOLS_MOD:
+            raise RuntimeError("The client mod name \"%s\" isn't allowed." % c[:60])
+    if not server and not client:
+        raise RuntimeError("No server plugin found in this file (no .lua files, no Resources/Server folder).")
+    return {"server": {f: [m for m in v] for f, v in server.items()}, "client": client, "skipped": len(names) - len(used)}
+
+
+def plan_public(plan):
+    return {"server": [{"folder": f, "files": len(v), "lua": sum(1 for _, r in v if r.lower().endswith(".lua"))} for f, v in plan["server"].items()],
+            "client": [c for _, c in plan["client"]], "skipped": plan["skipped"]}
+
+
+def plugin_install(path, plan, rec_id, meta, inst=None, replace=False):
+    """Unpack a planned plugin. Client mods get the virus check. Returns the record."""
+    inst = inst or I()
+    sdir = plugin_server_dir(inst)
+    recs = plugin_records(inst)
+    mine = recs.get(rec_id, {})
+    for f in plan["server"]:
+        dest = os.path.join(sdir, f)
+        if os.path.exists(dest) and not (replace and f in mine.get("server", [])):
+            raise RuntimeError("A plugin folder named %s already exists in Resources/Server." % f)
+    for _, c in plan["client"]:
+        if os.path.exists(os.path.join(inst.CLIENT_DIR, c)) and not (replace and c in mine.get("client", [])):
+            raise RuntimeError("A mod named %s already exists (Mods page)." % c)
+    tdir = tempfile.mkdtemp(dir=UPLOAD_TMP, prefix=".plug-")
+    try:
+        scans = {}
+        with zipfile.ZipFile(path) as z:
+            byname = {zi.filename.replace("\\", "/"): zi for zi in z.infolist()}
+            total = 0
+            for f, files in plan["server"].items():
+                for src, rel in files:
+                    zi = byname[src]
+                    total += zi.file_size
+                    if total > 1024 ** 3:
+                        raise RuntimeError("The plugin unpacks to more than 1 GB - not installed.")
+                    out = os.path.normpath(os.path.join(tdir, "S", f, rel))
+                    if not out.startswith(os.path.join(tdir, "S", f) + os.sep):
+                        raise RuntimeError("unsafe path")
+                    os.makedirs(os.path.dirname(out), exist_ok=True)
+                    with z.open(zi) as r, open(out, "wb") as w:
+                        shutil.copyfileobj(r, w)
+            for src, c in plan["client"]:
+                out = os.path.join(tdir, "C", c)
+                os.makedirs(os.path.dirname(out), exist_ok=True)
+                with z.open(byname[src]) as r, open(out, "wb") as w:
+                    shutil.copyfileobj(r, w)
+                res = scans[c] = modscan.scan(out)
+                if res["verdict"] == "blocked":
+                    APP.alerts.raise_("mod:%s:%s" % (inst.id, c), "A plugin's client mod failed the virus check: %s" % c,
+                                      "\n".join(res["reasons"]) + "\nThe plugin was not installed.")
+                    raise RuntimeError("The plugin's client mod %s failed the virus check: %s" % (c, "; ".join(res["reasons"][:3])))
+        if replace:
+            plugin_remove(rec_id, inst, keep_record=True)
+        os.makedirs(sdir, exist_ok=True)
+        for f in plan["server"]:
+            src = os.path.join(tdir, "S", f)
+            if not IS_WIN:
+                for root, dirs, files in os.walk(src):
+                    os.chmod(root, 0o2775)
+                    for fn in files:
+                        os.chmod(os.path.join(root, fn), 0o664)
+            shutil.move(src, os.path.join(sdir, f))
+        for _, c in plan["client"]:
+            src, dest = os.path.join(tdir, "C", c), os.path.join(inst.CLIENT_DIR, c)
+            if not IS_WIN:
+                os.chmod(src, 0o664)
+            shutil.move(src, dest)
+            modscan.remember(dest, scans[c].get("sha256"))
+    except PermissionError:
+        raise RuntimeError("EasyServer may not write to Resources/Server yet. Run the installer once more (it updates "
+                           "the folder permissions), then try again.")
+    finally:
+        shutil.rmtree(tdir, ignore_errors=True)
+    rec = dict(meta, server=sorted(plan["server"]), client=[c for _, c in plan["client"]], installed=now(), on=True)
+    d = _plug_read()
+    d.setdefault(inst.id, {})[rec_id] = rec
+    _plug_write(d)
+    if plan["client"]:
+        refresh_mod_desc()
+        APP.config_changed()
+    return rec
+
+
+def plugin_set_on(rec_id, on, inst=None):
+    inst = inst or I()
+    d = _plug_read()
+    rec = d.get(inst.id, {}).get(rec_id)
+    if not rec:
+        raise RuntimeError("Unknown plugin")
+    off = plugin_off_dir(inst)
+    for f in rec["server"]:
+        a, b = os.path.join(plugin_server_dir(inst), f), os.path.join(off, f)
+        src, dest = (b, a) if on else (a, b)
+        if os.path.exists(src) and not os.path.exists(dest):
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            shutil.move(src, dest)
+    for c in rec["client"]:
+        a, b = os.path.join(inst.CLIENT_DIR, c), os.path.join(inst.DISABLED_DIR, c)
+        src, dest = (b, a) if on else (a, b)
+        if os.path.exists(src) and not os.path.exists(dest):
+            shutil.move(src, dest)
+    rec["on"] = bool(on)
+    _plug_write(d)
+    if rec["client"]:
+        refresh_mod_desc()
+        APP.config_changed()
+
+
+def plugin_remove(rec_id, inst=None, keep_record=False):
+    inst = inst or I()
+    d = _plug_read()
+    rec = d.get(inst.id, {}).get(rec_id)
+    if not rec:
+        raise RuntimeError("Unknown plugin")
+    for f in rec["server"]:
+        if PLUGIN_FOLDER_RE.fullmatch(f) and f.lower() != OWN_PLUGIN.lower():
+            for base in (plugin_server_dir(inst), plugin_off_dir(inst)):
+                p = os.path.join(base, f)
+                if os.path.isdir(p) and not os.path.islink(p):
+                    shutil.rmtree(p)
+    for c in rec["client"]:
+        for base in (inst.CLIENT_DIR, inst.DISABLED_DIR):
+            try:
+                os.remove(os.path.join(base, c))
+            except OSError:
+                pass
+    if not keep_record:
+        d[inst.id].pop(rec_id, None)
+        _plug_write(d)
+    if rec["client"] and not keep_record:
+        refresh_mod_desc()
+        APP.config_changed()
+
+
+def plugin_errors(inst=None):
+    """{plugin folder: (count, last line)} of Lua errors in the newest part of Server.log."""
+    inst = inst or I()
+    out = {}
+    try:
+        with open_shared(inst.SERVER_LOG, "rb") as f:
+            size = os.fstat(f.fileno()).st_size
+            f.seek(max(0, size - 512 * 1024))
+            text = f.read().decode("utf-8", "replace")
+    except OSError:
+        return out
+    for line in text.splitlines():
+        if not re.search(r"(?i)lua error|\[lua\].{0,80}error|threw an error|stack traceback", line):
+            continue
+        m = re.search(r"Resources[\\/]+Server[\\/]+([A-Za-z0-9_.\-]+)", line)
+        if m:
+            c, _ = out.get(m.group(1), (0, ""))
+            out[m.group(1)] = (c + 1, line.strip()[:300])
+    return out
+
+
+def plugins_overview(inst=None):
+    inst = inst or I()
+    recs = plugin_records(inst)
+    errs = plugin_errors(inst)
+    managed = {f for r in recs.values() for f in r["server"]}
+    installed = []
+    for rid, r in sorted(recs.items()):
+        e = [errs[f] for f in r["server"] if f in errs]
+        installed.append(dict(r, id=rid, errors=sum(x[0] for x in e), last_error=e[-1][1] if e else ""))
+    other = []
+    try:
+        for n in sorted(os.listdir(plugin_server_dir(inst)), key=str.lower):
+            p = os.path.join(plugin_server_dir(inst), n)
+            if os.path.isdir(p) and n != OWN_PLUGIN and n not in managed and not n.startswith("."):
+                other.append({"folder": n, "errors": errs.get(n, (0, ""))[0], "last_error": errs.get(n, (0, ""))[1]})
+    except OSError:
+        pass
+    return {"installed": installed, "other": other, "own_errors": errs.get(OWN_PLUGIN, (0, ""))[0]}
+
+
+def _plug_get(url, accept="application/vnd.github+json"):
+    req = urllib.request.Request(url, headers={"User-Agent": "BeamMP-EasyServer/%s (plugins)" % EASY_VERSION, "Accept": accept})
+    r = urllib.request.urlopen(req, timeout=30)
+    if (urllib.parse.urlparse(r.geturl()).hostname or "") not in PLUGIN_HOSTS:
+        r.close()
+        raise RuntimeError("The download was sent to an unexpected website - stopped.")
+    return r
+
+
+def plugin_fetch(job, inst_id, entry):
+    """Background job: download a catalog plugin and work out what it would install. Stops for the owner's OK."""
+    use_server(inst_id)
+    try:
+        job.update(state="Looking up the newest version…")
+        repo = entry["repo"]
+        if entry["source"] == "release":
+            with _plug_get("https://api.github.com/repos/%s/releases/latest" % repo) as r:
+                rel = json.loads(r.read(2 * 1024 * 1024).decode("utf-8"))
+            assets = [a for a in rel.get("assets") or [] if str(a.get("name", "")).lower().endswith(".zip")]
+            url = assets[0]["browser_download_url"] if assets else rel.get("zipball_url")
+            version = str(rel.get("tag_name") or "")[:40]
+        else:
+            with _plug_get("https://api.github.com/repos/%s" % repo) as r:
+                info = json.loads(r.read(2 * 1024 * 1024).decode("utf-8"))
+            br = str(info.get("default_branch") or "main")
+            with _plug_get("https://api.github.com/repos/%s/commits/%s" % (repo, urllib.parse.quote(br))) as r:
+                sha = str(json.loads(r.read(4 * 1024 * 1024).decode("utf-8")).get("sha") or "")
+            if not re.fullmatch(r"[0-9a-f]{40}", sha):
+                raise RuntimeError("Couldn't find the newest version on GitHub.")
+            url = "https://codeload.github.com/%s/zip/%s" % (repo, sha)
+            version = br + "@" + sha[:7]
+        if not url or (urllib.parse.urlparse(url).hostname or "") not in PLUGIN_HOSTS:
+            raise RuntimeError("This plugin has no download on GitHub yet.")
+        tmp = os.path.join(job["dir"], "plugin.zip")
+        h = hashlib.sha256()
+        got = 0
+        with _plug_get(url, "application/octet-stream") as r, open(tmp, "wb") as f:
+            job.update(total=int(r.headers.get("Content-Length") or 0))
+            while True:
+                chunk = r.read(1024 * 1024)
+                if not chunk:
+                    break
+                got += len(chunk)
+                if got > PLUGIN_MAX:
+                    raise RuntimeError("too big (over 300 MB)")
+                h.update(chunk)
+                f.write(chunk)
+                job.update(done=got, state="Downloading…")
+        if not zipfile.is_zipfile(tmp):
+            raise RuntimeError("GitHub didn't send a zip file.")
+        plan = plugin_plan(tmp, entry.get("folder") or "")
+        job.update(ok=True, finished=True, state="Ready to install", review=True, plan=plan_public(plan), version=version,
+                   sha256=h.hexdigest(), size=got, _plan=plan, _path=tmp, url=url)
+    except Exception as e:
+        job.update(ok=False, finished=True, state="Failed", error=str(e) if isinstance(e, RuntimeError) else short_err(e))
+
+
 # ----------------------------------------------------------------------------- log explainer
 # (id, pattern, level, title, what it means, what to do). {1} etc. are filled from the match.
 LOG_RULES = [
@@ -5500,7 +6199,7 @@ MOD_WRITE = {"/api/players/act", "/api/bans/add", "/api/bans/remove", "/api/allo
              "/api/notifications/read", "/api/notifications/clear", "/api/security/ack", "/api/logout",
              "/api/events/stop", "/api/map", "/api/maintenance"}
 VIEWER_WRITE = {"/api/logout", "/api/notifications/read", "/api/logs/explain", "/api/devices"}
-OWNER_WRITE = {"/api/users", "/api/password", "/api/2fa/begin", "/api/2fa/confirm", "/api/2fa/disable", "/api/remote",
+OWNER_WRITE = {"/api/plugins/fetch", "/api/plugins/upload", "/api/plugins/install", "/api/plugins/toggle", "/api/plugins/remove", "/api/plugins/adopt", "/api/users", "/api/password", "/api/2fa/begin", "/api/2fa/confirm", "/api/2fa/disable", "/api/remote",
                "/api/authkey", "/api/import", "/api/power/helper", "/api/servers/delete", "/api/statuspage", "/api/supporter"}
 ADMIN_GET = {"/api/export", "/api/backups/download", "/api/phoneapp", "/api/ntfy", "/api/power/offline",
              "/api/health/report", "/api/health/saved", "/api/users", "/api/activity", "/api/modpack", "/api/integrations", "/api/statuspage"}
@@ -5721,7 +6420,7 @@ ACTION_LABELS = {
     "/api/power/sleep": "Put the computer to sleep", "/api/power/wol": "Turned on Wake-on-LAN", "/api/servers/create": "Created a server",
     "/api/servers/delete": "Deleted a server", "/api/servers/limits": "Changed server limits", "/api/users": "Users: {action} {name}",
     "/api/2fa/confirm": "Turned on two-step login", "/api/2fa/disable": "Turned off two-step login",
-    "/api/timed": "Changed timed announcements", "/api/tools": "Changed the in-game tools (/tp, /repair)", "/api/mods/light": "Light mode for map mods: {on}", "/api/maintenance": "Maintenance mode {state}", "/api/preset": "Applied the preset {preset}", "/api/servers/clone": "Cloned a server",
+    "/api/timed": "Changed timed announcements", "/api/tools": "Changed the in-game tools (/tp, /repair)", "/api/vehicles": "Changed the vehicle rules", "/api/vehicles/preset": "Vehicle rules preset: {preset}", "/api/vehicles/block": "Blocked/allowed vehicle {jbm}", "/api/plugins/install": "Installed a server plugin", "/api/plugins/toggle": "Turned a server plugin on/off: {id}", "/api/plugins/remove": "Removed the server plugin {id}", "/api/modpack/code": "Installed mods from a mod pack code", "/api/mods/light": "Light mode for map mods: {on}", "/api/maintenance": "Maintenance mode {state}", "/api/preset": "Applied the preset {preset}", "/api/servers/clone": "Cloned a server",
     "/api/config/restore": "Restored an older config", "/api/statuspage": "Changed the status page", "/api/joinalerts": "Changed join alerts",
     "/api/updates/install": "Installed a BeamMP update", "/api/duckdns": "Changed DuckDNS", "/api/integrations": "Changed notification integrations",
 }
@@ -8942,6 +9641,231 @@ class Handler(BaseHTTPRequestHandler):
             note = ("Saved. Players download a tiny helper mod (%s) when they join. " % fmt_bytes(len(tools_mod_bytes()))
                     if how == "added" else "Saved. The helper mod was removed. ") + APP.applied_note().replace("Saved. ", "")
         self.send(200, {"ok": True, "note": note, "tools": d})
+
+    # ---------- vehicle rules
+    def get_vehicles(self, q):
+        d = read_veh()
+        mods = server_mod_vehicles()
+        act = veh_activity()
+        for s in act["seen"]:
+            s["kind"] = veh_kind(s["jbm"], mods)
+            s["blocked"] = s["jbm"].lower() in {j.lower() for j, _ in veh_blocklist(d)} if d["on"] else False
+        self.send(200, {"rules": d, "preset": veh_preset_match(d),
+                        "presets": [{"id": k, "label": v[0], "about": v[1]} for k, v in VEH_PRESETS.items()],
+                        "blocked": [{"jbm": j, "why": w} for j, w in veh_blocklist(d)],
+                        "mods": sorted(mods.values(), key=lambda v: (not v["heavy"], v["jbm"].lower())),
+                        "base": {"cars": BASE_CARS, "trailers": BASE_TRAILERS, "props": BASE_PROPS, "heavyprops": BASE_HEAVY_PROPS},
+                        "heavy_limits": {"nodes": HEAVY_NODES, "beams": HEAVY_BEAMS}, "activity": act})
+
+    def post_vehicles(self, q):
+        b = self.body_json()
+        d = read_veh()
+        for k in ("on", "exempt", "only", "props", "trailers", "heavyprops", "heavymods"):
+            if k in b:
+                d[k] = bool(b[k])
+        try:
+            if "cooldown" in b:
+                d["cooldown"] = max(0, min(3600, int(b["cooldown"] or 0)))
+            if "spam" in b:
+                d["spam"] = max(0, min(120, int(b["spam"] or 0)))
+        except (TypeError, ValueError):
+            return self.fail(400, "The cooldown and the spawn limit must be numbers")
+        for k in ("cars", "allow"):
+            if k in b:
+                raw = b[k] if isinstance(b[k], list) else re.split(r"[\s,]+", str(b[k] or ""))
+                lst = []
+                for x in raw:
+                    j = clean_jbm(x)
+                    if x and str(x).strip() and not j:
+                        return self.fail(400, "\"%s\" isn't a vehicle name (letters, numbers, _ . - only)" % str(x)[:40])
+                    if j and j.lower() not in [y.lower() for y in lst]:
+                        lst.append(j)
+                d[k] = lst[:500]
+        if d["only"] and not d["allow"]:
+            return self.fail(400, "Pick at least one car for \"only these cars\", or turn that off")
+        write_veh(d)
+        n = len(veh_blocklist(d))
+        self.send(200, {"ok": True, "rules": d, "note": ("Saved - works within 10 seconds, no restart. %d vehicle%s blocked." %
+                                                        (n, "" if n == 1 else "s")) if d["on"] else "Saved. Vehicle rules are off."})
+
+    def post_vehicles_preset(self, q):
+        pid = self.body_json().get("preset")
+        if pid not in VEH_PRESETS:
+            return self.fail(400, "Unknown preset")
+        d = read_veh()
+        d.update(VEH_PRESETS[pid][2])
+        write_veh(d)
+        self.send(200, {"ok": True, "note": "Using \"%s\" - works within 10 seconds, no restart." % VEH_PRESETS[pid][0]})
+
+    def post_vehicles_block(self, q):
+        b = self.body_json()
+        j = clean_jbm(b.get("jbm"))
+        if not j:
+            return self.fail(400, "Unknown vehicle")
+        d = read_veh()
+        d["cars"] = [x for x in d["cars"] if x.lower() != j.lower()]
+        if b.get("block", True):
+            d["cars"].append(j)
+            d["on"] = True
+        write_veh(d)
+        self.send(200, {"ok": True, "note": ("Blocked %s - works within 10 seconds." if b.get("block", True) else "%s is allowed again.") % j})
+
+    # ---------- server plugins
+    def _plug_job_public(self, j):
+        return {k: v for k, v in j.items() if not k.startswith("_") and k != "dir"}
+
+    def _plug_new_job(self, **kw):
+        with LOCK:
+            for k in [k for k, j in PLUGIN_JOBS.items() if j.get("finished") and now() - j["t"] > 3600]:
+                shutil.rmtree(PLUGIN_JOBS.pop(k).get("dir") or "", ignore_errors=True)
+            if len([j for j in PLUGIN_JOBS.values() if not j.get("finished")]) >= 2:
+                return None
+            os.makedirs(UPLOAD_TMP, exist_ok=True)
+            jid = secrets.token_hex(6)
+            job = dict(kw, job=jid, server=I().id, t=now(), state="Starting…", done=0, total=0, finished=False,
+                       dir=tempfile.mkdtemp(dir=UPLOAD_TMP, prefix=".plug-dl-"))
+            PLUGIN_JOBS[jid] = job
+            return job
+
+    def get_plugins(self, q):
+        sdir = plugin_server_dir()
+        self.send(200, {"catalog": plugin_catalog(), **plugins_overview(),
+                        "writable": IS_WIN or os.access(sdir, os.W_OK), "owner": self.sess.get("role", "owner") == "owner"})
+
+    def post_plugins_fetch(self, q):
+        pid = str(self.body_json().get("id") or "")
+        entry = next((p for p in plugin_catalog() if p["id"] == pid), None)
+        if not entry:
+            return self.fail(400, "That plugin isn't in the list")
+        job = self._plug_new_job(id=pid, name=entry["name"], entry=entry)
+        if not job:
+            return self.fail(429, "Two plugin downloads are already running - wait for one to finish")
+        threading.Thread(target=plugin_fetch, args=(job, I().id, entry), daemon=True).start()
+        self.send(200, {"ok": True, "job": job["job"]})
+
+    def get_plugins_job(self, q):
+        j = PLUGIN_JOBS.get(q.get("job") or "")
+        if not j or j["server"] != I().id:
+            return self.fail(404, "no such download")
+        self.send(200, self._plug_job_public(j))
+
+    def put_plugins_upload(self, q):
+        name = safe_zip_name(q.get("name"))
+        if not name:
+            return self.fail(400, "Only .zip files can be uploaded")
+        job = self._plug_new_job(id="file-" + re.sub(r"[^a-z0-9_\-]", "-", os.path.splitext(name)[0].lower())[:30].strip("-"),
+                                 name=os.path.splitext(name)[0][:60], entry=None)
+        if not job:
+            return self.fail(429, "Two plugin downloads are already running - wait for one to finish")
+        tmp = os.path.join(job["dir"], "plugin.zip")
+        try:
+            self.body_to_file(tmp, PLUGIN_MAX)
+            if not zipfile.is_zipfile(tmp):
+                raise RuntimeError("That isn't a zip file.")
+            with open(tmp, "rb") as f:
+                sha = hashlib.sha256(f.read()).hexdigest()
+            plan = plugin_plan(tmp)
+            job.update(ok=True, finished=True, state="Ready to install", review=True, plan=plan_public(plan), version="uploaded",
+                       sha256=sha, size=os.path.getsize(tmp), _plan=plan, _path=tmp, url="")
+        except Exception as e:
+            job.update(ok=False, finished=True, state="Failed", error=str(e) if isinstance(e, RuntimeError) else short_err(e))
+        self.send(200 if job.get("ok") else 400, self._plug_job_public(job))
+
+    def post_plugins_install(self, q):
+        b = self.body_json()
+        j = PLUGIN_JOBS.get(str(b.get("job") or ""))
+        if not j or j["server"] != I().id or not j.get("review") or j.get("installed"):
+            return self.fail(404, "That download is gone - start again")
+        if not j.get("entry") and b.get("trust") is not True:
+            return self.fail(400, "Tick that you trust this plugin's author first")
+        rid = j["id"]
+        replace = rid in plugin_records()
+        e = j.get("entry") or {}
+        meta = {"name": j["name"], "author": e.get("author", ""), "page": e.get("page", ""), "license": e.get("license", ""),
+                "version": j.get("version", ""), "sha256": j.get("sha256", ""), "catalog": bool(e), "url": j.get("url", "")}
+        try:
+            plugin_install(j["_path"], j["_plan"], rid, meta, replace=replace)
+        except RuntimeError as ex:
+            return self.fail(400, str(ex))
+        j["installed"] = True
+        shutil.rmtree(j.get("dir") or "", ignore_errors=True)
+        self.send(200, {"ok": True, "note": "%s %s. Restart the server (Overview) to load it." % (j["name"], "updated" if replace else "installed")})
+
+    def post_plugins_toggle(self, q):
+        b = self.body_json()
+        try:
+            plugin_set_on(str(b.get("id") or ""), bool(b.get("on")))
+        except RuntimeError as e:
+            return self.fail(400, str(e))
+        self.send(200, {"ok": True, "note": ("Turned on" if b.get("on") else "Turned off") + ". Restart the server (Overview) for it to take effect."})
+
+    def post_plugins_remove(self, q):
+        try:
+            plugin_remove(str(self.body_json().get("id") or ""))
+        except RuntimeError as e:
+            return self.fail(400, str(e))
+        self.send(200, {"ok": True, "note": "Removed. Restart the server (Overview) for it to take effect."})
+
+    def post_plugins_adopt(self, q):
+        """Let EasyServer manage a plugin someone copied in by hand (so it can be turned off and on)."""
+        f = str(self.body_json().get("folder") or "")
+        if not PLUGIN_FOLDER_RE.fullmatch(f) or f.lower() == OWN_PLUGIN.lower() or not os.path.isdir(os.path.join(plugin_server_dir(), f)):
+            return self.fail(400, "Unknown plugin folder")
+        rid = "manual-" + re.sub(r"[^a-z0-9_\-]", "-", f.lower())[:30]
+        d = _plug_read()
+        d.setdefault(I().id, {})[rid] = {"name": f, "author": "", "page": "", "license": "", "version": "copied in by hand",
+                                         "sha256": "", "catalog": False, "url": "", "server": [f], "client": [],
+                                         "installed": now(), "on": True}
+        _plug_write(d)
+        self.send(200, {"ok": True, "id": rid})
+
+    # ---------- mod pack share code
+    def get_modpack_code(self, q):
+        """A short code with the BeamNG repository mods that are turned on. Another EasyServer can paste it."""
+        ids, other = [], []
+        for m in list_mods():
+            if not m["enabled"] or m["builtin"]:
+                continue
+            info = modscan_info_cached(os.path.join(I().CLIENT_DIR, m["name"]))
+            (ids.append(info["resource_id"]) if info else other.append(m["name"]))
+        code = ""
+        if ids:
+            raw = zlib.compress(json.dumps({"v": 1, "ids": sorted(set(ids))}, separators=(",", ":")).encode(), 9)
+            code = "ES1-" + base64.urlsafe_b64encode(raw).decode().rstrip("=")
+        self.send(200, {"code": code, "count": len(set(ids)), "not_included": other})
+
+    def post_modpack_code(self, q):
+        code = re.sub(r"\s+", "", str(self.body_json().get("code") or ""))
+        try:
+            if not code.startswith("ES1-") or len(code) > 20000:
+                raise ValueError
+            raw = zlib.decompress(base64.urlsafe_b64decode(code[4:] + "=" * (-len(code[4:]) % 4)), bufsize=65536)
+            ids = json.loads(raw[:200000].decode("utf-8")).get("ids")
+            ids = [int(x) for x in ids if isinstance(x, int) and 0 < x < 10 ** 7][:60]
+        except (ValueError, TypeError, AttributeError, zlib.error, binascii.Error):
+            return self.fail(400, "That isn't an EasyServer mod pack code (they start with ES1-)")
+        have = installed_repo_ids()
+        todo = [i for i in ids if i not in have]
+        if not todo:
+            return self.send(200, {"ok": True, "jobs": [], "note": "You already have all %d mods from that code." % len(ids)})
+        jobs = []
+        with LOCK:
+            for i in todo:
+                jid = secrets.token_hex(6)
+                job = {"job": jid, "id": i, "server": I().id, "t": now(), "state": "Waiting…", "done": 0, "total": 0,
+                       "finished": False, "name": "", "title": "Mod %d" % i}
+                MODB_JOBS[jid] = job
+                jobs.append(job)
+        inst_id = I().id
+
+        def run():
+            for job in jobs:                    # one at a time - kind to beamng.com
+                modb_install(job, inst_id, job["id"])
+        threading.Thread(target=run, daemon=True).start()
+        self.send(200, {"ok": True, "jobs": [j["job"] for j in jobs],
+                        "note": "Downloading %d mod%s from the BeamNG repository, one after another (%d you already have). "
+                                "Each gets the virus check. Watch the progress on this page."
+                                % (len(todo), "" if len(todo) == 1 else "s", len(ids) - len(todo))})
 
     # ---------- per-map statistics
     def get_players_maps(self, q):
