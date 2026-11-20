@@ -25,6 +25,8 @@ No config files and no command line needed. The installer downloads the newest o
 - **🔌 Friends can join** - a health check tells you what's wrong (AuthKey, port, firewall) and can open the port on your router in one click.
 - **🛡️ Moderation** - kick, mute, ban, friends-only or invite-only, anti-bot and chat filter presets, in-game admin commands.
 - **🎮 Extras for players** - `/tp`, `/repair`, map votes, events, map rotation, playtime stats and records.
+- **🚗 Vehicle rules** - block props, big physics props, trailers or any car; heavy mod cars are found automatically; stop spawn spam. Presets: Racing, Roleplay, No chaos.
+- **🔌 Server plugins** - install community plugins (CareerMP, freeRoamMP, BeamJoy …) from their authors' GitHub pages in a few clicks, turn them off and on, see their errors.
 - **🔔 Notifications & Discord** - crashes, joins and updates on Discord, email, phone or Telegram; a Discord bot with `/status`, `/start`, `/join`.
 - **💾 Safe by default** - automatic backups, encrypted keys, two-step login, users with roles (admin / moderator / viewer).
 - **💸 Free** - open source, no ads, no account.
@@ -52,7 +54,7 @@ Then work through the [guides](#-guides) below - start with [Let friends join ov
 - [📖 Guides](#-guides) - step by step for every feature
 - [Feature reference](#feature-reference) - cars & chat, moderation, anti-bot, privacy
 - [Mod virus check](#️-mod-virus-check) · [Encrypted keys](#-your-keys-are-encrypted) · [Security](#how-its-built-security)
-- [Roadmap](#️-roadmap) · [Support](#️-support-the-project)
+- [Roadmap](#️-roadmap) · [Credits](#-credits) · [Support](#️-support-the-project)
 
 ---
 
@@ -535,6 +537,23 @@ All of this runs in the small EasyServerStats plugin on the server, so players d
   - **Max players from one internet connection** (your own network is never limited)
   - **Max new players per minute:** above it, new joins pause for 2 minutes and you get a security alert
 
+### Vehicle rules (Config page)
+
+Also runs in the EasyServerStats plugin: no restart, nothing for players to download. Off until you turn it on or pick a preset (*Anything goes*, *No chaos*, *Racing*, *Roleplay*).
+
+- **Block props** (cones, barrels, ramps …), **big physics props** (crushers, spinners, shipping containers, bridges - the usual cause of server-wide lag) and **trailers**, or **any car by name**. **Only these cars** turns it around for one-make racing.
+- **Heavy mod cars are found automatically:** EasyServer counts the nodes and beams of every car in your mods and marks very complex ones. Prop and trailer mods are recognised too, and new mods are covered as soon as you add them.
+- **Seconds between spawns** and **max spawns per minute** stop spawn spam.
+- A blocked spawn is refused before anyone sees the car, and the player gets a chat message saying why. Admins can be exempt.
+- The page lists what players actually spawned in the last 7 days, with a **Block** button, and what was refused.
+
+### Server plugins (Mods page)
+
+- **Community plugins** (CareerMP, freeRoamMP, BeamJoy Sandbox, Environment Sync, CobaltEssentials): **Install…** downloads the plugin from its author's GitHub page and shows exactly what goes where - server folders and the mods players will download - before anything is installed. Client mods get the virus check.
+- **Update, turn off / on, remove** in one click; **Lua errors** from the server log are shown next to the plugin that caused them. Plugins you copied into `Resources/Server` by hand are listed too.
+- **From a .zip file:** possible after ticking that you trust the author.
+- Only the owner can install plugins: a plugin can do anything the server can. Restart the server after a change.
+- **Mod pack code** (Mods → Share code): a short `ES1-…` code with your BeamNG repository mods - paste it into another EasyServer to get the same mods.
 
 ### Privacy
 
@@ -600,6 +619,22 @@ Suggestions are welcome; open an issue.
 **Worried about DDoS / your home IP?** Turn on **Settings → Hide your IP** and see [PROTECT-YOUR-IP.md](PROTECT-YOUR-IP.md).
 
 **Found a security bug?** Please don't open a public issue - report it privately with the **Report a vulnerability** button on the [Security tab](https://github.com/Csabika-dev/beammp-easyserver/security) or email **beammp.easyserver.security@gmail.com**. See [SECURITY.md](SECURITY.md).
+
+## 🙏 Credits
+
+EasyServer is glue around other people's great work. Thank you to:
+
+- **[BeamMP](https://beammp.com)** - the BeamMP team made multiplayer for BeamNG.drive and the server EasyServer installs ([BeamMP-Server](https://github.com/BeamMP/BeamMP-Server), AGPL-3.0). EasyServer downloads it from their GitHub; it isn't changed or shipped here.
+- **[BeamNG GmbH](https://www.beamng.com)** for BeamNG.drive, and every **mod author** on the [BeamNG repository](https://www.beamng.com/resources/). The mod browser only links to and downloads from their pages - mods stay theirs.
+- **Server plugin authors** in the plugin list ([docs/plugins.json](docs/plugins.json)), shown with their name, page and licence in the dashboard. EasyServer downloads each plugin from its author's own GitHub page and doesn't ship any of them:
+  - **StanleyDudek** - [CareerMP](https://github.com/StanleyDudek/CareerMP), [freeRoamMP](https://github.com/StanleyDudek/freeRoamMP), and the maintained [CobaltEssentials](https://github.com/StanleyDudek/CobaltEssentials) by **Preston Elam (CobaltTetra)**
+  - **Samaël (my-name-is-samael)** and **CaptainNugget** - [BeamJoy](https://github.com/my-name-is-samael/BeamJoy) / [BeamJoy Revived](https://github.com/foodcache3/BeamJoy-Revived)
+  - **Evan Mulawski** - [BeamMP Environment Sync](https://github.com/EvanMulawski/BeamMP-EnvSync)
+- **[Lima](https://github.com/lima-vm/lima)** (Apache-2.0) runs the Linux server on a Mac.
+- **[Python](https://www.python.org)** (PSF licence) - the dashboard is plain Python; Windows gets the official signed Python from python.org.
+- **[VirusTotal](https://www.virustotal.com)** (optional mod check), **[ntfy](https://ntfy.sh)** (phone notifications), **[DuckDNS](https://www.duckdns.org)** (optional address), **[GoatCounter](https://www.goatcounter.com)** (privacy-friendly visit counter on the website).
+
+Want your plugin in the list? Open a pull request that adds it to `docs/plugins.json` (name, author, GitHub repo, a one-line description and any notes).
 
 ## ❤️ Support the project
 
