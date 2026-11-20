@@ -130,8 +130,9 @@ def _create_server(server, config, start, base):
         with open(os.path.join(d, "Resources/Server/EasyServerStats/main.lua"), "w", encoding="utf-8") as f:
             f.write(lua)
     os.chmod(os.path.join(d, "ServerConfig.toml"), 0o660)
-    for sub in ("Resources/Client", "Resources/Client-disabled", "Resources/Server/EasyServerStats", "Resources/Quarantine"):
-        os.chmod(os.path.join(d, sub), 0o2775)
+    for sub in ("Resources/Client", "Resources/Client-disabled", "Resources/Server", "Resources/Server/EasyServerStats",
+                "Resources/Quarantine"):
+        os.chmod(os.path.join(d, sub), 0o2775)    # Resources/Server: the dashboard installs plugins there
     q = os.path.join(d, "Resources/Quarantine")
     for root, dirs, files in os.walk(d):
         for x in dirs + files:
