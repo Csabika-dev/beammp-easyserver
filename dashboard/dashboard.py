@@ -4404,9 +4404,15 @@ def plugin_off_dir(inst=None):
     return os.path.join(DATA_DIR, "plugins-off", (inst or I()).id)
 
 
+WIN_RESERVED_RE = re.compile(r"(?i)(con|prn|aux|nul|com\d|lpt\d)(\..*)?")
+
+
 def _zip_member_ok(zi):
     n = zi.filename.replace("\\", "/")
     if n.startswith("/") or re.match(r"^[A-Za-z]:", n) or any(p in ("..",) for p in n.split("/")):
+        return False
+    # ":" would write a hidden NTFS stream on Windows; "CON", "NUL" ... hang or fail there
+    if any(c in n for c in ':*?"<>|\x00') or any(WIN_RESERVED_RE.fullmatch(p) for p in n.split("/") if p):
         return False
     if (zi.external_attr >> 16) & 0o170000 == 0o120000:      # symbolic link
         return False
@@ -4448,7 +4454,7 @@ def plugin_plan(path, folder_hint=""):
                     server.setdefault(folder, []).append((n, n[len(pre):]))
                     used.add(n)
     for f in list(server):
-        if not PLUGIN_FOLDER_RE.fullmatch(f):
+        if not PLUGIN_FOLDER_RE.fullmatch(f) or WIN_RESERVED_RE.fullmatch(f) or f.strip(".") == "":
             raise RuntimeError("The plugin folder name \"%s\" isn't allowed." % f[:60])
         if f.lower() == OWN_PLUGIN.lower():
             raise RuntimeError("The file tries to replace EasyServer's own plugin - not installed.")
@@ -4463,6 +4469,19 @@ def plugin_plan(path, folder_hint=""):
 def plan_public(plan):
     return {"server": [{"folder": f, "files": len(v), "lua": sum(1 for _, r in v if r.lower().endswith(".lua"))} for f, v in plan["server"].items()],
             "client": [c for _, c in plan["client"]], "skipped": plan["skipped"]}
+
+
+def _move_new(src, dest):
+    """Move to a path that must not exist yet. A link or folder that appeared there in the meantime
+    (the game server's user can write to Resources/Server) is refused instead of being followed."""
+    if os.path.lexists(dest):
+        raise RuntimeError("%s appeared while installing - not overwritten. Try again." % os.path.basename(dest))
+    try:
+        os.rename(src, dest)
+    except OSError:
+        if os.path.lexists(dest):
+            raise
+        shutil.move(src, dest)
 
 
 def plugin_install(path, plan, rec_id, meta, inst=None, replace=False):
@@ -4499,6 +4518,9 @@ def plugin_install(path, plan, rec_id, meta, inst=None, replace=False):
             for src, c in plan["client"]:
                 out = os.path.join(tdir, "C", c)
                 os.makedirs(os.path.dirname(out), exist_ok=True)
+                total += byname[src].file_size
+                if total > 4 * 1024 ** 3:
+                    raise RuntimeError("The plugin unpacks to more than 4 GB - not installed.")
                 with z.open(byname[src]) as r, open(out, "wb") as w:
                     shutil.copyfileobj(r, w)
                 res = scans[c] = modscan.scan(out)
@@ -4516,12 +4538,12 @@ def plugin_install(path, plan, rec_id, meta, inst=None, replace=False):
                     os.chmod(root, 0o2775)
                     for fn in files:
                         os.chmod(os.path.join(root, fn), 0o664)
-            shutil.move(src, os.path.join(sdir, f))
+            _move_new(src, os.path.join(sdir, f))
         for _, c in plan["client"]:
             src, dest = os.path.join(tdir, "C", c), os.path.join(inst.CLIENT_DIR, c)
             if not IS_WIN:
                 os.chmod(src, 0o664)
-            shutil.move(src, dest)
+            _move_new(src, dest)
             modscan.remember(dest, scans[c].get("sha256"))
     except PermissionError:
         raise RuntimeError("EasyServer may not write to Resources/Server yet. Run the installer once more (it updates "
@@ -4546,16 +4568,20 @@ def plugin_set_on(rec_id, on, inst=None):
         raise RuntimeError("Unknown plugin")
     off = plugin_off_dir(inst)
     for f in rec["server"]:
+        if not PLUGIN_FOLDER_RE.fullmatch(f) or f.lower() == OWN_PLUGIN.lower():
+            continue
         a, b = os.path.join(plugin_server_dir(inst), f), os.path.join(off, f)
         src, dest = (b, a) if on else (a, b)
-        if os.path.exists(src) and not os.path.exists(dest):
+        if os.path.isdir(src) and not os.path.islink(src) and not os.path.lexists(dest):
             os.makedirs(os.path.dirname(dest), exist_ok=True)
-            shutil.move(src, dest)
+            _move_new(src, dest)
     for c in rec["client"]:
+        if not safe_zip_name(c):
+            continue
         a, b = os.path.join(inst.CLIENT_DIR, c), os.path.join(inst.DISABLED_DIR, c)
         src, dest = (b, a) if on else (a, b)
-        if os.path.exists(src) and not os.path.exists(dest):
-            shutil.move(src, dest)
+        if os.path.isfile(src) and not os.path.islink(src) and not os.path.lexists(dest):
+            _move_new(src, dest)
     rec["on"] = bool(on)
     _plug_write(d)
     if rec["client"]:
@@ -9762,8 +9788,11 @@ class Handler(BaseHTTPRequestHandler):
             self.body_to_file(tmp, PLUGIN_MAX)
             if not zipfile.is_zipfile(tmp):
                 raise RuntimeError("That isn't a zip file.")
+            h = hashlib.sha256()
             with open(tmp, "rb") as f:
-                sha = hashlib.sha256(f.read()).hexdigest()
+                for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                    h.update(chunk)
+            sha = h.hexdigest()
             plan = plugin_plan(tmp)
             job.update(ok=True, finished=True, state="Ready to install", review=True, plan=plan_public(plan), version="uploaded",
                        sha256=sha, size=os.path.getsize(tmp), _plan=plan, _path=tmp, url="")
@@ -9839,8 +9868,11 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if not code.startswith("ES1-") or len(code) > 20000:
                 raise ValueError
-            raw = zlib.decompress(base64.urlsafe_b64decode(code[4:] + "=" * (-len(code[4:]) % 4)), bufsize=65536)
-            ids = json.loads(raw[:200000].decode("utf-8")).get("ids")
+            dec = zlib.decompressobj()
+            raw = dec.decompress(base64.urlsafe_b64decode(code[4:] + "=" * (-len(code[4:]) % 4)), 65536)
+            if dec.unconsumed_tail:
+                raise ValueError("too big")
+            ids = json.loads(raw.decode("utf-8")).get("ids")
             ids = [int(x) for x in ids if isinstance(x, int) and 0 < x < 10 ** 7][:60]
         except (ValueError, TypeError, AttributeError, zlib.error, binascii.Error):
             return self.fail(400, "That isn't an EasyServer mod pack code (they start with ES1-)")
