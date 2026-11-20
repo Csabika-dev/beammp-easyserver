@@ -28,7 +28,7 @@ No config files and no command line needed. The installer downloads the newest o
 - **🚗 Vehicle rules** - block props, big physics props, trailers or any car; heavy mod cars are found automatically; stop spawn spam. Presets: Racing, Roleplay, No chaos.
 - **🔌 Server plugins** - install community plugins (CareerMP, freeRoamMP, BeamJoy …) from their authors' GitHub pages in a few clicks, turn them off and on, see their errors.
 - **🔔 Notifications & Discord** - crashes, joins and updates on Discord, email, phone or Telegram; a Discord bot with `/status`, `/start`, `/join`.
-- **💾 Safe by default** - automatic backups, encrypted keys, two-step login, users with roles (admin / moderator / viewer).
+- **💾 Safe by default** - automatic backups, encrypted keys, two-step login, a team with roles (admin / moderator / viewer or your own), invite links, per-server access and internet logins with two-step login.
 - **💸 Free** - open source, no ads, no account.
 
 Details for every item are further down - or watch the [setup video](https://youtu.be/DWD9HcW1OIc).
@@ -367,19 +367,22 @@ Moderators can do this too.
 <summary><b>Give friends their own login (admins, moderators, viewers)</b></summary>
 
 **Settings → Users & roles** (only you, the owner, see this):
-1. Type a name, pick a role, set a password (at least 10 characters) → **Add**. Give them the name, the password and the dashboard address.
+1. **Invite someone:** pick a role (and, with several servers, which server) → **Make invite link** → send it. They choose their own name and password - you never see it. The link works once and runs out after 7 days; open invites can be revoked. Or add an account yourself under *Or add an account yourself*.
 2. Roles:
 
 | Role | Can |
 |---|---|
 | **Viewer** | Look at everything, change nothing |
 | **Moderator** | Kick, mute, ban, unban, who can join, restart the server, maintenance mode, chat messages |
-| **Admin** | Everything except users, passwords, two-step login, internet access and the status page |
+| **Admin** | Everything except users, passwords, two-step login, internet access, the status page and server plugins |
+| **Custom roles** | Whatever you tick: Players · Start & stop · Maps & events · Mods · Server config · Dashboard settings |
 | **Owner** (you) | Everything |
 
-3. Change a role, reset a password, disable or delete someone at any time on the same card.
+3. **Only some servers:** with more than one server, **Servers…** gives an account a role per server (e.g. admin on the drift server, nothing on the others). Such an account can't change dashboard-wide settings.
+4. **From the internet:** tick *From the internet* for an account. It then needs its own two-step login (set up under **My account** - click your name at the bottom left - or right away when they accept an internet invite), and internet access to the dashboard must be on. Untick it and they're logged out at once.
+5. Change a role, reset a password or two-step login, disable or delete someone at any time on the same card. Everyone can change their own password and two-step login under **My account**.
 
-Extra accounts can only log in from your home network. **Logs → Activity log** shows who did what, when and from where - including Discord commands and in-game admin actions.
+**Logs → Activity log** shows who did what, when and from where - including Discord commands and in-game admin actions.
 </details>
 
 <details>
