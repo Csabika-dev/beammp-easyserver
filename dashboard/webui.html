@@ -337,9 +337,10 @@ async function boot() {
   try { SESSION = await api("/api/session"); } catch (e) { $("#root").innerHTML = `<div class="center"><div class="card authcard"><h2>Can't reach the dashboard</h2><p class="muted">${esc(e.message)}</p></div></div>`; return; }
   CSRF = SESSION.csrf;
   if (SESSION.needs_setup) return renderSetup();
+  if (location.hash.startsWith("#team=")) return renderTeamInvite(location.hash.slice(6));
   if (!SESSION.logged_in) return renderLogin();
   try { SERVERS = (await api("/api/servers")).servers; } catch (e) { SERVERS = [{ id: "main", name: "Main server" }]; }
-  if (!SERVERS.some(x => x.id === SERVER)) SERVER = "main";
+  if (!SERVERS.some(x => x.id === SERVER)) SERVER = SERVERS[0] ? SERVERS[0].id : "main";
   store.set("es-server", SERVER);
   renderShell();
   const hash = location.hash.slice(1);
@@ -365,7 +366,7 @@ async function approveFromLink(name) {
 function switchServer(id) {
   SERVER = id; store.set("es-server", id);
   const u = new URL(location.href); u.searchParams.delete("srv"); history.replaceState(null, "", u.pathname + "#" + TAB);
-  renderShell(); show(TAB === "servers" ? "overview" : TAB);
+  renderShell(); show(TAB === "servers" || !myTabs().some(t => t[0] === TAB) ? "overview" : TAB);
 }
 
 function authShell(inner) {
@@ -393,7 +394,7 @@ function renderLogin(needCode) {
     <form id="lf" autocomplete="on">
     <label class="f"><span>Name <span class="muted">(leave empty if you're the owner)</span></span><input type="text" id="un" autocomplete="username" spellcheck="false" maxlength="24"></label>
     <label class="f"><span>Password</span><input type="password" id="pw" autocomplete="current-password" autofocus></label>
-    <label class="f ${needCode ? "" : "hidden"}" id="codebox"><span>Two-step code</span><input type="text" id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="123456"><small>From your authenticator app</small></label>
+    <label class="f ${needCode ? "" : "hidden"}" id="codebox"><span>Two-step code</span><input type="text" id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="123456"><small>From your authenticator app (only if two-step login is on for your account)</small></label>
     <label class="toggle" style="border:0;padding:4px 0 12px"><input type="checkbox" id="remember" ${store.get("es-remember", IN_APP ? "1" : "0") === "1" ? "checked" : ""}><span><b>Stay logged in on this device</b><small>For 30 days. Only turn this on on your own phone or computer. Log out (or Settings → Remembered devices) to forget it</small></span></label>
     <button class="btn primary" id="go" type="submit">Log in</button>
     <p class="small muted" id="err"></p></form>`);
@@ -413,20 +414,32 @@ function renderLogin(needCode) {
 }
 
 const ROLE_TABS = { viewer: ["overview", "players", "network", "logs", "notifications"], moderator: ["overview", "players", "network", "logs", "notifications"] };
-const myTabs = () => ROLE_TABS[SESSION.role] ? TABS.filter(t => ROLE_TABS[SESSION.role].includes(t[0])) : TABS;
+const myRole = () => (SESSION.server_roles && SESSION.server_roles[SERVER]) || null;
+const myTabs = () => {
+  const r = myRole();
+  if (r && r.perms) {                    // custom role: base tabs + what it may change
+    const extra = { config: ["config"], mods: ["mods"], settings: ["settings", "updates", "servers"] };
+    const keep = new Set(["overview", "players", "network", "logs", "notifications"]);
+    r.perms.forEach(p => (extra[p] || []).forEach(t => keep.add(t)));
+    return TABS.filter(t => keep.has(t[0]));
+  }
+  const role = r ? r.role : SESSION.role;
+  return ROLE_TABS[role] ? TABS.filter(t => ROLE_TABS[role].includes(t[0])) : TABS;
+};
 function renderShell() {
   const navs = myTabs().map(([k, label]) => `<button class="nav" data-tab="${k}">${icon(k)}<span>${label}</span>${k === "notifications" ? '<span class="count hidden" data-unread></span>' : ""}</button>`).join("");
   const picker = SERVERS.length > 1 ? `<label class="srvpick"><span class="small muted">Server</span><select data-srv>${SERVERS.map(x => `<option value="${esc(x.id)}" ${x.id === SERVER ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></label>` : "";
   $("#root").innerHTML = `<div class="app">
     <aside class="side"><div class="brand"><div class="logo">${LOGO_SVG}</div><div>BeamMP EasyServer<small>Dashboard ${esc(SESSION.version)}${SESSION.supporter ? " · ❤ Supporter" : ""}</small></div></div>
       ${picker}${navs}<div class="grow"></div>
-      <div class="foot"><button class="iconbtn" id="theme" title="Light / dark mode">${icon("moon")}</button><span class="small muted" title="Logged in as">${esc(SESSION.user || "owner")}${SESSION.role && SESSION.role !== "owner" ? " · " + esc(SESSION.role) : ""}</span><span class="spacer"></span><button class="iconbtn" id="logout" title="Log out">${icon("logout")}</button></div>
+      <div class="foot"><button class="iconbtn" id="theme" title="Light / dark mode">${icon("moon")}</button><button class="small muted" id="myacct" title="My account" style="background:none;border:0;cursor:pointer;padding:0;color:inherit">${esc(SESSION.user || "owner")}${myRole() ? " · " + esc(myRole().name) : ""}</button><span class="spacer"></span><button class="iconbtn" id="logout" title="Log out">${icon("logout")}</button></div>
     </aside>
     <div><nav class="mobilebar">${picker}${navs}<button class="nav" id="theme2">Theme</button></nav><div id="secbar"></div><main id="main"></main></div></div>`;
   document.querySelectorAll("[data-srv]").forEach(el => el.onchange = () => switchServer(el.value));
   document.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => show(b.dataset.tab));
   const flip = () => { const cur = document.documentElement.dataset.theme; store.set("es-theme", cur === "dark" ? "light" : "dark"); applyTheme(); setThemeIcon(); if (TAB === "players") show("players"); };
   $("#theme").onclick = flip; $("#theme2").onclick = flip; setThemeIcon();
+  $("#myacct").onclick = () => openMyAccount();
   $("#logout").onclick = async () => { try { await api("/api/logout", { method: "POST" }); } catch (e) {} try { if ("caches" in window) (await caches.open("es-shell-v2")).delete("/__wake.json"); } catch (e) {} clearInterval(SECTIMER); boot(); };
   clearInterval(SECTIMER); checkSecurity(); SECTIMER = setInterval(() => checkSecurity().catch(() => {}), 30000);
 }
@@ -1821,25 +1834,133 @@ async function loadDevices() {
 async function loadUsers() {
   const el = $("#userscard"); if (!el) return;
   let d; try { d = await api("/api/users"); } catch (e) { el.innerHTML = `<h2>Users &amp; roles</h2><p class="small muted">${esc(e.message)}</p>`; return; }
-  const RL = { admin: "Admin - everything except accounts, passwords and internet access", moderator: "Moderator - players: kick, mute, ban, allow-list, chat, start/restart", viewer: "Viewer - can look, can't change anything" };
+  const allRoles = [...d.roles.map(r => ({ id: r, name: r })), ...d.custom_roles.map(r => ({ id: r.id, name: r.name }))];
+  const rname = id => (allRoles.find(r => r.id === id) || { name: "deleted role" }).name;
+  const roleSel = (attr, cur) => `<select ${attr} style="width:auto">${allRoles.map(r => `<option value="${esc(r.id)}" ${r.id === cur ? "selected" : ""}>${esc(r.name)}</option>`).join("")}</select>`;
+  const many = d.servers.length > 1;
+  const svText = u => u.servers === "all" ? (many ? "all servers" : "") : Object.entries(u.servers).map(([sid, r]) => `${(d.servers.find(s => s.id === sid) || { name: sid }).name}: ${rname(r)}`).join(", ");
+  const RL = { admin: "Admin - everything except accounts, passwords, internet access and plugins", moderator: "Moderator - players: kick, mute, ban, allow-list, chat, start/restart", viewer: "Viewer - can look, can't change anything" };
   el.innerHTML = `<h2>Users &amp; roles</h2>
-    <p class="small muted">Give friends their own login with only the rights they need. You (the owner) log in with the main password and an empty name. Extra accounts only work on your home network - from the internet only the owner can log in. Everything they do shows up in Logs → Activity log.</p>
-    ${d.users.length ? d.users.map(u => `<div class="row small" style="padding:6px 0;border-top:1px solid var(--line);gap:8px;flex-wrap:wrap"><b>${esc(u.name)}</b>${u.disabled ? '<span class="badge warn">disabled</span>' : ""}
-      <select data-role="${esc(u.name)}" style="width:auto">${d.roles.map(r => `<option value="${r}" ${r === u.role ? "selected" : ""}>${r}</option>`).join("")}</select>
-      <span class="muted">${u.last_login ? "last login " + esc(ago(u.last_login)) : "never logged in"}</span><span class="spacer"></span>
-      <button class="btn sm" data-upw="${esc(u.name)}">New password</button><button class="btn sm" data-udis="${esc(u.name)}">${u.disabled ? "Enable" : "Disable"}</button><button class="btn sm danger" data-udel="${esc(u.name)}">Delete</button></div>`).join("") : `<p class="small muted">No extra accounts yet.</p>`}
+    <p class="small muted">Give friends their own login with only the rights they need. You (the owner) log in with the main password and an empty name. Everything they do shows up in Logs → Activity log.</p>
+    ${d.users.length ? d.users.map(u => `<div class="small" style="padding:8px 0;border-top:1px solid var(--line)"><div class="row" style="gap:8px;flex-wrap:wrap"><b>${esc(u.name)}</b>${u.disabled ? '<span class="badge warn">disabled</span>' : ""}${u.totp ? '<span class="badge good">two-step on</span>' : ""}${u.remote ? `<span class="badge ${u.totp ? "good" : "warn"}">${u.totp ? "can log in from the internet" : "internet: needs two-step"}</span>` : ""}
+      ${u.servers === "all" ? roleSel(`data-role="${esc(u.name)}"`, u.role) : `<span class="muted">${esc(svText(u))}</span>`}
+      <span class="muted">${u.last_login ? "last login " + esc(ago(u.last_login)) : "never logged in"}${u.invited_by ? " · invited" : ""}</span><span class="spacer"></span></div>
+      <div class="row" style="gap:6px;flex-wrap:wrap;margin-top:6px">${many ? `<button class="btn sm" data-usrv="${esc(u.name)}">Servers…</button>` : ""}
+        <label class="small" style="display:flex;gap:4px;align-items:center"><input type="checkbox" data-uremote="${esc(u.name)}" ${u.remote ? "checked" : ""}> From the internet</label>
+        ${u.totp ? `<button class="btn sm" data-u2fa="${esc(u.name)}">Reset two-step</button>` : ""}
+        <button class="btn sm" data-upw="${esc(u.name)}">New password</button><button class="btn sm" data-udis="${esc(u.name)}">${u.disabled ? "Enable" : "Disable"}</button><button class="btn sm danger" data-udel="${esc(u.name)}">Delete</button></div></div>`).join("") : `<p class="small muted">No extra accounts yet.</p>`}
+    <h3 style="margin-top:16px">Invite someone</h3>
+    <p class="small muted">Easiest: send a link. They pick their own name and password${d.remote_enabled ? " (and set up two-step login if they may log in from the internet)" : ""} - you never handle their password. The link works once and runs out after 7 days.</p>
+    <div class="row" style="gap:8px;flex-wrap:wrap"><label class="small">Role ${roleSel('id="iv_role"', "moderator")}</label>
+      ${many ? `<label class="small">Servers <select id="iv_srv" style="width:auto"><option value="all">All servers</option>${d.servers.map(s => `<option value="${esc(s.id)}">Only ${esc(s.name)}</option>`).join("")}</select></label>` : ""}
+      <label class="small" style="display:flex;gap:4px;align-items:center"><input type="checkbox" id="iv_remote" ${d.remote_enabled ? "" : "disabled"}> May log in from the internet${d.remote_enabled ? "" : " (turn on Internet access first)"}</label>
+      <button class="btn sm primary" id="iv_make">Make invite link</button></div>
+    <div id="iv_out"></div>
+    ${d.invites.length ? `<div class="small" style="margin-top:8px">${d.invites.map(x => `<div class="row" style="gap:8px;padding:4px 0">Open invite: <b>${esc(rname(x.role))}</b>${x.servers ? " · " + esc(Object.keys(x.servers).map(s => (d.servers.find(v => v.id === s) || { name: s }).name).join(", ")) : ""}${x.remote ? " · internet" : ""} <span class="muted">until ${esc(fmtTime(x.expires))}</span><span class="spacer"></span><button class="btn sm" data-ivrev="${esc(x.id)}">Revoke</button></div>`).join("")}</div>` : ""}
+    <details style="margin-top:12px"><summary class="small">Or add an account yourself (you set the password)</summary>
     <div class="grid g2" style="gap:0 12px;margin-top:10px">
       <label class="f"><span>Name</span><input id="nu_name" maxlength="24" autocomplete="off" spellcheck="false" placeholder="e.g. dani"></label>
-      <label class="f"><span>Role</span><select id="nu_role">${d.roles.map(r => `<option value="${r}" ${r === "moderator" ? "selected" : ""}>${r}</option>`).join("")}</select></label>
+      <label class="f"><span>Role</span>${roleSel('id="nu_role"', "moderator")}</label>
       <label class="f"><span>Password</span><input id="nu_pw" type="password" autocomplete="new-password" placeholder="at least 10 characters"></label>
       <div class="small muted" style="align-self:center">${Object.entries(RL).map(([k, v]) => `<div>${esc(v)}</div>`).join("")}</div></div>
-    <button class="btn primary" id="nu_add">Add account</button>`;
-  const call = async body => { try { await api("/api/users", { json: body }); loadUsers(); toast("Saved"); } catch (e) { toast(e.message, 6000); } };
+    <button class="btn" id="nu_add">Add account</button></details>
+    <h3 style="margin-top:16px">Custom roles</h3>
+    <p class="small muted">Make your own role by ticking what it may do, e.g. "Map master": maps &amp; events plus mods, but no banning.</p>
+    ${d.custom_roles.map(r => `<div class="card tight" style="padding:10px 12px;margin-top:8px" data-crole="${esc(r.id)}"><div class="row"><input type="text" data-k="name" value="${esc(r.name)}" maxlength="40" style="max-width:220px"><span class="spacer"></span><button class="btn sm" data-crsave="${esc(r.id)}">Save</button><button class="btn sm danger" data-crdel="${esc(r.id)}">Delete</button></div>
+      <div class="row small" style="flex-wrap:wrap;gap:10px;margin-top:6px">${d.perm_groups.map(g => `<label title="${esc(g.about)}" style="display:flex;gap:4px;align-items:center"><input type="checkbox" data-perm="${esc(g.id)}" ${r.perms.includes(g.id) ? "checked" : ""}> ${esc(g.name)}</label>`).join("")}</div></div>`).join("")}
+    <div class="row" style="margin-top:8px;gap:8px"><input type="text" id="cr_name" maxlength="40" placeholder="New role name" style="max-width:220px"><button class="btn sm" id="cr_add">Add role</button></div>
+    <p class="small muted">Every role can look at everything. Only you can manage accounts, passwords, internet access and server plugins. ${d.perm_groups.map(g => `<b>${esc(g.name)}</b>: ${esc(g.about)}`).join(" · ")}</p>`;
+  const call = async (body, msg) => { try { const r = await api("/api/users", { json: body }); loadUsers(); toast(r.note || msg || "Saved", 8000); } catch (e) { toast(e.message, 6000); } };
   $("#nu_add").onclick = () => call({ action: "add", name: $("#nu_name").value.trim(), role: $("#nu_role").value, password: $("#nu_pw").value });
   el.querySelectorAll("[data-role]").forEach(x => x.onchange = () => call({ action: "role", name: x.dataset.role, role: x.value }));
+  el.querySelectorAll("[data-uremote]").forEach(x => x.onchange = () => call({ action: "remote", name: x.dataset.uremote, remote: x.checked }));
+  el.querySelectorAll("[data-u2fa]").forEach(x => x.onclick = () => { if (confirm("Turn off two-step login for " + x.dataset.u2fa + "? They'll be logged out and can set it up again (at home).")) call({ action: "reset_2fa", name: x.dataset.u2fa }); });
   el.querySelectorAll("[data-upw]").forEach(x => x.onclick = () => { const pw = prompt("New password for " + x.dataset.upw + " (at least 10 characters):"); if (pw) call({ action: "password", name: x.dataset.upw, password: pw }); });
   el.querySelectorAll("[data-udis]").forEach(x => x.onclick = () => call({ action: "disable", name: x.dataset.udis }));
   el.querySelectorAll("[data-udel]").forEach(x => x.onclick = () => { if (confirm("Delete the account " + x.dataset.udel + "?")) call({ action: "delete", name: x.dataset.udel }); });
+  el.querySelectorAll("[data-usrv]").forEach(x => x.onclick = () => {
+    const u = d.users.find(v => v.name === x.dataset.usrv);
+    const bg = modal(`<h2 style="margin-top:0">Servers for ${esc(u.name)}</h2>
+      <label class="toggle"><input type="checkbox" id="sv_all" ${u.servers === "all" ? "checked" : ""}><span><b>All servers, same role</b><small>${esc(rname(u.role))} everywhere - change it in the list</small></span></label>
+      <div id="sv_list">${d.servers.map(s => { const cur = u.servers === "all" ? "" : (u.servers[s.id] || ""); return `<div class="row small" style="gap:8px;padding:4px 0"><b style="min-width:140px">${esc(s.name)}</b><select data-sv="${esc(s.id)}" style="width:auto"><option value="">No access</option>${allRoles.map(r => `<option value="${esc(r.id)}" ${r.id === cur ? "selected" : ""}>${esc(r.name)}</option>`).join("")}</select></div>`; }).join("")}</div>
+      <p class="small muted">With only some servers, the account can't change dashboard-wide settings.</p>
+      <div class="row"><button class="btn primary" id="sv_ok">Save</button><button class="btn" data-x>Cancel</button></div>`);
+    const sync = () => { $("#sv_list", bg).style.opacity = $("#sv_all", bg).checked ? ".4" : "1"; };
+    $("#sv_all", bg).onchange = sync; sync();
+    bg.querySelector("[data-x]").onclick = () => bg.remove();
+    $("#sv_ok", bg).onclick = async () => {
+      const map = {}; bg.querySelectorAll("[data-sv]").forEach(s => { if (s.value) map[s.dataset.sv] = s.value; });
+      bg.remove(); call({ action: "servers", name: u.name, servers: $("#sv_all", bg).checked ? "all" : map });
+    };
+  });
+  $("#iv_make").onclick = async () => {
+    const srv = $("#iv_srv") ? $("#iv_srv").value : "all";
+    const role = $("#iv_role").value;
+    try {
+      const r = await api("/api/teaminvite", { json: { role, servers: srv === "all" ? "all" : { [srv]: role }, remote: $("#iv_remote").checked } });
+      $("#iv_out").innerHTML = `<div class="card tight" style="padding:10px 12px;margin-top:8px"><div class="small">${esc(r.note)}</div><textarea readonly rows="2" class="mono" id="iv_link" style="margin-top:6px">${esc(r.link)}</textarea>
+        <div class="row" style="margin-top:6px"><button class="btn sm primary" id="iv_copy">Copy link</button>${r.internet_link && r.link !== r.internet_link ? `<span class="small muted">Home network link. They need to be on your Wi-Fi to use it.</span>` : ""}</div></div>`;
+      $("#iv_copy").onclick = async () => toast(await copyText(r.link) ? "Link copied" : "Select the link and press Ctrl+C");
+    } catch (e) { toast(e.message, 6000); }
+  };
+  el.querySelectorAll("[data-ivrev]").forEach(x => x.onclick = async () => { try { await api("/api/teaminvite", { json: { action: "revoke", id: x.dataset.ivrev } }); loadUsers(); } catch (e) { toast(e.message); } });
+  const roleCall = async body => { try { await api("/api/roles", { json: body }); loadUsers(); toast("Saved"); } catch (e) { toast(e.message, 7000); } };
+  $("#cr_add").onclick = () => roleCall({ action: "save", name: $("#cr_name").value, perms: ["map"] });
+  el.querySelectorAll("[data-crsave]").forEach(b => b.onclick = () => { const c = b.closest("[data-crole]"); roleCall({ action: "save", id: b.dataset.crsave, name: c.querySelector('[data-k="name"]').value, perms: [...c.querySelectorAll("[data-perm]:checked")].map(x => x.dataset.perm) }); });
+  el.querySelectorAll("[data-crdel]").forEach(b => b.onclick = () => { if (confirm("Delete this role?")) roleCall({ action: "delete", id: b.dataset.crdel }); });
+}
+
+/* ---------------- team invite link (#team=...) */
+async function renderTeamInvite(tok) {
+  let d; try { d = await (await fetch("/api/teaminvite/info?t=" + encodeURIComponent(tok))).json(); } catch (e) { d = { error: e.message }; }
+  if (d.error) return authShell(`<h1>Invite</h1><p class="sub">${esc(d.error)}</p><button class="btn" id="gol">Go to the login page</button>`), ($("#gol").onclick = () => { history.replaceState(null, "", location.pathname); boot(); });
+  const t = d.totp, n = t ? Number(t.qr_size) || 0 : 0, qp = t && /^[MhvzZ0-9 -]*$/.test(t.qr_path || "") ? t.qr_path : "";
+  authShell(`<h1>Join the team</h1><p class="sub">You're invited to help run <b>${esc(d.server)}</b> as <b>${esc(d.role)}</b>${d.servers ? " (" + esc(d.servers.join(", ")) + ")" : ""}. Pick your login:</p>
+    <label class="f"><span>Your name</span><input type="text" id="ti_name" maxlength="24" autocomplete="username" spellcheck="false" placeholder="letters, numbers, . _ -"></label>
+    <label class="f"><span>Password</span><input id="ti_pw" type="password" autocomplete="new-password" placeholder="at least 10 characters"></label>
+    <label class="f"><span>Repeat password</span><input id="ti_pw2" type="password" autocomplete="new-password"></label>
+    ${t ? `<p class="small">You may log in from the internet, so your account gets <b>two-step login</b>. Scan this with an authenticator app (Google Authenticator, Microsoft Authenticator, Aegis…):</p>
+      ${n && qp ? `<div style="background:#fff;padding:12px;border-radius:8px;display:inline-block;margin:6px 0"><svg width="200" height="200" viewBox="-4 -4 ${n + 8} ${n + 8}" shape-rendering="crispEdges" role="img" aria-label="QR code for two-step login"><rect x="-4" y="-4" width="${n + 8}" height="${n + 8}" fill="#fff"/><path d="${qp}" fill="#000"/></svg></div>` : ""}
+      <p class="small muted">Or type this key in the app: <span class="mono">${esc(t.secret)}</span></p>
+      <label class="f"><span>6-digit code from the app</span><input type="text" id="ti_code" inputmode="numeric" maxlength="7" autocomplete="one-time-code"></label>` : ""}
+    <button class="btn primary" id="ti_go">Create my login</button><p class="small muted" id="ti_err"></p>`);
+  $("#ti_go").onclick = async () => {
+    if ($("#ti_pw").value !== $("#ti_pw2").value) return ($("#ti_err").textContent = "The passwords don't match");
+    $("#ti_go").disabled = true;
+    try {
+      const r = await fetch("/api/teaminvite/accept", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ t: tok, name: $("#ti_name").value.trim(), password: $("#ti_pw").value, code: $("#ti_code") ? $("#ti_code").value : "" }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || "Didn't work");
+      history.replaceState(null, "", location.pathname);
+      toast("Done - log in with your new name and password", 8000); boot();
+    } catch (e) { $("#ti_err").textContent = e.message; $("#ti_go").disabled = false; }
+  };
+}
+
+/* ---------------- my account (extra accounts) */
+async function openMyAccount() {
+  let m; try { m = await api("/api/me"); } catch (e) { return toast(e.message); }
+  if (m.owner) return show("settings");
+  const roles = Object.entries(m.roles || {}).map(([sid, r]) => `${esc((SERVERS.find(s => s.id === sid) || { name: sid }).name)}: <b>${esc(r.name)}</b>`).join(" · ");
+  const bg = modal(`<div class="row"><h2 style="margin:0">My account: ${esc(m.name)}</h2><span class="spacer"></span><button class="btn sm" data-x>Close</button></div>
+    <p class="small muted">${roles}</p>
+    <h3>Two-step login</h3><div id="ma_2fa">${m.totp ? `<span class="pill good"><span class="dot"></span>On</span> <button class="btn sm danger" id="ma_off" style="margin-left:8px">Turn off</button>` : `<p class="small">${m.remote ? "<b>Set this up to log in from the internet.</b> " : ""}A code from your phone as well as your password.</p><button class="btn" id="ma_on">Set up two-step login</button>`}</div>
+    ${m.remote ? `<p class="small muted">The owner allows your account from the internet${m.remote_enabled ? "" : " (internet access is switched off at the moment)"}${m.totp ? "." : " - once two-step login is on."}</p>` : ""}
+    <h3>Change password</h3>
+    <label class="f"><span>Current password</span><input type="password" id="ma_cur" autocomplete="current-password"></label>
+    <label class="f"><span>New password</span><input type="password" id="ma_new" autocomplete="new-password" placeholder="at least 10 characters"></label>
+    <button class="btn" id="ma_pw">Change password</button>`);
+  bg.querySelector("[data-x]").onclick = () => bg.remove();
+  $("#ma_pw", bg).onclick = async () => { try { await api("/api/me/password", { json: { current: $("#ma_cur", bg).value, new: $("#ma_new", bg).value } }); toast("Password changed"); bg.remove(); } catch (e) { toast(e.message); } };
+  if ($("#ma_off", bg)) $("#ma_off", bg).onclick = async () => { const pw = prompt("Your password, to turn off two-step login:"); if (!pw) return; try { await api("/api/me/2fa/disable", { json: { password: pw } }); toast("Two-step login is off"); bg.remove(); } catch (e) { toast(e.message, 7000); } };
+  if ($("#ma_on", bg)) $("#ma_on", bg).onclick = async () => {
+    let r; try { r = await api("/api/me/2fa/begin", { method: "POST" }); } catch (e) { return toast(e.message); }
+    const n = Number(r.qr_size) || 0, qp = /^[MhvzZ0-9 -]*$/.test(r.qr_path || "") ? r.qr_path : "";
+    $("#ma_2fa", bg).innerHTML = `${n && qp ? `<div style="background:#fff;padding:12px;border-radius:8px;display:inline-block;margin:6px 0"><svg width="200" height="200" viewBox="-4 -4 ${n + 8} ${n + 8}" shape-rendering="crispEdges"><rect x="-4" y="-4" width="${n + 8}" height="${n + 8}" fill="#fff"/><path d="${qp}" fill="#000"/></svg></div>` : ""}
+      <p class="small muted">Or type this key in the app: <span class="mono">${esc(r.secret)}</span></p>
+      <label class="f"><span>6-digit code</span><input type="text" id="ma_code" inputmode="numeric" maxlength="7" style="max-width:180px"></label><button class="btn primary" id="ma_ok">Turn on</button>`;
+    $("#ma_ok", bg).onclick = async () => { try { await api("/api/me/2fa/confirm", { json: { code: $("#ma_code", bg).value } }); toast("Two-step login is on"); bg.remove(); } catch (e) { toast(e.message); } };
+  };
 }
 
 /* ---------------- sleep + Wake-on-LAN (Settings) */
