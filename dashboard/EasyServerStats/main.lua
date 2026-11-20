@@ -18,6 +18,7 @@
 --   maintenance.txt written by the dashboard: "on|off", "message=...", then names that may still join
 --   tools.txt      written by the dashboard: /tp and /repair settings (key=value); needs the client mod
 --                  easyserver_tools.zip that the dashboard puts into Resources/Client
+--   vehicles.txt   written by the dashboard: vehicle rules (blocked cars and props, spawn cooldown, spam limit)
 
 local DIR = "Resources/Server/EasyServerStats/"
 local EVENTS = DIR .. "events.log"
@@ -34,6 +35,7 @@ local MSGFILE = DIR .. "messages.txt"
 local BRIDGEFILE = DIR .. "bridge.txt"
 local MAINTFILE = DIR .. "maintenance.txt"
 local TOOLSFILE = DIR .. "tools.txt"
+local VEHFILE = DIR .. "vehicles.txt"
 local MAX_LOG = 20 * 1024 * 1024   -- roll the log over at 20 MB
 
 local function jsonEscape(s)
@@ -1291,6 +1293,99 @@ function esMsgLeft(id)
   sug.sent[id], sug.hello[id] = nil, nil
 end
 
+-- ---------------------------------------------------------------- vehicle rules (Config -> Vehicle rules)
+-- The dashboard writes vehicles.txt:
+--   on=on|off  cooldown=<seconds between spawns>  spam=<max spawns a minute, 0 = no limit>
+--   exempt=on|off (admins may spawn anything)  only=on|off (only the "allow=" cars)
+--   block=<model><TAB><reason>   allow=<model>
+-- A spawn or a swap to a blocked model is cancelled before anyone sees the car.
+-- Every spawn is logged (player + model) so the dashboard can list what is used here.
+local veh = { at = -100, on = false, cooldown = 0, spam = 0, exempt = true, only = false, block = {}, allow = {} }
+local vehLast, vehTimes, vehSpamSaid = {}, {}, {}
+
+local function readVeh(t)
+  if t - veh.at < 10 then return end
+  local c = { at = t, on = false, cooldown = 0, spam = 0, exempt = true, only = false, block = {}, allow = {} }
+  local f = io.open(VEHFILE, "r")
+  if f then
+    for line in f:lines() do
+      local k, v = line:match("^%s*([%w_]+)%s*=%s*(.-)%s*$")
+      if k == "on" then c.on = v:lower() == "on"
+      elseif k == "exempt" then c.exempt = v:lower() ~= "off"
+      elseif k == "only" then c.only = v:lower() == "on"
+      elseif k == "cooldown" then local n = tonumber(v); if n and n >= 0 and n <= 3600 then c.cooldown = math.floor(n) end
+      elseif k == "spam" then local n = tonumber(v); if n and n >= 0 and n <= 120 then c.spam = math.floor(n) end
+      elseif k == "block" then
+        local m, why = v:match("^([^\t]+)\t?(.*)$")
+        if m and m ~= "" then c.block[m:lower()] = (why ~= "" and why) or "it's blocked here" end
+      elseif k == "allow" and v ~= "" then c.allow[v:lower()] = true end
+    end
+    f:close()
+  end
+  veh = c
+end
+
+local function jbmOf(data)
+  local m = tostring(data or ""):match('"jbm"%s*:%s*"([^"]+)"')
+  return m and m:sub(1, 80) or nil
+end
+
+local function vehCheck(pid, data, spawning)
+  local t = os.time()
+  readVeh(t)
+  local jbm = jbmOf(data)
+  local name = MP.GetPlayerName(pid)
+  if spawning and jbm then
+    event("spawn", string.format(',"name":"%s","jbm":"%s"', jsonEscape(name), jsonEscape(jbm)))
+  end
+  if not veh.on then return 0 end
+  if veh.exempt and name and isAdmin(tostring(name):lower()) then return 0 end
+  if jbm then
+    local key = jbm:lower()
+    local why = veh.block[key]
+    if not why and veh.only and not veh.allow[key] then why = "only certain cars are allowed here" end
+    if why then
+      say(pid, "\"" .. jbm .. "\" isn't allowed on this server (" .. why .. ").")
+      event("vehblock", string.format(',"name":"%s","jbm":"%s","why":"%s"', jsonEscape(name), jsonEscape(jbm), jsonEscape(why)))
+      return 1
+    end
+  end
+  if not spawning then return 0 end
+  if veh.cooldown > 0 and vehLast[pid] then
+    local wait = veh.cooldown - (t - vehLast[pid])
+    if wait > 0 then
+      say(pid, "Wait " .. wait .. " more second" .. (wait == 1 and "" or "s") .. " before spawning another car.")
+      return 1
+    end
+  end
+  if veh.spam > 0 then
+    local list, keep = vehTimes[pid] or {}, {}
+    for _, at in ipairs(list) do if t - at < 60 then keep[#keep + 1] = at end end
+    if #keep >= veh.spam then
+      vehTimes[pid] = keep
+      if t - (vehSpamSaid[pid] or 0) >= 60 then
+        vehSpamSaid[pid] = t
+        say(pid, "Too many cars spawned in a minute - slow down a little.")
+        event("vehspam", string.format(',"name":"%s","count":%d', jsonEscape(name), #keep))
+      end
+      return 1
+    end
+    keep[#keep + 1] = t
+    vehTimes[pid] = keep
+  end
+  vehLast[pid] = t
+  return 0
+end
+
+function esVehSpawn(pid, vid, data) return vehCheck(pid, data, true) end
+function esVehEdited(pid, vid, data) return vehCheck(pid, data, false) end
+
+local leftVeh = esMsgLeft
+function esMsgLeft(id)
+  leftVeh(id)
+  vehLast[id], vehTimes[id], vehSpamSaid[id] = nil, nil, nil
+end
+
 MP.RegisterEvent("onPlayerAuth", "esOnAuth")
 MP.RegisterEvent("onPlayerJoining", "esOnJoin")
 MP.RegisterEvent("onPlayerJoin", "esOnJoined")
@@ -1303,6 +1398,8 @@ MP.CreateEventTimer("esHalfMinute", 30000)
 MP.RegisterEvent("esTick", "esTick")
 MP.RegisterEvent("onVehicleReset", "esOnReset")
 MP.RegisterEvent("onVehicleDeleted", "esOnDeleted")
+MP.RegisterEvent("onVehicleSpawn", "esVehSpawn")
+MP.RegisterEvent("onVehicleEdited", "esVehEdited")
 MP.CreateEventTimer("esTick", 1000)
 MP.RegisterEvent("esToolsHello", "esToolsHello")
 MP.RegisterEvent("esToolsTick", "esToolsTick")
