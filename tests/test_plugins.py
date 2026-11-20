@@ -76,6 +76,41 @@ class Plugins(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 D.plugin_plan(self.tmpzip(files, links))
 
+    def test_plan_refuses_windows_tricks(self):
+        for files in ({"Resources/Server/CON/main.lua": "x"}, {"Resources/Server/P/main.lua:hidden": "x"},
+                      {"Resources/Server/P/aux.lua": "x"}):
+            with self.assertRaises(RuntimeError):
+                D.plugin_plan(self.tmpzip(files))
+
+    def test_link_planted_during_install_is_not_followed(self):
+        st, j, _ = self.upload({"Resources/Server/Racer/main.lua": "x"}, "racer.zip")
+        target = os.path.join(harness.TMP, "elsewhere")
+        os.makedirs(target, exist_ok=True)
+        link = os.path.join(D.plugin_server_dir(), "Racer")
+        real_new = D._move_new
+
+        def plant_then_move(src, dest):                  # the game server's user wins the race
+            if dest == link and not os.path.lexists(link):
+                os.symlink(target, link)
+            return real_new(src, dest)
+        with mock.patch.object(D, "_move_new", plant_then_move):
+            st, d, _ = self.owner.call("/api/plugins/install", {"job": j["job"], "trust": True})
+        os.remove(link)
+        self.assertEqual(st, 400, d)
+        self.assertEqual(os.listdir(target), [])         # nothing written through the link
+
+    def test_only_the_owner_installs_plugins(self):
+        o = self.owner
+        o.call("/api/users", {"action": "add", "name": "pladmin", "role": "admin", "password": "pladmin-password-1"})
+        adm = harness.Client(self.base)
+        self.assertEqual(adm.login("pladmin-password-1", "pladmin"), 200)
+        for path, body in (("/api/plugins/fetch", {"id": "careermp"}), ("/api/plugins/install", {"job": "x"}),
+                           ("/api/plugins/toggle", {"id": "x", "on": False}), ("/api/plugins/remove", {"id": "x"}),
+                           ("/api/plugins/adopt", {"folder": "x"})):
+            self.assertEqual(adm.call(path, body)[0], 403, path)
+        self.assertEqual(adm.call("/api/plugins/upload?name=a.zip", raw=b"PK", method="PUT")[0], 403)
+        self.assertEqual(adm.call("/api/plugins")[0], 200)                   # looking is fine
+
     def upload(self, files, name="myplugin.zip"):
         return self.owner.call("/api/plugins/upload?name=" + name, raw=zbytes(files), method="PUT")
 
@@ -193,6 +228,8 @@ class ModpackCode(unittest.TestCase):
                 time.sleep(0.05)
         self.assertEqual(got, [99])
         self.assertEqual(self.owner.call("/api/modpack/code", {"code": "hello"})[0], 400)
+        bomb = "ES1-" + base64.urlsafe_b64encode(zlib.compress(b'{"ids":[' + b"1," * 2000000 + b'1]}', 9)).decode().rstrip("=")
+        self.assertEqual(self.owner.call("/api/modpack/code", {"code": bomb})[0], 400)
 
 
 if __name__ == "__main__":
