@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="img/logo.svg" type="image/svg+xml">
+<title>Features - BeamMP EasyServer</title>
+<meta name="description" content="Everything BeamMP EasyServer does on one page: 5-minute setup, phone dashboard, virus-checked mods, vehicle rules, server plugins, team accounts and more. Free for Windows and Linux.">
+<meta property="og:title" content="BeamMP EasyServer - all features">
+<meta property="og:description" content="Host your own BeamMP server in 5 minutes. Mods, rules, plugins and a team - from one dashboard.">
+<meta property="og:image" content="https://csabika-dev.github.io/beammp-easyserver/img/overview-dark.webp">
+<meta name="color-scheme" content="light dark">
+<style>
+:root{--bg:#f6f7f9;--bg2:#fff;--ink:#14161b;--mute:#5b6370;--line:#e2e5ea;--accent:#2a78d6;--accent2:#e3eefb;--new:#b55d00;--new2:#fdf0e1;--shadow:0 18px 50px -20px rgba(20,30,50,.35)}
+@media (prefers-color-scheme:dark){:root{--bg:#0e1014;--bg2:#171a20;--ink:#eceff3;--mute:#9aa3ae;--line:#262a32;--accent:#3d8bea;--accent2:#16263b;--new:#f0a14a;--new2:#2c2010;--shadow:0 18px 60px -18px rgba(0,0,0,.8)}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--accent)}
+.wrap{max-width:1040px;margin:0 auto;padding:0 22px}
+nav{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+nav .wrap{display:flex;align-items:center;gap:18px;height:60px;max-width:1120px}
+.logo{display:flex;align-items:center;gap:10px;font-weight:700;color:var(--ink);text-decoration:none}
+.logo i{width:30px;height:30px;display:block}
+i.lg{background:url(img/logo.svg) center/contain no-repeat}
+nav .links{margin-left:auto;display:flex;gap:18px;font-size:15px}nav .links a{color:var(--mute);text-decoration:none}nav .links a:hover,nav .links a.on{color:var(--ink)}
+@media (max-width:640px){nav .links a.opt{display:none}}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:11px 18px;border-radius:10px;font-weight:600;text-decoration:none;border:1px solid var(--line);color:var(--ink);background:var(--bg2);font-size:15.5px}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}.btn:hover{filter:brightness(1.08)}
+header{padding:54px 0 30px;text-align:center}
+h1{font-size:clamp(30px,4.6vw,46px);line-height:1.1;margin:0 0 12px;letter-spacing:-.02em}
+.lead{color:var(--mute);margin:0 auto 24px;max-width:640px}
+.cta{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
+.facts{display:flex;gap:10px 22px;justify-content:center;flex-wrap:wrap;color:var(--mute);font-size:15px;margin-top:20px}
+.facts b{color:var(--ink)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;margin:10px 0 30px}
+.card{background:var(--bg2);border:1px solid var(--line);border-radius:14px;padding:20px 22px}
+.card h2{font-size:19px;margin:0 0 6px;display:flex;align-items:center;gap:10px}
+.card h2 span.ic{font-size:22px}
+.card p{margin:0 0 8px;color:var(--mute);font-size:15.5px}
+.card ul{margin:0;padding-left:20px;font-size:15.5px}.card li{margin:3px 0}
+.new{font-size:11.5px;font-weight:700;letter-spacing:.03em;color:var(--new);background:var(--new2);padding:2px 8px;border-radius:99px;margin-left:auto;white-space:nowrap}
+.shot{display:block;width:100%;border-radius:14px;border:1px solid var(--line);box-shadow:var(--shadow);margin:0 0 30px;height:auto}
+.end{text-align:center;background:var(--accent2);border-radius:14px;padding:28px 24px;margin:10px 0 0}
+.end h3{margin:0 0 6px;font-size:22px}.end p{margin:0 0 16px;color:var(--mute)}
+.note{font-size:14px;color:var(--mute);text-align:center;margin:16px 0 0}
+footer{padding:46px 0 60px;color:var(--mute);font-size:14px;text-align:center}
+</style>
+<!-- Privacy-friendly visit counter: no cookies, no personal data (goatcounter.com) -->
+<script data-goatcounter="https://easyserver.goatcounter.com/count" async src="https://gc.zgo.at/count.v5.js" crossorigin="anonymous" integrity="sha384-atnOLvQb9t+jTSipvd75X2yginT4PjVbqDdlJAmxMm+wYElFmeR6EmLP5bYeoRVQ"></script>
+</head>
+<body>
+<nav><div class="wrap">
+  <a class="logo" href="./"><i class="lg"></i>BeamMP EasyServer</a>
+  <div class="links"><a class="opt" href="./#start">Get started</a><a class="on" href="features.html">Features</a><a href="help.html">Help</a>
+    <a href="https://github.com/Csabika-dev/beammp-easyserver">GitHub</a></div>
+</div></nav>
+
+<header><div class="wrap">
+  <h1>Your own BeamMP server.<br>Everything in one place.</h1>
+  <p class="lead">EasyServer installs the official BeamMP server and gives you a dashboard for everything else - from your PC or your phone. No config files, no command line.</p>
+  <div class="cta"><a class="btn primary" href="https://github.com/Csabika-dev/beammp-easyserver/releases/latest" data-goatcounter-click="features-download">Download free</a><a class="btn" href="./#start">How to install</a></div>
+  <div class="facts"><span><b>Free</b> &amp; open source</span><span><b>Windows</b> &amp; <b>Linux</b></span><span>Set up in about <b>5 minutes</b></span><span>No ads</span></div>
+</div></header>
+
+<main class="wrap">
+  <img class="shot" src="img/overview-dark.webp" width="1100" height="696" alt="EasyServer dashboard overview: server status, players online and quick actions">
+
+  <div class="grid">
+    <div class="card"><h2><span class="ic">⚡</span>Set up in 5 minutes</h2>
+      <p>A guided installer does the hard parts.</p>
+      <ul><li>Asks for your AuthKey and checks it</li><li>Opens the port on your router in one click</li><li>Starts with your PC, restarts if it crashes</li></ul></div>
+
+    <div class="card"><h2><span class="ic">📱</span>Dashboard, even on your phone</h2>
+      <p>Start, stop, change the map and see who's online.</p>
+      <ul><li>Works in any browser, also from your phone</li><li>Discord bot and phone notifications</li><li>Backups, restore and config history</li></ul></div>
+
+    <div class="card"><h2><span class="ic">🧩</span>Mods, virus-checked</h2>
+      <p>Drag &amp; drop mods or install them from the BeamNG repository.</p>
+      <ul><li>Every mod is scanned before players get it</li><li>Light mode: players only download the map in play</li><li>Share all your mods with one short code</li></ul></div>
+
+    <div class="card"><h2><span class="ic">🚗</span>Vehicle rules <span class="new">NEW</span></h2>
+      <p>Decide what can be spawned on your server.</p>
+      <ul><li>Block props, giant physics props, trailers or any car</li><li>Heavy, laggy mod cars are found automatically</li><li>Stops spawn spam. Presets: Racing, Roleplay, No chaos</li></ul></div>
+
+    <div class="card"><h2><span class="ic">🔌</span>Server plugins <span class="new">NEW</span></h2>
+      <p>Add game modes made by the community.</p>
+      <ul><li>CareerMP, freeRoamMP, BeamJoy and more</li><li>Downloaded from each author's own page, you see what goes where</li><li>Update, turn off or remove in one click</li></ul></div>
+
+    <div class="card"><h2><span class="ic">👥</span>Run it as a team <span class="new">NEW</span></h2>
+      <p>Friends help without knowing your password.</p>
+      <ul><li>Invite links that expire after 1 hour</li><li>Viewer, moderator, admin - or your own roles</li><li>Two-step login for logins from outside your home</li></ul></div>
+
+    <div class="card"><h2><span class="ic">🛡️</span>Players &amp; moderation</h2>
+      <p>Keep your server friendly.</p>
+      <ul><li>Kick, mute and ban from the dashboard, Discord or chat</li><li>Invite list, anti-bot and maintenance mode</li><li>Player stats, busiest hours and records</li></ul></div>
+
+    <div class="card"><h2><span class="ic">🩺</span>"Why can't my friend join?"</h2>
+      <p>A health page that finds the problem for you.</p>
+      <ul><li>Checks AuthKey, port, firewall and the server list</li><li>Explains errors in plain words</li><li>Weak-PC preset for old laptops</li></ul></div>
+
+    <div class="card"><h2><span class="ic">🔒</span>Safe by default</h2>
+      <p>Built so you don't have to be a security expert.</p>
+      <ul><li>One-click security presets, from Most secure to Open</li><li>Your dashboard isn't on the internet unless you turn it on</li><li>Two-step login for the owner, too</li></ul></div>
+  </div>
+
+  <div class="end"><h3>Ready to host?</h3>
+    <p>Download, double-click, follow the steps. Your server can be online in about 5 minutes.</p>
+    <div class="cta"><a class="btn primary" href="https://github.com/Csabika-dev/beammp-easyserver/releases/latest" data-goatcounter-click="features-download">Download free</a><a class="btn" href="help.html">Questions? Help &amp; community</a></div></div>
+
+  <p class="note"><b>NEW</b> features are in the <b>Rolling</b> (newest) version first, and come to Stable once they're tested. The Mac version is experimental and Rolling only.</p>
+</main>
+
+<footer><div class="wrap">BeamMP EasyServer · MIT license · Not affiliated with the BeamMP team or BeamNG GmbH.<br>
+  Built on the work of the BeamMP team, BeamNG and many mod and plugin authors - <a href="https://github.com/Csabika-dev/beammp-easyserver#-credits">see the credits</a>.</div></footer>
+</body>
+</html>
