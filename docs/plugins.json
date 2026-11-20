@@ -1,0 +1,72 @@
+{
+  "format": "beammp-easyserver-plugins",
+  "version": 1,
+  "about": "Server plugins EasyServer can install. Each one belongs to its author - EasyServer only downloads it from the author's own GitHub page. Want yours listed? Open a pull request that adds it here.",
+  "plugins": [
+    {
+      "id": "careermp",
+      "name": "CareerMP",
+      "author": "StanleyDudek",
+      "repo": "StanleyDudek/CareerMP",
+      "source": "release",
+      "about": "BeamNG.drive's own Career Mode on your server. Saves stay on each player's PC.",
+      "notes": [
+        "Needs MaxCars 100 or more and the West Coast USA map.",
+        "Its README says it doesn't work with BeamNG.drive 0.39 yet - check before installing."
+      ],
+      "license": "See the author's page"
+    },
+    {
+      "id": "freeroammp",
+      "name": "freeRoamMP",
+      "author": "StanleyDudek",
+      "repo": "StanleyDudek/freeRoamMP",
+      "source": "release",
+      "about": "The game's Freeroam mode with missions: deliveries, police, stunts.",
+      "notes": [
+        "Some missions spawn many objects - set a high MaxCars.",
+        "Its README says it doesn't work with BeamNG.drive 0.39 yet - check before installing."
+      ],
+      "license": "See the author's page"
+    },
+    {
+      "id": "envsync",
+      "name": "BeamMP Environment Sync",
+      "author": "Evan Mulawski",
+      "repo": "EvanMulawski/BeamMP-EnvSync",
+      "source": "release",
+      "about": "Everyone sees the same time of day and weather, set by the server.",
+      "notes": [
+        "Work in progress, says its author."
+      ],
+      "license": "MIT"
+    },
+    {
+      "id": "cobaltessentials",
+      "name": "CobaltEssentials",
+      "author": "Preston Elam (CobaltTetra), maintained by StanleyDudek",
+      "repo": "StanleyDudek/CobaltEssentials",
+      "source": "branch",
+      "folder": "CobaltEssentials",
+      "about": "The classic admin toolkit: permission groups, commands, RCON.",
+      "notes": [
+        "It has its own admins, bans and commands - they overlap with EasyServer's Moderation page. Use one or the other.",
+        "After installing, type \"ce setgroup YourName owner\" in the server console."
+      ],
+      "license": "All rights reserved by the author - downloaded from their page, not shipped with EasyServer"
+    },
+    {
+      "id": "beamjoy",
+      "name": "BeamJoy Sandbox (Revived)",
+      "author": "Samaël (my-name-is-samael), continued by CaptainNugget",
+      "repo": "foodcache3/BeamJoy-Revived",
+      "source": "release",
+      "about": "All-in-one sandbox framework with an in-game admin menu, updated for BeamNG.drive 0.39.",
+      "notes": [
+        "Remove any other BeamJoy version first - they don't mix.",
+        "It has its own admin system - it overlaps with EasyServer's Moderation page."
+      ],
+      "license": "See the author's page"
+    }
+  ]
+}
