@@ -28,6 +28,7 @@ MP = {
 }
 write("moderation.txt", "admins=Boss\nfilter=on\nwords=badword\nspam=off\nantibot=off\n")
 write("tools.txt", "tp=on\ntp_cd=0\nrepair=cooldown\nrepair_cd=3\n")
+write("vehicles.txt", "on=on\ncooldown=0\nspam=3\nexempt=on\nblock=cones\tprops are off\nblock=Pigeon\n")
 local src = assert(io.open(MAIN)):read("a")
 src = src:gsub('local DIR = "Resources/Server/EasyServerStats/"', 'local DIR = "' .. DIR .. '"')
 local _print = print
@@ -180,6 +181,38 @@ test("json in events.log stays valid with hostile names", function()
     assert(not line:find('"},{"ev":"ban"', 1, true), "injected a fake event: " .. line)
   end
   f:close()
+end)
+
+local function spawnData(pid, vid, jbm)
+  return string.format('%d-%d:{"jbm":"%s","vcf":{"model":"%s","parts":{}},"pos":[0,0,0]}', pid, vid, jbm, jbm)
+end
+
+test("vehicle rules: blocked props and cars are cancelled with a message", function()
+  eq(esVehSpawn(1, 0, spawnData(1, 0, "cones")), 1, "cones spawn")
+  assert(chats[1] and chats[1].text:find("props are off"), "no reason given")
+  eq(esVehSpawn(1, 1, spawnData(1, 1, "pigeon")), 1, "blocked regardless of case")
+  eq(esVehEdited(1, 2, spawnData(1, 2, "PIGEON")), 1, "swapping into a blocked car")
+  eq(esVehSpawn(1, 3, spawnData(1, 3, "etk800")), 0, "normal car")
+end)
+
+test("vehicle rules: admins are exempt, spawn spam is limited", function()
+  eq(esVehSpawn(3, 0, spawnData(3, 0, "cones")), 0, "admin may spawn props")
+  eq(esVehSpawn(2, 0, spawnData(2, 0, "van")), 0)
+  eq(esVehSpawn(2, 1, spawnData(2, 1, "van")), 0)
+  eq(esVehSpawn(2, 2, spawnData(2, 2, "van")), 0)
+  eq(esVehSpawn(2, 3, spawnData(2, 3, "van")), 1, "4th spawn in a minute")
+  eq(esVehEdited(2, 0, spawnData(2, 0, "van")), 0, "editing a car is not a spawn")
+  esMsgLeft(2)
+  eq(esVehSpawn(2, 4, spawnData(2, 4, "van")), 0, "limit resets when the player leaves")
+  eq(esVehSpawn(1, 9, "garbage"), 0, "data without a model is let through")
+end)
+
+test("vehicle rules: spawns are logged for the dashboard", function()
+  local f = assert(io.open(DIR .. "events.log", "r"))
+  local txt = f:read("a") f:close()
+  assert(txt:find('"ev":"spawn","name":"Alice","jbm":"etk800"', 1, true), "spawn not logged")
+  assert(txt:find('"ev":"vehblock","name":"Alice","jbm":"cones"', 1, true), "block not logged")
+  assert(txt:find('"ev":"vehspam","name":"Bob"', 1, true), "spam not logged")
 end)
 
 -- maintenance last: the plugin re-reads maintenance.txt only every 5 seconds
