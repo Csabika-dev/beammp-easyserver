@@ -151,3 +151,47 @@ class DiscordLogin(unittest.TestCase):
         self.assertEqual(c.call("/api/session")[1]["logged_in"], False)        # logged out
         self.assertEqual(c.call("/api/discordlogin", {"on": False})[0], 401)   # only the owner switches it
         self.owner.call("/api/users", {"action": "delete", "name": "dcunl"})
+
+
+class SignInServiceCertificate(unittest.TestCase):
+    """Windows: a missing root certificate is fetched by Windows once, then the (still verified) call is retried."""
+
+    def test_retry_after_windows_fetches_the_root(self):
+        import io
+        import ssl
+        import urllib.error
+        calls = []
+
+        def fake_urlopen(req, timeout=None):
+            calls.append(req.full_url)
+            if len(calls) == 1:
+                raise urllib.error.URLError(ssl.SSLCertVerificationError("certificate has expired"))
+            return io.BytesIO(json.dumps({"inst": "C" * 24, "key": "k" * 43}).encode())
+
+        fetched = []
+        with mock.patch.object(D, "LOGIN_SERVICE", "https://login.example"), \
+                mock.patch.object(D, "IS_WIN", True), \
+                mock.patch.object(D.urllib.request, "urlopen", fake_urlopen), \
+                mock.patch.object(D, "win_fetch_root", lambda u: fetched.append(u) or True), \
+                mock.patch.object(D, "_team_save", lambda *a: None):
+            D.dlogin_set(True)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(fetched, ["https://login.example"])
+
+    def test_no_retry_elsewhere(self):
+        import ssl
+        import urllib.error
+
+        def fake_urlopen(req, timeout=None):
+            raise urllib.error.URLError(ssl.SSLCertVerificationError("bad"))
+        with mock.patch.object(D, "LOGIN_SERVICE", "https://login.example"), \
+                mock.patch.object(D, "IS_WIN", False), \
+                mock.patch.object(D.urllib.request, "urlopen", fake_urlopen), \
+                mock.patch.object(D, "_team_load", lambda *a: []):
+            with self.assertRaises(ValueError):
+                D.dlogin_set(True)
+
+    def test_only_plain_service_addresses(self):
+        with mock.patch.object(D, "IS_WIN", True):
+            self.assertFalse(D.win_fetch_root("https://x.example'; Remove-Item C:\\ -Recurse; '"))
+            self.assertFalse(D.win_fetch_root("http://x.example"))
