@@ -16,6 +16,7 @@
   - **My account** (click your name): change your own password, set up or turn off your two-step login.
   - **Sign in with Discord** (team members, not the owner): the owner turns it on under Users & roles, each member links their Discord once under **My account**, then signs in with one button. Discord only replaces the password - two-step login and the internet rules stay the same. It goes through a small sign-in service run by the project (`login-service/`), which stores nothing.
   - On a Mac, team members log in from your home network only (there every visitor looks like a home device, so the internet rule couldn't be enforced).
+- **Check new mods**: the mod check button on the Mods page now only checks mods that are new or changed since their last check (mods were already only checked once when added). **Check all again** still checks every mod, e.g. after your antivirus got new virus definitions.
 - **"Hosted with BeamMP EasyServer"**: a small link at the bottom of the public status page and one line at the end of the **Copy invite** message, so players who want their own server can find it. One tick-box turns it off (in the invite window, or on the status page settings).
 - **Credits** section in the README for everything EasyServer builds on.
 - Linux: `Resources/Server` is now writable for the dashboard (needed for plugins) - run the installer once more to update an existing install.
