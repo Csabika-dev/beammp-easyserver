@@ -930,7 +930,7 @@ VIEWS.mods = async m => {
       <div class="row" style="flex-wrap:wrap"><a class="btn sm" href="/api/modpack?srv=${encodeURIComponent(SERVER)}" download ${d.mods.some(x => x.enabled) ? "" : 'aria-disabled="true" style="pointer-events:none;opacity:.5"'}>Download modpack</a>
         ${SESSION.role === "owner" || !SESSION.role ? `<button class="btn sm" id="mpimp">Import a modpack…</button><input type="file" id="mpfile" accept=".zip" hidden>` : ""}<button class="btn sm" id="mpcode">Share code…</button><span class="small muted" id="mpres"></span></div></div>
     <div id="plugcard"></div>
-    <div class="row" style="margin-top:12px;flex-wrap:wrap"><button class="btn sm" id="rescan">Re-check all mods</button><button class="btn sm" id="modupd">Check for updates</button>
+    <div class="row" style="margin-top:12px;flex-wrap:wrap"><button class="btn sm" id="rescan" title="Checks only mods that are new or changed since their last check">Check new mods</button><button class="btn sm ghost" id="rescanall" title="Checks every mod again, e.g. after your antivirus got new virus definitions">Check all again</button><button class="btn sm" id="modupd">Check for updates</button>
       <label class="toggle" style="margin:0 0 0 8px"><input type="checkbox" id="modupd_on" ${mu.on !== false ? "checked" : ""}><span><b>Check every day</b><small>Mods from the BeamNG repository${mu.checked ? " · last check " + esc(ago(mu.checked)) : ""}</small></span></label></div>
     ${d.quarantine.length ? `<h2 style="margin-top:26px">⛔ Blocked mods (quarantine)</h2><div class="card tight"><table><tbody>${d.quarantine.map(q => `<tr><td><b>${esc(q.name)}</b><div class="small" style="color:var(--crit-ink);white-space:pre-wrap">${esc(q.why)}</div></td><td class="num"><button class="btn sm danger" data-a="qdelete" data-n="${esc(q.name)}">Delete</button></td></tr>`).join("")}</tbody></table></div>` : ""}`;
   $("#mb_open").onclick = () => modBrowser();
@@ -960,7 +960,19 @@ VIEWS.mods = async m => {
     try { const r = await api("/api/mods/update", { json: { name: b.dataset.upd } }); toast(r.note, 7000); show("mods"); }
     catch (e) { toast(e.data && e.data.blocked ? "The update failed the virus check - the old version stays." : e.message, 9000); b.disabled = false; }
   });
-  $("#rescan").onclick = async () => { $("#rescan").disabled = true; toast("Checking all mods…"); try { const r = await api("/api/mods/rescan", { method: "POST" }); const bad = r.results.filter(x => x.verdict === "blocked").length; toast(bad ? bad + " mod(s) blocked" : "All mods passed"); } catch (e) { toast(e.message); } show("mods"); };
+  const rescan = all => async () => {
+    $("#rescan").disabled = $("#rescanall").disabled = true;
+    toast(all ? "Checking every mod again…" : "Checking new mods…");
+    try {
+      const r = await api("/api/mods/rescan", { json: { all } });
+      const bad = r.results.filter(x => x.verdict === "blocked" && !x.skipped).length;
+      toast(bad ? bad + " mod(s) blocked" : !r.checked ? "Nothing new to check - all " + r.skipped + " mods were checked before"
+        : r.checked + " mod(s) checked, all passed" + (r.skipped ? " (" + r.skipped + " already checked)" : ""), 6000);
+    } catch (e) { toast(e.message); }
+    show("mods");
+  };
+  $("#rescan").onclick = rescan(false);
+  $("#rescanall").onclick = () => { if (confirm("Check every mod again? Big mod folders can take a few minutes.")) rescan(true)(); };
   $("#lightmode").onchange = async e => {
     try { const r = await api("/api/mods/light", { json: { on: e.target.checked } }); toast(r.note, 8000); show("mods"); } catch (x) { toast(x.message, 6000); e.target.checked = !e.target.checked; }
   };
