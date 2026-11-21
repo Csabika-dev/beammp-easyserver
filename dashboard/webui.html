@@ -214,7 +214,7 @@ async function api(path, opts = {}) {
   const r = await fetch(path, o);
   let data = {};
   try { data = await r.json(); } catch (e) {}
-  if (r.status === 401 && !path.endsWith("/login")) { boot(); throw new Error("Please log in"); }
+  if (r.status === 401 && !path.endsWith("/login") && !path.endsWith("/discord/finish")) { boot(); throw new Error("Please log in"); }
   if (!r.ok) { const e = new Error(data.error || ("Error " + r.status)); e.data = data; e.status = r.status; throw e; }
   return data;
 }
@@ -341,6 +341,11 @@ async function boot() {
   CSRF = SESSION.csrf;
   if (SESSION.needs_setup) return renderSetup();
   if (location.hash.startsWith("#team=")) return renderTeamInvite(location.hash.slice(6));
+  if (location.hash.startsWith("#dc=") || location.hash.startsWith("#dc_err=")) {      // back from "Sign in with Discord"
+    const h = location.hash; history.replaceState(null, "", location.pathname);
+    if (h.startsWith("#dc_err=")) return SESSION.logged_in ? (boot(), toast(h === "#dc_err=denied" ? "Discord sign-in was cancelled" : "Discord sign-in didn't work - try again")) : renderLogin(false, h === "#dc_err=denied" ? "Discord sign-in was cancelled." : "Discord sign-in didn't work - try again.");
+    return finishDiscord(h.slice(4));
+  }
   if (!SESSION.logged_in) return renderLogin();
   try { SERVERS = (await api("/api/servers")).servers; } catch (e) { SERVERS = [{ id: "main", name: "Main server" }]; }
   if (!SERVERS.some(x => x.id === SERVER)) SERVER = SERVERS[0] ? SERVERS[0].id : "main";
@@ -391,7 +396,7 @@ function renderSetup() {
   };
 }
 
-function renderLogin(needCode) {
+function renderLogin(needCode, msg) {
   needCode = needCode || SESSION.totp;
   authShell(`<h1>BeamMP Dashboard</h1><p class="sub">Log in to manage your server.</p>
     <form id="lf" autocomplete="on">
@@ -400,7 +405,12 @@ function renderLogin(needCode) {
     <label class="f ${needCode ? "" : "hidden"}" id="codebox"><span>Two-step code</span><input type="text" id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="123456"><small>From your authenticator app (only if two-step login is on for your account)</small></label>
     <label class="toggle" style="border:0;padding:4px 0 12px"><input type="checkbox" id="remember" ${store.get("es-remember", IN_APP ? "1" : "0") === "1" ? "checked" : ""}><span><b>Stay logged in on this device</b><small>For 30 days. Only turn this on on your own phone or computer. Log out (or Settings → Remembered devices) to forget it</small></span></label>
     <button class="btn primary" id="go" type="submit">Log in</button>
-    <p class="small muted" id="err"></p></form>`);
+    ${SESSION.discord_login ? `<button class="btn" id="dcgo" type="button" style="margin-left:8px">Sign in with Discord</button>` : ""}
+    <p class="small muted" id="err">${esc(msg || "")}</p></form>`);
+  if ($("#dcgo")) $("#dcgo").onclick = async () => {
+    store.set("es-remember", $("#remember").checked ? "1" : "0");
+    try { location.href = (await api("/api/discord/start", { method: "POST" })).url; } catch (e) { $("#err").textContent = e.message; }
+  };
   $("#lf").onsubmit = async ev => {
     ev.preventDefault();
     $("#go").disabled = true;
@@ -414,6 +424,23 @@ function renderLogin(needCode) {
     }
     catch (e) { $("#err").textContent = e.message; if (e.data && e.data.need_code) $("#codebox").classList.remove("hidden"); $("#go").disabled = false; }
   };
+}
+
+async function finishDiscord(note, code) {
+  try {
+    const r = await api("/api/discord/finish", { json: { a: note, code: code || "", remember: store.get("es-remember", "0") === "1" } });
+    await boot();
+    if (r.linked) toast("Discord linked: " + r.linked + ". Next time you can press \"Sign in with Discord\".", 7000);
+  } catch (e) {
+    if (e.data && e.data.need_code) {
+      authShell(`<h1>Two-step code</h1><p class="sub">Discord said it's you. Now the code from your authenticator app.</p>
+        <form id="dcf"><label class="f"><span>Two-step code</span><input type="text" id="dccode" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="123456" autofocus></label>
+        <button class="btn primary" type="submit">Log in</button><p class="small muted" id="err">${code ? "That code didn't work - try the next one." : ""}</p></form>`);
+      $("#dcf").onsubmit = ev => { ev.preventDefault(); finishDiscord(note, $("#dccode").value); };
+      return;
+    }
+    if (SESSION.logged_in) { await boot(); toast(e.message, 8000); } else renderLogin(false, e.message);
+  }
 }
 
 const ROLE_TABS = { viewer: ["overview", "players", "network", "logs", "notifications"], moderator: ["overview", "players", "network", "logs", "notifications"] };
@@ -1846,13 +1873,14 @@ async function loadUsers() {
   const RL = { admin: "Admin - everything except accounts, passwords, internet access and plugins", moderator: "Moderator - players: kick, mute, ban, allow-list, chat, start/restart", viewer: "Viewer - can look, can't change anything" };
   el.innerHTML = `<h2>Users &amp; roles</h2>
     <p class="small muted">Give friends their own login with only the rights they need. You (the owner) log in with the main password and an empty name. Everything they do shows up in Logs → Activity log.</p>
-    ${d.users.length ? d.users.map(u => `<div class="small" style="padding:8px 0;border-top:1px solid var(--line)"><div class="row" style="gap:8px;flex-wrap:wrap"><b>${esc(u.name)}</b>${u.disabled ? '<span class="badge warn">disabled</span>' : ""}${u.totp ? '<span class="badge good">two-step on</span>' : ""}${u.remote ? `<span class="badge ${u.totp ? "good" : "warn"}">${u.totp ? "can log in from the internet" : "internet: needs two-step"}</span>` : ""}
+    ${d.users.length ? d.users.map(u => `<div class="small" style="padding:8px 0;border-top:1px solid var(--line)"><div class="row" style="gap:8px;flex-wrap:wrap"><b>${esc(u.name)}</b>${u.disabled ? '<span class="badge warn">disabled</span>' : ""}${u.totp ? '<span class="badge good">two-step on</span>' : ""}${u.remote ? `<span class="badge ${u.totp ? "good" : "warn"}">${u.totp ? "can log in from the internet" : "internet: needs two-step"}</span>` : ""}${u.discord ? `<span class="badge">Discord: ${esc(u.discord)}</span>` : ""}
       ${u.servers === "all" ? roleSel(`data-role="${esc(u.name)}"`, u.role) : `<span class="muted">${esc(svText(u))}</span>`}
       <span class="muted">${u.last_login ? "last login " + esc(ago(u.last_login)) : "never logged in"}${u.invited_by ? " · invited" : ""}</span><span class="spacer"></span></div>
       <div class="row" style="gap:6px;flex-wrap:wrap;margin-top:6px">${many ? `<button class="btn sm" data-usrv="${esc(u.name)}">Servers…</button>` : ""}
         <label class="small" style="display:flex;gap:4px;align-items:center"><input type="checkbox" data-uremote="${esc(u.name)}" ${u.remote ? "checked" : ""}> From the internet</label>
-        ${u.totp ? `<button class="btn sm" data-u2fa="${esc(u.name)}">Reset two-step</button>` : ""}
+        ${u.totp ? `<button class="btn sm" data-u2fa="${esc(u.name)}">Reset two-step</button>` : ""}${u.discord ? `<button class="btn sm" data-udc="${esc(u.name)}">Unlink Discord</button>` : ""}
         <button class="btn sm" data-upw="${esc(u.name)}">New password</button><button class="btn sm" data-udis="${esc(u.name)}">${u.disabled ? "Enable" : "Disable"}</button><button class="btn sm danger" data-udel="${esc(u.name)}">Delete</button></div></div>`).join("") : `<p class="small muted">No extra accounts yet.</p>`}
+    ${d.discord_login.available ? `<label class="toggle" style="margin-top:12px"><input type="checkbox" id="dl_on" ${d.discord_login.on ? "checked" : ""}><span><b>Let team members sign in with Discord</b><small>They link their Discord once under My account, then sign in with one click instead of typing a password. Two-step login and the internet rules stay the same. You (the owner) always use your password. It goes through a small EasyServer sign-in service, which stores nothing.</small></span></label>` : ""}
     <h3 style="margin-top:16px">Invite someone</h3>
     <p class="small muted">Easiest: send a link. They pick their own name and password${d.remote_enabled ? " (and set up two-step login if they may log in from the internet)" : ""} - you never handle their password. The link works once and stops working after 1 hour, so send it right away.</p>
     <div class="row" style="gap:8px;flex-wrap:wrap"><label class="small">Role ${roleSel('id="iv_role"', "moderator")}</label>
@@ -1878,6 +1906,8 @@ async function loadUsers() {
   $("#nu_add").onclick = () => call({ action: "add", name: $("#nu_name").value.trim(), role: $("#nu_role").value, password: $("#nu_pw").value });
   el.querySelectorAll("[data-role]").forEach(x => x.onchange = () => call({ action: "role", name: x.dataset.role, role: x.value }));
   el.querySelectorAll("[data-uremote]").forEach(x => x.onchange = () => call({ action: "remote", name: x.dataset.uremote, remote: x.checked }));
+  if ($("#dl_on")) $("#dl_on").onchange = async () => { try { await api("/api/discordlogin", { json: { on: $("#dl_on").checked } }); toast($("#dl_on").checked ? "Discord sign-in is on" : "Discord sign-in is off"); } catch (e) { toast(e.message, 7000); loadUsers(); } };
+  el.querySelectorAll("[data-udc]").forEach(x => x.onclick = () => { if (confirm("Unlink Discord from " + x.dataset.udc + "? They'll be logged out.")) call({ action: "discord_unlink", name: x.dataset.udc }); });
   el.querySelectorAll("[data-u2fa]").forEach(x => x.onclick = () => { if (confirm("Turn off two-step login for " + x.dataset.u2fa + "? They'll be logged out and can set it up again (at home).")) call({ action: "reset_2fa", name: x.dataset.u2fa }); });
   el.querySelectorAll("[data-upw]").forEach(x => x.onclick = () => { const pw = prompt("New password for " + x.dataset.upw + " (at least 10 characters):"); if (pw) call({ action: "password", name: x.dataset.upw, password: pw }); });
   el.querySelectorAll("[data-udis]").forEach(x => x.onclick = () => call({ action: "disable", name: x.dataset.udis }));
@@ -1950,12 +1980,15 @@ async function openMyAccount() {
     <p class="small muted">${roles}</p>
     <h3>Two-step login</h3><div id="ma_2fa">${m.totp ? `<span class="pill good"><span class="dot"></span>On</span> <button class="btn sm danger" id="ma_off" style="margin-left:8px">Turn off</button>` : `<p class="small">${m.remote ? "<b>Set this up to log in from the internet.</b> " : ""}A code from your phone as well as your password.</p><button class="btn" id="ma_on">Set up two-step login</button>`}</div>
     ${m.remote ? `<p class="small muted">The owner allows your account from the internet${m.remote_enabled ? "" : " (internet access is switched off at the moment)"}${m.totp ? "." : " - once two-step login is on."}</p>` : ""}
+    ${m.discord_login ? `<h3>Discord</h3><div class="row" style="gap:8px">${m.discord ? `<span class="small">Linked to <b>${esc(m.discord)}</b> - you can press "Sign in with Discord" instead of typing your password.</span><span class="spacer"></span><button class="btn sm" id="ma_dcoff">Unlink</button>` : `<span class="small">Link your Discord account to sign in with one click. Your two-step code (if you have one) is still asked for.</span><span class="spacer"></span><button class="btn sm" id="ma_dc">Link Discord</button>`}</div>` : ""}
     <h3>Change password</h3>
     <label class="f"><span>Current password</span><input type="password" id="ma_cur" autocomplete="current-password"></label>
     <label class="f"><span>New password</span><input type="password" id="ma_new" autocomplete="new-password" placeholder="at least 10 characters"></label>
     <button class="btn" id="ma_pw">Change password</button>`);
   bg.querySelector("[data-x]").onclick = () => bg.remove();
   $("#ma_pw", bg).onclick = async () => { try { await api("/api/me/password", { json: { current: $("#ma_cur", bg).value, new: $("#ma_new", bg).value } }); toast("Password changed"); bg.remove(); } catch (e) { toast(e.message); } };
+  if ($("#ma_dc", bg)) $("#ma_dc", bg).onclick = async () => { try { location.href = (await api("/api/me/discord/link", { method: "POST" })).url; } catch (e) { toast(e.message, 7000); } };
+  if ($("#ma_dcoff", bg)) $("#ma_dcoff", bg).onclick = async () => { try { await api("/api/me/discord/unlink", { method: "POST" }); toast("Discord unlinked"); bg.remove(); } catch (e) { toast(e.message); } };
   if ($("#ma_off", bg)) $("#ma_off", bg).onclick = async () => { const pw = prompt("Your password, to turn off two-step login:"); if (!pw) return; try { await api("/api/me/2fa/disable", { json: { password: pw } }); toast("Two-step login is off"); bg.remove(); } catch (e) { toast(e.message, 7000); } };
   if ($("#ma_on", bg)) $("#ma_on", bg).onclick = async () => {
     let r; try { r = await api("/api/me/2fa/begin", { method: "POST" }); } catch (e) { return toast(e.message); }
