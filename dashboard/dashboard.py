@@ -9458,17 +9458,27 @@ class Handler(BaseHTTPRequestHandler):
         self.send(200, {"ok": True, "note": APP.applied_note()})
 
     def post_mods_rescan(self, q):
+        """Check the mods that haven't been checked yet (new, changed, or checked by an older version of the
+        checker). {"all": true} checks every mod again - e.g. after the antivirus got new virus definitions."""
+        everything = self.body_json().get("all") is True
         res = []
         for m in list_mods():
             folder = I().CLIENT_DIR if m["enabled"] else I().DISABLED_DIR
-            r = modscan.scan(os.path.join(folder, m["name"]), force=True)
+            path = os.path.join(folder, m["name"])
+            done = None if everything else modscan.cached_result(path)
+            if done:
+                res.append({"name": m["name"], "verdict": done["verdict"], "reasons": done.get("reasons", []), "skipped": True})
+                continue
+            # not forced: same content under another name still counts as checked
+            r = modscan.scan(path, force=everything)
             if r["verdict"] == "blocked":
                 os.makedirs(I().QUAR_DIR, exist_ok=True)
                 dest = os.path.join(I().QUAR_DIR, m["name"])
                 shutil.move(os.path.join(folder, m["name"]), dest)
                 modscan.write_note(dest + ".why.txt", modscan.why_text(r["reasons"]))
-            res.append({"name": m["name"], "verdict": r["verdict"], "reasons": r["reasons"]})
-        self.send(200, {"ok": True, "results": res})
+            res.append({"name": m["name"], "verdict": r["verdict"], "reasons": r["reasons"], "skipped": bool(r.get("cached"))})
+        self.send(200, {"ok": True, "results": res, "checked": sum(1 for x in res if not x["skipped"]),
+                        "skipped": sum(1 for x in res if x["skipped"])})
 
     # ---------- players
     def get_players(self, q):
