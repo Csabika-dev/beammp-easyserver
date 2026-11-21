@@ -117,6 +117,19 @@ class Live(unittest.TestCase):
             self.owner.call("/api/maintenance", {"state": "off"})
             self.owner.call("/api/statuspage", {"on": False, "title": ""})
 
+    def test_status_page_credit_link(self):
+        self.assertEqual(self.owner.call("/api/statuspage", {"on": True})[0], 200)
+        try:
+            page = Client(self.base).call("/status")[1]
+            page = page.decode() if isinstance(page, bytes) else str(page)
+            self.assertIn('href="%s"' % D.SITE_URL, page)
+            self.owner.call("/api/statuspage", {"credit": False})
+            page = Client(self.base).call("/status")[1]
+            page = page.decode() if isinstance(page, bytes) else str(page)
+            self.assertNotIn(D.SITE_URL, page)
+        finally:
+            self.owner.call("/api/statuspage", {"on": False, "credit": True})
+
     def test_status_page_off_by_default_and_404(self):
         self.owner.call("/api/statuspage", {"on": False})
         self.assertEqual(Client(self.base).call("/status")[0], 404)
