@@ -39,6 +39,7 @@ where it's on - so keep two-step login on for accounts that may log in from the 
    - `MASTER_KEY` (Secret) - a long random string (40+ characters). Changing it turns the feature off on every
      dashboard until the owner switches it on again.
 4. Open `https://<your-worker-address>/` - it should say "EasyServer sign-in".
-5. Put the address in `LOGIN_SERVICE` in `dashboard/dashboard.py`.
+5. Put the address in `LOGIN_SERVICE` in `dashboard/dashboard.py` (now: `https://easyserver-login.easyserver-hq.workers.dev`).
+6. Turn **Logs** off under the Worker's **Settings → Observability**, so no requests are kept.
 
 Test: `node tests/login_service.test.mjs` runs the whole flow against a fake Discord.
