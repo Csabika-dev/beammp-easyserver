@@ -14,6 +14,8 @@
   - **Per-server access:** a different role on each server, or no access at all to some.
   - **From the internet:** chosen accounts can log in from anywhere when they have their own two-step login (set up under **My account**, or while accepting an internet invite). Revoking it logs them out at once.
   - **My account** (click your name): change your own password, set up or turn off your two-step login.
+  - On a Mac, team members log in from your home network only (there every visitor looks like a home device, so the internet rule couldn't be enforced).
+- **"Hosted with BeamMP EasyServer"**: a small link at the bottom of the public status page and one line at the end of the **Copy invite** message, so players who want their own server can find it. One tick-box turns it off (in the invite window, or on the status page settings).
 - **Credits** section in the README for everything EasyServer builds on.
 - Linux: `Resources/Server` is now writable for the dashboard (needed for plugins) - run the installer once more to update an existing install.
 - **Security (found in a review of every feature):**
