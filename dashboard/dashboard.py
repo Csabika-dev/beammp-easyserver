@@ -6573,9 +6573,9 @@ def dlogin_set(on):
         try:
             d = ask()
         except urllib.error.URLError as e:
-            if not (IS_WIN and isinstance(e.reason, ssl.SSLCertVerificationError) and win_fetch_root(LOGIN_SERVICE)):
+            d = win_post_json(LOGIN_SERVICE + "/register") if IS_WIN and isinstance(e.reason, ssl.SSLCertVerificationError) else None
+            if d is None:
                 raise
-            d = ask()          # Windows has the certificate's root now; the check itself is unchanged
     except (OSError, ValueError) as e:
         raise ValueError("Couldn't reach the sign-in service (%s) - try again in a minute" % (getattr(e, "reason", None) or e))
     inst, key = str(d.get("inst") or ""), str(d.get("key") or "")
@@ -6586,19 +6586,22 @@ def dlogin_set(on):
     _team_save(DLOGIN_FILE, "discord-login", [{"on": True, "inst": inst, "key": _seal(key, "dlogin"), "t": now()}])
 
 
-def win_fetch_root(url):
-    """Python on Windows only trusts root certificates Windows has already downloaded; Windows fetches a
-    missing one the first time one of its own programs visits the site. So: visit it once with PowerShell
-    (which uses Windows' own certificate check), then the caller tries again - still fully verified."""
-    if not IS_WIN or not re.fullmatch(r"https://[A-Za-z0-9.\-]+(:\d{1,5})?", url or ""):
-        return False
+def win_post_json(url):
+    """POST {} and read a JSON answer through Windows' own HTTPS (PowerShell). Python on Windows can trip over an
+    old expired certificate Windows still keeps in its store, while Windows itself picks the valid one - this
+    is still a fully checked connection, just checked by Windows."""
+    if not IS_WIN or not re.fullmatch(r"https://[A-Za-z0-9.\-]+(:\d{1,5})?/[a-z]+", url or ""):
+        return None
+    ps = ("[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; "
+          "Invoke-RestMethod -UseBasicParsing -Method Post -TimeoutSec 20 -ContentType 'application/json' -Body '{}' "
+          "-Uri '%s' | ConvertTo-Json -Compress" % url)
     try:
-        subprocess.run(["powershell.exe", "-NoProfile", "-Command",
-                        "try { Invoke-WebRequest -UseBasicParsing -Method Head -TimeoutSec 15 -Uri '%s' | Out-Null } catch {}" % url],
-                       capture_output=True, timeout=30, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        return True
-    except (OSError, subprocess.SubprocessError):
-        return False
+        out = subprocess.run(["powershell.exe", "-NoProfile", "-Command", ps], capture_output=True, text=True,
+                             timeout=40, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+        d = json.loads(out.strip() or "null")
+        return d if isinstance(d, dict) else None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
 
 
 def dlogin_sig(key, text):
