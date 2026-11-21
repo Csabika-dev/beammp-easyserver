@@ -1,6 +1,7 @@
 """Unit tests: small functions that protect the server. Each security fix has a test here so it can't
 silently come back."""
 import socket
+import sys
 import time
 import unittest
 from unittest import mock
@@ -165,3 +166,37 @@ class Config(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(sys.platform == "win32", "Windows only")
+class WindowsSleep(unittest.TestCase):
+    """The real Windows calls up to the last one (64-bit handles used to crash here); only the sleep itself is faked."""
+
+    def test_reaches_windows_sleep_call(self):
+        import ctypes
+        real = ctypes.WinDLL
+        asked = []
+
+        class FakeFn:
+            argtypes = restype = None
+
+            def __init__(self, result):
+                self.result = result
+
+            def __call__(self, *a):
+                asked.append(a)
+                return self.result
+
+        class FakePowrprof:
+            def __init__(self, result):
+                self.SetSuspendState = FakeFn(result)
+
+        for result, ok in ((1, True), (0, False)):
+            asked.clear()
+            with mock.patch.object(ctypes, "WinDLL", lambda name, **kw: FakePowrprof(result) if name == "powrprof" else real(name, **kw)):
+                if ok:
+                    D.win_sleep()
+                else:
+                    with self.assertRaises(OSError):
+                        D.win_sleep()
+            self.assertEqual(asked, [(False, False, False)])
