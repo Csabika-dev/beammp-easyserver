@@ -6520,7 +6520,7 @@ def ip_is_remote(ip):
 # part. It and this dashboard share a key (made when the owner turns the feature on); the dashboard signs
 # the address to come back to, the service signs who logged in. Discord only replaces the password: two-step
 # login and the "from the internet" rules stay the same.
-LOGIN_SERVICE = (os.environ.get("ES_LOGIN_SERVICE") or "").rstrip("/")    # set once the service is online
+LOGIN_SERVICE = (os.environ.get("ES_LOGIN_SERVICE") or "https://easyserver-login.easyserver-hq.workers.dev").rstrip("/")
 DLOGIN_FILE = os.path.join(DATA_DIR, "discord-login.json")
 DLOGIN_NONCE_RE = re.compile(r"[A-Za-z0-9_\-]{20,64}")
 DISCORD_ID_RE = re.compile(r"\d{5,25}")
