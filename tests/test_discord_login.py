@@ -154,44 +154,40 @@ class DiscordLogin(unittest.TestCase):
 
 
 class SignInServiceCertificate(unittest.TestCase):
-    """Windows: a missing root certificate is fetched by Windows once, then the (still verified) call is retried."""
+    """Windows: if Python's certificate check trips, the sign-up goes through Windows' own (still checked) HTTPS."""
 
-    def test_retry_after_windows_fetches_the_root(self):
-        import io
+    def test_windows_falls_back_to_its_own_https(self):
         import ssl
         import urllib.error
-        calls = []
 
         def fake_urlopen(req, timeout=None):
-            calls.append(req.full_url)
-            if len(calls) == 1:
-                raise urllib.error.URLError(ssl.SSLCertVerificationError("certificate has expired"))
-            return io.BytesIO(json.dumps({"inst": "C" * 24, "key": "k" * 43}).encode())
-
-        fetched = []
+            raise urllib.error.URLError(ssl.SSLCertVerificationError("certificate has expired"))
+        asked, saved = [], []
         with mock.patch.object(D, "LOGIN_SERVICE", "https://login.example"), \
                 mock.patch.object(D, "IS_WIN", True), \
                 mock.patch.object(D.urllib.request, "urlopen", fake_urlopen), \
-                mock.patch.object(D, "win_fetch_root", lambda u: fetched.append(u) or True), \
-                mock.patch.object(D, "_team_save", lambda *a: None):
+                mock.patch.object(D, "win_post_json", lambda u: asked.append(u) or {"inst": "C" * 24, "key": "k" * 43}), \
+                mock.patch.object(D, "_team_load", lambda *a: []), \
+                mock.patch.object(D, "_team_save", lambda *a: saved.append(a)):
             D.dlogin_set(True)
-        self.assertEqual(len(calls), 2)
-        self.assertEqual(fetched, ["https://login.example"])
+        self.assertEqual(asked, ["https://login.example/register"])
+        self.assertEqual(saved[0][2][0]["inst"], "C" * 24)
 
-    def test_no_retry_elsewhere(self):
+    def test_no_fallback_elsewhere_or_for_other_errors(self):
         import ssl
         import urllib.error
-
-        def fake_urlopen(req, timeout=None):
-            raise urllib.error.URLError(ssl.SSLCertVerificationError("bad"))
-        with mock.patch.object(D, "LOGIN_SERVICE", "https://login.example"), \
-                mock.patch.object(D, "IS_WIN", False), \
-                mock.patch.object(D.urllib.request, "urlopen", fake_urlopen), \
-                mock.patch.object(D, "_team_load", lambda *a: []):
-            with self.assertRaises(ValueError):
-                D.dlogin_set(True)
+        for win, err in ((False, ssl.SSLCertVerificationError("bad")), (True, OSError("no network"))):
+            def fake_urlopen(req, timeout=None, err=err):
+                raise urllib.error.URLError(err)
+            with mock.patch.object(D, "LOGIN_SERVICE", "https://login.example"), \
+                    mock.patch.object(D, "IS_WIN", win), \
+                    mock.patch.object(D.urllib.request, "urlopen", fake_urlopen), \
+                    mock.patch.object(D, "win_post_json", lambda u: self.fail("no fallback expected")), \
+                    mock.patch.object(D, "_team_load", lambda *a: []):
+                with self.assertRaises(ValueError):
+                    D.dlogin_set(True)
 
     def test_only_plain_service_addresses(self):
         with mock.patch.object(D, "IS_WIN", True):
-            self.assertFalse(D.win_fetch_root("https://x.example'; Remove-Item C:\\ -Recurse; '"))
-            self.assertFalse(D.win_fetch_root("http://x.example"))
+            self.assertIsNone(D.win_post_json("https://x.example/register'; Remove-Item C:\\ -Recurse; '"))
+            self.assertIsNone(D.win_post_json("http://x.example/register"))
