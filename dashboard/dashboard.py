@@ -6234,8 +6234,9 @@ MOD_WRITE = {"/api/players/act", "/api/bans/add", "/api/bans/remove", "/api/allo
              "/api/notifications/read", "/api/notifications/clear", "/api/security/ack", "/api/logout",
              "/api/events/stop", "/api/map", "/api/maintenance"}
 VIEWER_WRITE = {"/api/logout", "/api/notifications/read", "/api/logs/explain", "/api/devices",
-                "/api/me/password", "/api/me/2fa/begin", "/api/me/2fa/confirm", "/api/me/2fa/disable"}
-OWNER_WRITE = {"/api/roles", "/api/teaminvite", "/api/plugins/fetch", "/api/plugins/upload", "/api/plugins/install", "/api/plugins/toggle", "/api/plugins/remove", "/api/plugins/adopt", "/api/users", "/api/password", "/api/2fa/begin", "/api/2fa/confirm", "/api/2fa/disable", "/api/remote",
+                "/api/me/password", "/api/me/2fa/begin", "/api/me/2fa/confirm", "/api/me/2fa/disable",
+                "/api/me/discord/link", "/api/me/discord/unlink"}
+OWNER_WRITE = {"/api/roles", "/api/teaminvite", "/api/discordlogin", "/api/plugins/fetch", "/api/plugins/upload", "/api/plugins/install", "/api/plugins/toggle", "/api/plugins/remove", "/api/plugins/adopt", "/api/users", "/api/password", "/api/2fa/begin", "/api/2fa/confirm", "/api/2fa/disable", "/api/remote",
                "/api/authkey", "/api/import", "/api/power/helper", "/api/servers/delete", "/api/statuspage", "/api/supporter"}
 ADMIN_GET = {"/api/export", "/api/backups/download", "/api/phoneapp", "/api/ntfy", "/api/power/offline",
              "/api/health/report", "/api/health/saved", "/api/users", "/api/activity", "/api/modpack", "/api/integrations", "/api/statuspage"}
@@ -6511,6 +6512,97 @@ def ip_is_remote(ip):
         return ipaddress.ip_address(ip).is_global
     except ValueError:
         return True
+
+
+# --- "Sign in with Discord" for team accounts (owner: password only)
+# The Discord app's secret can't live in open-source code and Discord only sends people back to addresses
+# registered in advance, so a tiny service (login-service/worker.js, run by the project) does the Discord
+# part. It and this dashboard share a key (made when the owner turns the feature on); the dashboard signs
+# the address to come back to, the service signs who logged in. Discord only replaces the password: two-step
+# login and the "from the internet" rules stay the same.
+LOGIN_SERVICE = (os.environ.get("ES_LOGIN_SERVICE") or "").rstrip("/")    # set once the service is online
+DLOGIN_FILE = os.path.join(DATA_DIR, "discord-login.json")
+DLOGIN_NONCE_RE = re.compile(r"[A-Za-z0-9_\-]{20,64}")
+DISCORD_ID_RE = re.compile(r"\d{5,25}")
+
+
+def _b64u(b):
+    return base64.urlsafe_b64encode(b).decode().rstrip("=")
+
+
+def _b64u_dec(s):
+    s = str(s)
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def dlogin_conf():
+    """{"inst": ..., "key": <raw key bytes>} once the owner turned Discord sign-in on, else None."""
+    items = _team_load(DLOGIN_FILE, "discord-login")
+    if not items or not items[0].get("on"):
+        return None
+    key = _unseal(items[0].get("key"), "dlogin")
+    if not key or not re.fullmatch(r"[A-Za-z0-9_\-]{24}", str(items[0].get("inst") or "")):
+        return None
+    try:
+        return {"inst": items[0]["inst"], "key": _b64u_dec(key)}
+    except (ValueError, binascii.Error):
+        return None
+
+
+def dlogin_available():
+    return bool(LOGIN_SERVICE)
+
+
+def dlogin_set(on):
+    if not on:
+        items = _team_load(DLOGIN_FILE, "discord-login")
+        _team_save(DLOGIN_FILE, "discord-login", [dict(items[0], on=False)] if items else [])
+        return
+    if not dlogin_available():
+        raise ValueError("Discord sign-in isn't available yet")
+    items = _team_load(DLOGIN_FILE, "discord-login")
+    if items and items[0].get("inst") and _unseal(items[0].get("key"), "dlogin"):
+        _team_save(DLOGIN_FILE, "discord-login", [dict(items[0], on=True)])
+        return
+    req = urllib.request.Request(LOGIN_SERVICE + "/register", data=b"{}", method="POST",
+                                 headers={"User-Agent": "BeamMP-EasyServer/" + EASY_VERSION, "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            d = json.loads(r.read(4096))
+    except (OSError, ValueError) as e:
+        raise ValueError("Couldn't reach the sign-in service (%s) - try again in a minute" % (getattr(e, "reason", None) or e))
+    inst, key = str(d.get("inst") or ""), str(d.get("key") or "")
+    if not re.fullmatch(r"[A-Za-z0-9_\-]{24}", inst) or not re.fullmatch(r"[A-Za-z0-9_\-]{43}", key):
+        raise ValueError("The sign-in service gave an odd answer - try again later")
+    if not APP.secrets.has("USERS_KEY"):
+        APP.secrets.set("USERS_KEY", secrets.token_hex(32))
+    _team_save(DLOGIN_FILE, "discord-login", [{"on": True, "inst": inst, "key": _seal(key, "dlogin"), "t": now()}])
+
+
+def dlogin_sig(key, text):
+    return _b64u(hmac.new(key, text.encode(), hashlib.sha256).digest())
+
+
+def dlogin_check_note(conf, raw):
+    """The signed note the service sends back: {"sub", "name", "user", "nonce", "aud", ...} or None."""
+    note, _, sig = str(raw or "").partition(".")
+    if not note or len(note) > 2000 or not re.fullmatch(r"[A-Za-z0-9_\-]{43}", sig):
+        return None
+    if not hmac.compare_digest(dlogin_sig(conf["key"], "assert|" + note), sig):
+        return None
+    try:
+        d = json.loads(_b64u_dec(note))
+    except (ValueError, binascii.Error, UnicodeDecodeError):
+        return None
+    if not isinstance(d, dict) or d.get("v") != 1 or d.get("inst") != conf["inst"] or not isinstance(d.get("exp"), int) or d["exp"] < now():
+        return None
+    if not DISCORD_ID_RE.fullmatch(str(d.get("sub") or "")) or not DLOGIN_NONCE_RE.fullmatch(str(d.get("nonce") or "")):
+        return None
+    return d
+
+
+def find_user_by_discord(did):
+    return next((u for u in load_users() if (u.get("discord") or {}).get("id") == did), None)
 
 
 # --- invite links
@@ -8402,7 +8494,8 @@ class Handler(BaseHTTPRequestHandler):
             if method == "GET" and path in APP_FILES:
                 return self.app_file(path)
             public = {("GET", "/api/session"), ("POST", "/api/login"), ("POST", "/api/setup"),
-                      ("GET", "/api/teaminvite/info"), ("POST", "/api/teaminvite/accept")}
+                      ("GET", "/api/teaminvite/info"), ("POST", "/api/teaminvite/accept"),
+                      ("POST", "/api/discord/start"), ("POST", "/api/discord/finish")}
             if (method, path) in public:
                 return getattr(self, "api_" + path[5:].replace("/", "_"))(q)
             if method in ("GET", "HEAD") and path in ("/status", "/status.json"):
@@ -8545,6 +8638,7 @@ class Handler(BaseHTTPRequestHandler):
             "needs_setup": not app.secrets.has("MODS_PASSWORD"),
             "setup_allowed": at_server(self.ip) and host_name(self.headers.get("Host")) in ("localhost", "127.0.0.1", "::1"),
             "totp": app.secrets.has("TOTP_SECRET"),
+            "discord_login": dlogin_available() and dlogin_conf() is not None,
             "version": EASY_VERSION, "platform": "windows" if IS_WIN else "linux",
             "https": self.https,
         }, extra=extra)
@@ -10791,13 +10885,19 @@ class Handler(BaseHTTPRequestHandler):
     def get_users(self, q):
         self.send(200, {"users": [dict({k: u.get(k) for k in ("name", "role", "created", "last_login", "disabled", "remote")},
                                        servers=u.get("servers") if isinstance(u.get("servers"), dict) else "all",
-                                       totp=bool(u.get("totp")), invited_by=u.get("invited_by"))
+                                       totp=bool(u.get("totp")), invited_by=u.get("invited_by"),
+                                       discord=(u.get("discord") or {}).get("name"))
                                   for u in load_users()],
                         "roles": ["admin", "moderator", "viewer"], "custom_roles": load_roles(),
                         "perm_groups": [{"id": g[0], "name": g[1], "about": g[2]} for g in PERM_GROUPS],
                         "servers": [{"id": i.id, "name": i.name} for i in sorted(INSTANCES.values(), key=lambda i: (i.id != "main", i.id))],
                         "invites": [{k: x.get(k) for k in ("id", "role", "servers", "remote", "created", "expires", "note")} for x in load_invites()],
-                        "remote_enabled": bool(APP.settings.get("remote_enabled"))})
+                        "remote_enabled": bool(APP.settings.get("remote_enabled")),
+                        "discord_login": {"available": dlogin_available(), "on": dlogin_conf() is not None}})
+
+    def post_discordlogin(self, q):
+        dlogin_set(bool(self.body_json().get("on")))
+        self.send(200, {"ok": True, "on": dlogin_conf() is not None})
 
     def post_users(self, q):
         b = self.body_json()
@@ -10842,6 +10942,9 @@ class Handler(BaseHTTPRequestHandler):
             kick = not u["remote"]
         elif act == "reset_2fa":
             u.pop("totp", None)
+            kick = True
+        elif act == "discord_unlink":
+            u.pop("discord", None)
             kick = True
         elif act == "password":
             pw = str(b.get("password") or "")
@@ -11021,6 +11124,145 @@ class Handler(BaseHTTPRequestHandler):
         APP.notifier.add("team", "%s joined the dashboard team" % name, "They used an invite link and can now log in.", "info")
         self.send(200, {"ok": True})
 
+    # ---------- Sign in with Discord (team accounts)
+    _DLOGIN_PENDING = {}            # nonce -> {"mode", "user", "ret", "exp"}
+
+    def session_discord_on(self):
+        return dlogin_available() and dlogin_conf() is not None
+
+    def own_return_address(self):
+        """This dashboard's own address as the browser uses it - only one this computer really has, so
+        nobody can have the sign-in sent to a site of their own."""
+        hdr = (self.headers.get("Host") or "").strip()
+        host = host_name(hdr)
+        if not re.fullmatch(r"[A-Za-z0-9.\-]+(:\d{1,5})?|\[[0-9a-fA-F:.]+\](:\d{1,5})?", hdr):
+            return None
+        port = hdr.rsplit(":", 1)[1] if re.search(r":\d{1,5}$", hdr) else ("443" if self.https else "80")
+        if port != str(APP.settings.get("port")):
+            return None
+        mine = {"localhost", "127.0.0.1", "::1", mac_lan_ip(), duck_host()} | set(tlsgen.local_ips())
+        if APP.settings.get("remote_enabled"):
+            mine.add(public_ip())
+        if not host or host not in {str(x).lower() for x in mine if x}:
+            return None
+        return "%s://%s/" % ("https" if self.https else "http", hdr.lower())
+
+    def _dlogin_begin(self, mode, user=None):
+        conf = dlogin_conf() if dlogin_available() else None
+        if not conf:
+            raise ValueError("Discord sign-in is off on this dashboard")
+        ret = self.own_return_address()
+        if not ret:
+            raise ValueError("Open the dashboard by its own address (like http://192.168.1.20:%s) to use Discord sign-in"
+                             % APP.settings.get("port"))
+        nonce, exp = secrets.token_urlsafe(24), now() + 600
+        with LOCK:
+            pend = Handler._DLOGIN_PENDING
+            for k in [k for k, v in pend.items() if v["exp"] < now()]:
+                pend.pop(k, None)
+            if len(pend) > 200:
+                raise ValueError("Too many sign-ins at once - try again in a few minutes")
+            pend[nonce] = {"mode": mode, "user": user, "ret": ret, "exp": exp}
+        sig = dlogin_sig(conf["key"], "start|%s|%s|%s|%d" % (conf["inst"], nonce, ret, exp))
+        url = LOGIN_SERVICE + "/start?" + urllib.parse.urlencode({"inst": conf["inst"], "nonce": nonce, "ret": ret, "exp": exp, "sig": sig})
+        self.send(200, {"ok": True, "url": url}, extra={"Set-Cookie": self.cookie_header(nonce, name="es_dn", max_age=600)})
+
+    def api_discord_start(self, q):
+        if APP.is_locked(self.ip):
+            return self.fail(429, "Too many wrong attempts. Try again in 15 minutes.")
+        origin = self.headers.get("Origin")
+        if origin and urllib.parse.urlparse(origin).netloc != self.headers.get("Host", ""):
+            return self.fail(403, "Security check failed - reload the page")
+        try:
+            self._dlogin_begin("login")
+        except ValueError as e:
+            self.fail(400, str(e))
+
+    def post_me_discord_link(self, q):
+        u = self._me()
+        self._dlogin_begin("link", u["name"])
+
+    def post_me_discord_unlink(self, q):
+        u = self._me()
+        users = load_users()
+        for x in users:
+            if x["name"].lower() == u["name"].lower():
+                x.pop("discord", None)
+        save_users(users)
+        activity(u["name"], "Unlinked Discord", "dashboard", self.ip, "main")
+        self.send(200, {"ok": True})
+
+    def api_discord_finish(self, q):
+        app = APP
+        if app.is_locked(self.ip):
+            return self.fail(429, "Too many wrong attempts. Try again in 15 minutes.")
+        origin = self.headers.get("Origin")
+        if origin and urllib.parse.urlparse(origin).netloc != self.headers.get("Host", ""):
+            return self.fail(403, "Security check failed - reload the page")
+        conf = dlogin_conf() if dlogin_available() else None
+        b = self.body_json(8192)
+        nonce = self.cookie("es_dn") or ""
+        note = dlogin_check_note(conf, b.get("a")) if conf else None
+        with LOCK:
+            pend = Handler._DLOGIN_PENDING.get(nonce)
+        ret = self.own_return_address()
+        # the note must be for this browser's sign-in (its cookie), for this dashboard and for this address
+        if not note or not pend or pend["exp"] < now() or not hmac.compare_digest(note["nonce"], nonce) \
+                or note.get("aud") != pend["ret"] or ret != pend["ret"]:
+            time.sleep(0.5)
+            app.login_failed(self.ip)
+            return self.fail(400, "That sign-in didn't work or took too long - try again")
+        did, dname = note["sub"], clean_msg(str(note.get("name") or note.get("user") or ""))[:40] or "Discord user"
+        clear = self.cookie_header("", clear=True, name="es_dn")
+        if pend["mode"] == "link":
+            with _TEAM_LOCK:
+                users = load_users()
+                other = next((x for x in users if (x.get("discord") or {}).get("id") == did and x["name"].lower() != str(pend["user"]).lower()), None)
+                if other:
+                    with LOCK:
+                        Handler._DLOGIN_PENDING.pop(nonce, None)
+                    return self.fail(400, "That Discord account is already linked to another dashboard account")
+                me = next((x for x in users if x["name"].lower() == str(pend["user"]).lower()), None)
+                if not me:
+                    return self.fail(400, "Your account is gone")
+                me["discord"] = {"id": did, "name": dname, "t": now()}
+                save_users(users)
+            with LOCK:
+                Handler._DLOGIN_PENDING.pop(nonce, None)
+            activity(me["name"], "Linked Discord (%s)" % dname, "dashboard", self.ip, "main")
+            return self.send(200, {"ok": True, "linked": dname}, extra={"Set-Cookie": clear})
+        # sign in: Discord stands in for the password only
+        u = find_user_by_discord(did)
+        local = not ip_is_remote(self.ip)
+        if not u or u.get("disabled"):
+            with LOCK:
+                Handler._DLOGIN_PENDING.pop(nonce, None)
+            time.sleep(0.5)
+            app.login_failed(self.ip)
+            return self.send(403, {"ok": False, "error": "No dashboard account is linked to this Discord account. Log in with "
+                                   "your name and password, then link Discord under My account."}, extra={"Set-Cookie": clear})
+        if not local and not (u.get("remote") and u.get("totp")):
+            with LOCK:
+                Handler._DLOGIN_PENDING.pop(nonce, None)
+            activity(u["name"], "Login refused (from the internet)", "dashboard", self.ip, "main", ok=False)
+            return self.fail(403, "This account can only log in from the home network.")
+        if u.get("totp") and not user_totp_ok(u, b.get("code")):
+            if b.get("code"):
+                time.sleep(0.7)
+                app.login_failed(self.ip)
+            return self.fail(401, "Enter the code from your two-step login app", need_code=True)
+        with LOCK:
+            if not Handler._DLOGIN_PENDING.pop(nonce, None):
+                return self.fail(400, "That sign-in was already used - try again")
+        users = load_users()
+        for x in users:
+            if x["name"].lower() == u["name"].lower():
+                x["last_login"] = now()
+        save_users(users)
+        tok = app.new_session(self.ip, u["name"], u["role"])
+        activity(u["name"], "Logged in with Discord" + ("" if local else " (from the internet)"), "dashboard", self.ip, "main")
+        self.send(200, {"ok": True}, extra={"Set-Cookie": self.login_cookies(tok, u["name"], b.get("remember") is True) + [clear]})
+
     # ---------- my account (extra accounts)
     def _me(self):
         if self.sess.get("user", "owner") == "owner":
@@ -11035,6 +11277,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, {"owner": True})
         u = self._me()
         self.send(200, {"name": u["name"], "totp": bool(u.get("totp")), "remote": bool(u.get("remote")),
+                        "discord": (u.get("discord") or {}).get("name"), "discord_login": self.session_discord_on(),
                         "remote_enabled": bool(APP.settings.get("remote_enabled")), "roles": self.session_server_roles(self.sess_real)})
 
     def post_me_password(self, q):
