@@ -285,13 +285,16 @@ async function openInvite() {
     <div class="row" style="margin-bottom:8px"><button class="btn sm on" data-v="net">${d.internet ? "Friends anywhere" : "Message"}</button><button class="btn sm" data-v="lan">Same Wi-Fi</button></div>
     <textarea id="inv_t" readonly></textarea>
     <label class="f" style="margin-top:10px"><span>Extra line <span class="muted">(rules, your Discord link…)</span></span><input type="text" id="inv_note" maxlength="300" value="${esc(d.note)}" placeholder="Be nice, no ramming at spawn"></label>
+    <label class="small" style="display:flex;gap:6px;align-items:center;margin-top:8px"><input type="checkbox" id="inv_credit" ${d.credit ? "checked" : ""}> Mention EasyServer at the end, so friends who want their own server can find it</label>
     <div class="row" style="margin-top:12px"><button class="btn primary" id="inv_copy">Copy invite</button><span class="small muted">Discord shows the **bold** parts in bold.</span></div>`);
   let view = "net";
-  const fill = () => { const note = $("#inv_note", bg).value.trim(); $("#inv_t", bg).value = (view === "lan" ? d.lan_text : d.base) + (note ? "\n\n" + note : "") + "\n\n" + d.footer; };
+  const fill = () => { const note = $("#inv_note", bg).value.trim(), credit = $("#inv_credit", bg).checked;
+    $("#inv_t", bg).value = (view === "lan" ? d.lan_text : d.base) + (note ? "\n\n" + note : "") + "\n\nNeed BeamMP? https://beammp.com" + (credit ? "\n" + d.credit_line : ""); };
   fill();
   bg.querySelectorAll("[data-v]").forEach(b => b.onclick = () => { view = b.dataset.v; bg.querySelectorAll("[data-v]").forEach(x => x.classList.toggle("on", x === b)); fill(); });
   $("#inv_note", bg).oninput = fill;
   $("#inv_note", bg).onchange = () => api("/api/invite", { json: { note: $("#inv_note", bg).value.trim() } }).catch(() => {});
+  $("#inv_credit", bg).onchange = () => { fill(); api("/api/invite", { json: { credit: $("#inv_credit", bg).checked } }).catch(() => {}); };
   bg.querySelector("[data-x]").onclick = () => bg.remove();
   $("#inv_copy", bg).onclick = async () => {
     if (view === "net") api("/api/upnp", { json: { open_for: 7200 } }).catch(() => {});   // "only when needed": friends are about to join
@@ -1806,13 +1809,14 @@ async function loadStatusPage() {
     <label class="toggle"><input type="checkbox" id="sp_on" ${d.on ? "checked" : ""}><span><b>Turn on the status page</b></span></label>
     <label class="toggle"><input type="checkbox" id="sp_players" ${d.players ? "checked" : ""}><span><b>Show the names of online players</b><small>Off = only the number</small></span></label>
     <label class="toggle"><input type="checkbox" id="sp_mods" ${d.mods ? "checked" : ""}><span><b>Show the mods and the download size</b><small>So players know what they'll download before they launch the game</small></span></label>
+    <label class="toggle"><input type="checkbox" id="sp_credit" ${d.credit ? "checked" : ""}><span><b>"Hosted with BeamMP EasyServer" at the bottom</b><small>A small link, so players who want their own server can find it</small></span></label>
     <label class="f"><span>Page title</span><input type="text" id="sp_title" maxlength="80" value="${esc(d.title)}" placeholder="${esc(P.title)}"></label>
     ${d.on ? `<p class="small">On your network: <a href="${esc(d.lan_url)}" target="_blank" rel="noopener">${esc(d.lan_url)}</a>${d.remote ? `<br>On the internet: <a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.url)}</a>` : `<br><span class="muted">Players outside your network can only open it once internet access to the dashboard is on (Network). Or share the Discord status message instead.</span>`}</p>` : ""}
     <div class="row" style="flex-wrap:wrap;gap:6px">${P.servers.map(x => `<span class="badge">${esc(x.name)}: ${esc(x.state)}${x.history.d30 != null ? " · " + x.history.d30 + "% (30 d)" : ""}</span>`).join("")}</div>
     <div class="row" style="margin-top:10px"><button class="btn sm primary" id="sp_save">Save</button></div>`;
   $("#sp_save").onclick = async () => {
     if ($("#sp_on").checked && !d.on && !confirm("Turn on the public status page? Anyone who can reach your dashboard address can see it without logging in.")) return;
-    try { const r = await api("/api/statuspage", { json: { on: $("#sp_on").checked, players: $("#sp_players").checked, mods: $("#sp_mods").checked, title: $("#sp_title").value } }); toast(r.note, 6000); loadStatusPage(); } catch (e) { toast(e.message, 6000); }
+    try { const r = await api("/api/statuspage", { json: { on: $("#sp_on").checked, players: $("#sp_players").checked, mods: $("#sp_mods").checked, credit: $("#sp_credit").checked, title: $("#sp_title").value } }); toast(r.note, 6000); loadStatusPage(); } catch (e) { toast(e.message, 6000); }
   };
 }
 
