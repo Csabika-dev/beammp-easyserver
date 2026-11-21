@@ -133,6 +133,18 @@ class Team(unittest.TestCase):
         for n in ("invited1", "invited3"):
             self.owner.call("/api/users", {"action": "delete", "name": n})
 
+    def test_no_internet_logins_on_a_mac(self):
+        # there every visitor looks like a home device, so the internet rule couldn't be enforced
+        self.add("macuser", "viewer")
+        with mock.patch.object(D, "on_mac", lambda: True):
+            st, r, _ = self.owner.call("/api/users", {"action": "remote", "name": "macuser", "remote": True})
+            self.assertEqual(st, 400, r)
+            self.assertIn("Mac", str(r))
+            self.assertEqual(self.owner.call("/api/teaminvite", {"role": "viewer", "remote": True})[0], 400)
+            self.assertEqual(self.owner.call("/api/users", {"action": "remote", "name": "macuser", "remote": False})[0], 200)
+        self.assertFalse(D.find_user("macuser").get("remote"))
+        self.owner.call("/api/users", {"action": "delete", "name": "macuser"})
+
     def test_only_owner_manages_the_team(self):
         c = self.add("teamadmin", "admin")
         for path, body in (("/api/users", {"action": "add", "name": "zz", "role": "admin", "password": "x" * 12}),
