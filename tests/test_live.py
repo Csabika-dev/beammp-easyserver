@@ -96,6 +96,35 @@ class Live(unittest.TestCase):
             if os.path.exists(p):
                 os.remove(p)
 
+    def test_check_new_mods_skips_checked_ones(self):
+        import io
+        import zipfile
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr("vehicles/testcar/info.json", '{"Name": "Test car %f"}' % time.time())
+        path = os.path.join(harness.SRV, "Resources", "Client", "zz_scan_test.zip")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(buf.getvalue())
+        try:
+            first = self.owner.call("/api/mods/rescan", {})[1]
+            mine = next(x for x in first["results"] if x["name"] == "zz_scan_test.zip")
+            self.assertFalse(mine["skipped"])                     # new: checked
+            again = self.owner.call("/api/mods/rescan", {})[1]
+            self.assertTrue(next(x for x in again["results"] if x["name"] == "zz_scan_test.zip")["skipped"])
+            self.assertEqual(again["checked"], 0)                 # nothing new
+            full = self.owner.call("/api/mods/rescan", {"all": True})[1]
+            self.assertFalse(next(x for x in full["results"] if x["name"] == "zz_scan_test.zip")["skipped"])
+            self.assertEqual(full["skipped"], 0)
+            # changed content counts as new again
+            with zipfile.ZipFile(path, "a") as z:
+                z.writestr("vehicles/testcar/extra.txt", "changed")
+            later = self.owner.call("/api/mods/rescan", {})[1]
+            self.assertFalse(next(x for x in later["results"] if x["name"] == "zz_scan_test.zip")["skipped"])
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
     def test_webhook_cannot_target_home_network(self):
         for u in ("https://127.0.0.1:30815/api/logout", "https://169.254.169.254/latest/", "https://192.168.1.1/",
                   "http://hooks.example/x", "https://10.0.0.1@evil.example/"):
