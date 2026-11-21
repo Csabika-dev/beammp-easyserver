@@ -6564,11 +6564,18 @@ def dlogin_set(on):
     if items and items[0].get("inst") and _unseal(items[0].get("key"), "dlogin"):
         _team_save(DLOGIN_FILE, "discord-login", [dict(items[0], on=True)])
         return
-    req = urllib.request.Request(LOGIN_SERVICE + "/register", data=b"{}", method="POST",
-                                 headers={"User-Agent": "BeamMP-EasyServer/" + EASY_VERSION, "Content-Type": "application/json"})
-    try:
+    def ask():
+        req = urllib.request.Request(LOGIN_SERVICE + "/register", data=b"{}", method="POST",
+                                     headers={"User-Agent": "BeamMP-EasyServer/" + EASY_VERSION, "Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=20) as r:
-            d = json.loads(r.read(4096))
+            return json.loads(r.read(4096))
+    try:
+        try:
+            d = ask()
+        except urllib.error.URLError as e:
+            if not (IS_WIN and isinstance(e.reason, ssl.SSLCertVerificationError) and win_fetch_root(LOGIN_SERVICE)):
+                raise
+            d = ask()          # Windows has the certificate's root now; the check itself is unchanged
     except (OSError, ValueError) as e:
         raise ValueError("Couldn't reach the sign-in service (%s) - try again in a minute" % (getattr(e, "reason", None) or e))
     inst, key = str(d.get("inst") or ""), str(d.get("key") or "")
@@ -6577,6 +6584,21 @@ def dlogin_set(on):
     if not APP.secrets.has("USERS_KEY"):
         APP.secrets.set("USERS_KEY", secrets.token_hex(32))
     _team_save(DLOGIN_FILE, "discord-login", [{"on": True, "inst": inst, "key": _seal(key, "dlogin"), "t": now()}])
+
+
+def win_fetch_root(url):
+    """Python on Windows only trusts root certificates Windows has already downloaded; Windows fetches a
+    missing one the first time one of its own programs visits the site. So: visit it once with PowerShell
+    (which uses Windows' own certificate check), then the caller tries again - still fully verified."""
+    if not IS_WIN or not re.fullmatch(r"https://[A-Za-z0-9.\-]+(:\d{1,5})?", url or ""):
+        return False
+    try:
+        subprocess.run(["powershell.exe", "-NoProfile", "-Command",
+                        "try { Invoke-WebRequest -UseBasicParsing -Method Head -TimeoutSec 15 -Uri '%s' | Out-Null } catch {}" % url],
+                       capture_output=True, timeout=30, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        return True
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 def dlogin_sig(key, text):
