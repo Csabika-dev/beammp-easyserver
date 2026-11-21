@@ -55,6 +55,7 @@ JOIN_OPEN = 2 * 3600      # Discord /join keeps the port open this long
 LS_STORE_ID = 0
 LS_API = "https://api.lemonsqueezy.com/v1/licenses/"
 SUPPORT_URL = "https://csabika-dev.github.io/beammp-easyserver/#support"
+SITE_URL = "https://csabika-dev.github.io/beammp-easyserver/"
 SUPPORTER_GRACE = 14 * 86400        # keep supporter features when the check can't reach Lemon Squeezy
 IS_WIN = os.name == "nt"
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -154,6 +155,7 @@ DEFAULT_SETTINGS = {
     "upnp_mode": "needed",         # "needed" = only while players are on, after an invite or /join; "always" = keep the port open
     "upnp_open_until": 0,          # "needed" mode: keep the port open until this time
     "invite_note": "",             # an extra line for the "Copy invite" message (rules, Discord link ...)
+    "credit_link": True,           # "Hosted with BeamMP EasyServer" on the status page and at the end of the invite
     "supporter": {},               # the supporter licence (key itself is a secret): instance, plan, last check
     "early_access": True,          # supporters: Experimental versions (newest features first, pre-releases) - supporters only
     "rolling": False,              # free mode (PAID_FEATURES off): hear about the Rolling release (newest code) too
@@ -2219,6 +2221,11 @@ def host_info():
 
 def on_mac():
     return host_info().get("platform") == "mac"
+
+
+# On a Mac every visitor reaches the dashboard through the Mac's port forwarder and looks like a home device,
+# so "only from the internet with two-step login" can't be enforced there: internet logins stay off.
+MAC_NO_REMOTE = "Logging in from the internet isn't available on a Mac yet - team members can log in from your home network."
 
 
 def mac_lan_ip():
@@ -5045,7 +5052,7 @@ main{max-width:760px;margin:0 auto;padding:28px 16px}h1{font-size:24px;margin:0 
 .up .dot{background:var(--up)}.down .dot{background:var(--down)}.maintenance .dot,.asleep .dot{background:var(--warn)}
 .bars{display:flex;gap:2px;margin-top:10px;height:28px}.bars i{flex:1;border-radius:2px;background:var(--none)}
 .stats{display:flex;gap:18px;margin-top:8px}.stats b{font-size:17px}
-</style></head><body><main>__BODY__<p class="small mute" style="margin-top:22px">Updated __UPDATED__ · refreshes every minute · BeamMP EasyServer</p></main></body></html>"""
+</style></head><body><main>__BODY__<p class="small mute" style="margin-top:22px">Updated __UPDATED__ · refreshes every minute · __CREDIT__</p></main></body></html>"""
 
 
 def render_status_page(d):
@@ -5089,7 +5096,9 @@ def render_status_page(d):
         parts.append('<div class="stats small"><span>Last 24 h <b>%s</b></span><span>7 days <b>%s</b></span><span>30 days <b>%s</b></span></div></div>'
                      % (pct(h["d1"]), pct(h["d7"]), pct(h["d30"])))
     return STATUS_HTML.replace("__TITLE__", e(d["title"])).replace("__BODY__", "".join(parts)).replace(
-        "__UPDATED__", e(time.strftime("%H:%M", time.localtime(d["updated"]))))
+        "__UPDATED__", e(time.strftime("%H:%M", time.localtime(d["updated"])))).replace(
+        "__CREDIT__", ('Hosted with <a href="%s" rel="noopener" style="color:inherit">BeamMP EasyServer</a>' % e(SITE_URL))
+        if APP.settings.get("credit_link") else "BeamMP EasyServer")
 
 
 # ----------------------------------------------------------------------------- timed announcements (fixed times)
@@ -9488,14 +9497,21 @@ class Handler(BaseHTTPRequestHandler):
             lines.append("Mods: %d (%s, downloaded when you join)" % (mods, ("%.1f GB" % (size / 1073741824.0) if size >= 1073741824 else "%d MB" % max(1, round(size / 1048576.0)))))
         note = clean_msg(app.settings.get("invite_note") or "")[:300]
         foot = "Need BeamMP? https://beammp.com"
-        self.send(200, {"base": "\n".join(lines), "footer": foot,
+        credit = bool(app.settings.get("credit_link"))
+        if credit:
+            foot += "\nServer hosted with BeamMP EasyServer (free): " + SITE_URL
+        self.send(200, {"base": "\n".join(lines), "footer": foot, "credit": credit, "credit_line": "Server hosted with BeamMP EasyServer (free): " + SITE_URL,
                         "text": "\n".join(lines + (["", note] if note else []) + ["", foot]), "host": host, "port": port, "lan": "%s:%s" % (lan, port),
                         "internet": internet, "relay": via_relay, "public": public, "note": note,
                         "lan_text": "Join **%s** on our Wi-Fi: BeamMP -> Direct Connect -> IP `%s` port `%s`" % (name, lan, port)})
 
     def post_invite(self, q):
-        note = clean_msg(str(self.body_json().get("note", "")))[:300]
-        APP.settings.update_one("invite_note", note)
+        b = self.body_json()
+        if "note" in b:
+            APP.settings.update_one("invite_note", clean_msg(str(b.get("note") or ""))[:300])
+        if "credit" in b:
+            APP.settings.update_one("credit_link", bool(b.get("credit")))
+            _STATUS_CACHE["t"] = 0
         self.send(200, {"ok": True})
 
     # ---------- BeamMP-only guard
@@ -10213,7 +10229,7 @@ class Handler(BaseHTTPRequestHandler):
         base = dashboard_url().rstrip("/")
         self.send(200, {"on": bool(s.get("statuspage_on")), "players": bool(s.get("statuspage_players")), "mods": bool(s.get("statuspage_mods")),
                         "title": s.get("statuspage_title") or "", "url": base + "/status", "lan_url": "http://%s:%s/status" % (lan_ip(), s.get("port")),
-                        "remote": bool(s.get("remote_enabled")), "preview": public_status()})
+                        "remote": bool(s.get("remote_enabled")), "credit": bool(s.get("credit_link")), "preview": public_status()})
 
     def post_statuspage(self, q):
         b = self.body_json()
@@ -10226,6 +10242,8 @@ class Handler(BaseHTTPRequestHandler):
             upd["statuspage_title"] = clean_msg(b["title"])[:80]
         if "mods" in b:
             upd["statuspage_mods"] = bool(b["mods"])
+        if "credit" in b:
+            upd["credit_link"] = bool(b["credit"])
         APP.settings.update(upd)
         _STATUS_CACHE["t"] = 0
         self.send(200, {"ok": True, "note": "Saved." + (" The page is public now - anyone with the link can see it." if upd.get("statuspage_on") else "")})
@@ -10818,6 +10836,8 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 u.pop("servers", None)
         elif act == "remote":
+            if b.get("remote") and on_mac():
+                raise ValueError(MAC_NO_REMOTE)
             u["remote"] = bool(b.get("remote"))
             kick = not u["remote"]
         elif act == "reset_2fa":
@@ -10893,6 +10913,8 @@ class Handler(BaseHTTPRequestHandler):
                 items = [x for x in load_invites() if x.get("id") != str(b.get("id") or "")]
                 save_invites(items)
             return self.send(200, {"ok": True})
+        if b.get("remote") and on_mac():
+            raise ValueError(MAC_NO_REMOTE)
         role = b.get("role")
         check_role_exists(role)
         sv = clean_servers_map(b.get("servers"))
