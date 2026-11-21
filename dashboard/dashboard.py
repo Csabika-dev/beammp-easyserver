@@ -5492,11 +5492,12 @@ def set_wake_timer(at):
 
 
 def win_sleep():
-    """Windows: put the computer to sleep (not hibernate)."""
+    """Windows: put the computer to sleep (not hibernate). Raises OSError if Windows refuses."""
     import ctypes
     from ctypes import wintypes
-    adv, k32 = ctypes.WinDLL("advapi32", use_last_error=True), ctypes.WinDLL("kernel32")
-    k32.GetCurrentProcess.restype = wintypes.HANDLE
+    adv = ctypes.WinDLL("advapi32", use_last_error=True)
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    pwr = ctypes.WinDLL("powrprof", use_last_error=True)
 
     class LUID(ctypes.Structure):
         _fields_ = [("Low", wintypes.DWORD), ("High", wintypes.LONG)]
@@ -5504,14 +5505,31 @@ def win_sleep():
     class TP(ctypes.Structure):
         _fields_ = [("Count", wintypes.DWORD), ("Luid", LUID), ("Attr", wintypes.DWORD)]
 
+    # every handle as a HANDLE: on 64-bit Windows a plain Python int is too big for the default C int
+    k32.GetCurrentProcess.restype = wintypes.HANDLE
+    k32.GetCurrentProcess.argtypes = []
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    adv.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+    adv.OpenProcessToken.restype = wintypes.BOOL
+    adv.LookupPrivilegeValueW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, ctypes.POINTER(LUID)]
+    adv.LookupPrivilegeValueW.restype = wintypes.BOOL
+    adv.AdjustTokenPrivileges.argtypes = [wintypes.HANDLE, wintypes.BOOL, ctypes.POINTER(TP), wintypes.DWORD,
+                                          ctypes.c_void_p, ctypes.c_void_p]
+    adv.AdjustTokenPrivileges.restype = wintypes.BOOL
+    pwr.SetSuspendState.argtypes = [wintypes.BOOLEAN, wintypes.BOOLEAN, wintypes.BOOLEAN]
+    pwr.SetSuspendState.restype = wintypes.BOOLEAN
+
     tok = wintypes.HANDLE()
-    adv.OpenProcessToken(k32.GetCurrentProcess(), 0x0020 | 0x0008, ctypes.byref(tok))   # ADJUST_PRIVILEGES | QUERY
-    luid = LUID()
-    adv.LookupPrivilegeValueW(None, "SeShutdownPrivilege", ctypes.byref(luid))
-    tp = TP(1, luid, 0x2)                                                                # SE_PRIVILEGE_ENABLED
-    adv.AdjustTokenPrivileges(tok, False, ctypes.byref(tp), 0, None, None)
-    k32.CloseHandle(tok)
-    ctypes.WinDLL("powrprof").SetSuspendState(False, False, False)
+    if adv.OpenProcessToken(k32.GetCurrentProcess(), 0x0020 | 0x0008, ctypes.byref(tok)):   # ADJUST_PRIVILEGES | QUERY
+        try:
+            luid = LUID()
+            if adv.LookupPrivilegeValueW(None, "SeShutdownPrivilege", ctypes.byref(luid)):
+                adv.AdjustTokenPrivileges(tok, False, ctypes.byref(TP(1, luid, 0x2)), 0, None, None)   # SE_PRIVILEGE_ENABLED
+        finally:
+            k32.CloseHandle(tok)
+    if not pwr.SetSuspendState(False, False, False):
+        raise OSError("Windows refused to sleep (error %d) - check that sleep is allowed in Power Options"
+                      % ctypes.get_last_error())
 
 
 def in_time_window(frm, to, t=None):
