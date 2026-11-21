@@ -168,6 +168,8 @@ class SignInServiceCertificate(unittest.TestCase):
                 mock.patch.object(D.urllib.request, "urlopen", fake_urlopen), \
                 mock.patch.object(D, "win_post_json", lambda u: asked.append(u) or {"inst": "C" * 24, "key": "k" * 43}), \
                 mock.patch.object(D, "_team_load", lambda *a: []), \
+                mock.patch.object(D, "_seal", lambda v, kind="": "sealed"), \
+                mock.patch.object(D, "APP", mock.Mock()), \
                 mock.patch.object(D, "_team_save", lambda *a: saved.append(a)):
             D.dlogin_set(True)
         self.assertEqual(asked, ["https://login.example/register"])
