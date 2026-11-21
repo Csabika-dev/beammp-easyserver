@@ -28,7 +28,7 @@ No config files and no command line needed. The installer downloads the newest o
 - **🚗 Vehicle rules** - block props, big physics props, trailers or any car; heavy mod cars are found automatically; stop spawn spam. Presets: Racing, Roleplay, No chaos.
 - **🔌 Server plugins** - install community plugins (CareerMP, freeRoamMP, BeamJoy …) from their authors' GitHub pages in a few clicks, turn them off and on, see their errors.
 - **🔔 Notifications & Discord** - crashes, joins and updates on Discord, email, phone or Telegram; a Discord bot with `/status`, `/start`, `/join`.
-- **💾 Safe by default** - automatic backups, encrypted keys, two-step login, a team with roles (admin / moderator / viewer or your own), invite links, per-server access and internet logins with two-step login.
+- **💾 Safe by default** - automatic backups, encrypted keys, two-step login, a team with roles (admin / moderator / viewer or your own), invite links, per-server access, Sign in with Discord and internet logins with two-step login.
 - **💸 Free** - open source, no ads, no account.
 
 Details for every item are further down - or watch the [setup video](https://youtu.be/DWD9HcW1OIc).
@@ -381,6 +381,7 @@ Moderators can do this too.
 3. **Only some servers:** with more than one server, **Servers…** gives an account a role per server (e.g. admin on the drift server, nothing on the others). Such an account can't change dashboard-wide settings.
 4. **From the internet:** tick *From the internet* for an account. It then needs its own two-step login (set up under **My account** - click your name at the bottom left - or right away when they accept an internet invite), and internet access to the dashboard must be on. Untick it and they're logged out at once.
 5. Change a role, reset a password or two-step login, disable or delete someone at any time on the same card. Everyone can change their own password and two-step login under **My account**.
+6. **Sign in with Discord** (team members only - the owner always uses the password): tick *Let team members sign in with Discord* on the same card. Each member links their Discord once under **My account**, then presses **Sign in with Discord** on the login page instead of typing a password. Their two-step code is still asked for, and the internet rules above still apply. It goes through a small EasyServer sign-in service that stores nothing ([how it works](login-service/README.md)).
 
 **Logs → Activity log** shows who did what, when and from where - including Discord commands and in-game admin actions.
 </details>
