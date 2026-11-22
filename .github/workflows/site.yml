@@ -1,11 +1,12 @@
-# Builds the website (docs/) from its React source in site/ and commits the result,
-# so GitHub Pages always shows the latest version. Edit site/src, not docs/*.html.
+# Builds the website (docs/) from its React source in site/, and the dashboard page
+# (dashboard/webui.html) from dashboard/ui, and commits the result. Edit site/src and
+# dashboard/ui/src, not docs/*.html or dashboard/webui.html.
 name: Website
 
 on:
   push:
     branches: [main]
-    paths: ["site/**", "CHANGELOG.md", ".github/workflows/site.yml"]
+    paths: ["site/**", "dashboard/ui/**", "CHANGELOG.md", ".github/workflows/site.yml"]
   workflow_dispatch:
 
 permissions:
@@ -28,11 +29,16 @@ jobs:
         run: |
           npm install --no-audit --no-fund
           npm run build
+      - name: Build the dashboard page
+        working-directory: dashboard/ui
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
       - name: Commit the built pages
         run: |
-          git add docs dashboard/whatsnew.json
+          git add docs dashboard/whatsnew.json dashboard/webui.html
           if git diff --cached --quiet; then echo "Website already up to date"; exit 0; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
-          git commit -m "Website: rebuild from site/"
+          git commit -m "Website and dashboard page: rebuild"
           git push
