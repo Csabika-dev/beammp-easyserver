@@ -73,7 +73,7 @@ Then work through the [guides](#-guides) below - start with [Let friends join ov
 | **Notifications** | Crashes, updates, blocked mods, failed logins, joins, health problems ... sent to Discord, email, phone, Telegram or any webhook if you like |
 | **Settings** | Alerts, password, two-step login, **users & roles**, internet access (HTTPS), hide your IP, backups, DuckDNS, Discord bot, phone app, **public status page**, sleep & wake-up |
 
-Dark and light mode, works on phones (Android app, or add it to the iPhone home screen). Before anything changes your network the dashboard shows exactly what will change and asks first. Your router is only changed if you click "Open port automatically" (and closed again when you turn it off).
+In English, German, Spanish, Hungarian and Polish (more languages are one file each - see `dashboard/lang/README.md`). Dark and light mode, works on phones (Android app, or add it to the iPhone home screen). Before anything changes your network the dashboard shows exactly what will change and asks first. Your router is only changed if you click "Open port automatically" (and closed again when you turn it off).
 
 ---
 
