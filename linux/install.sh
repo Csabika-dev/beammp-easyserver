@@ -1001,6 +1001,8 @@ PY
   for f in de es hu pl; do
     fetch_optional "dashboard/lang/$f.json" "$es/dashboard/lang/$f.json"
   done
+  # the "New in" cards on the Overview after an update
+  fetch_optional "dashboard/whatsnew.json" "$es/dashboard/whatsnew.json"
   fetch_file "linux/control.py" "$es/control.py"
   rm -f "$es/modmanager.py" "$es/modscan.py"
   # player statistics plugin (runs inside the BeamMP server)
