@@ -55,6 +55,22 @@ const boot = (code, file) => `<script>(function(){var d=document.documentElement
   (code === "en" ? `try{var L=${JSON.stringify(codes)},s=localStorage.getItem("es-site-lang");if(!s){var n=(navigator.languages||[navigator.language||""]);for(var i=0;i<n.length&&!s;i++){var c=String(n[i]).slice(0,2).toLowerCase();if(L.indexOf(c)>=0)s=c}}if(s&&s!=="en"&&L.indexOf(s)>=0)location.replace(s+"/${file === "index.html" ? "" : file}"+location.hash)}catch(e){}` : "") +
   `})()</script>`;
 
+// The dashboard shows the same "New in" cards after an update: dashboard/whatsnew.json, in every language.
+{
+  const plain = x => String(x).replace(/\*\*(.+?)\*\*/g, "$1").replace(/`([^`]+)`/g, "$1").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1");
+  const out = { about: "Made from CHANGELOG.md by site/build.mjs - don't edit by hand.", version: news?.version || "", status: news?.status || "", languages: {} };
+  if (news) for (const { code, text } of LANGS) {
+    const t = textFor(code);
+    const own = code !== "en" && text.whatsNew?.[news.version];
+    out.languages[code] = {
+      title: t.common.newTitle.replace("{v}", news.version),
+      note: news.status === "rolling" ? t.common.newRolling : t.common.newStable,
+      items: (own?.length ? own : news.items).map(([a, b]) => [plain(a), plain(b)]),
+    };
+  }
+  writeFileSync(join(here, "..", "dashboard", "whatsnew.json"), JSON.stringify(out, null, 1) + "\n");
+}
+
 for (const { code } of LANGS) {
   const t = textFor(code);
   const root = code === "en" ? "" : "../";
