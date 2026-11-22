@@ -1,36 +1,7 @@
-// Config page. The forms keep their values in the inputs themselves (uncontrolled); Save reads them by id.
+// Config page. The forms keep their values in the inputs themselves (uncontrolled); Save reads them by id (see ui.jsx).
 import { useEffect, useRef, useState } from "react";
 import * as L from "./legacy.js";
-
-const S = () => L.state();
-const $ = id => document.getElementById(id);
-const val = id => $(id).value, chk = id => $(id).checked;
-const lines = id => val(id).split("\n").map(x => x.trim()).filter(Boolean);
-const commas = id => val(id).split(",").map(x => x.trim()).filter(Boolean);
-const TIME = { colorScheme: "light dark", color: "inherit" };
-const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-const clock = t => new Date(t * 1000).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" });
-const Pill = ({ on, children }) => <span className={"pill " + (on ? "good" : "")}><span className="dot" />{children}</span>;
-const Mono = ({ children }) => <span className="mono">{children}</span>;
-const Toggle = ({ id, on, title, children, style }) => <label className="toggle" style={style}><input type="checkbox" id={id} defaultChecked={!!on} /><span><b>{title}</b>{children !== undefined && <small>{children}</small>}</span></label>;
-const Warn = ({ children }) => <div className="issue warning"><span className="ic">⚠</span><span>{children}</span></div>;
-const Head = ({ title, pill, on }) => <div className="row"><h2 style={{ margin: 0 }}>{title}</h2><span className="spacer" /><Pill on={on}>{pill}</Pill></div>;
-const everyText = n => n === 24 ? "Once a day" : `Every ${n} hour${n === 1 ? "" : "s"}`;
-const warnText = n => n ? `${n} min before` : "No countdown";
-
-// Load data for one card; `again()` loads it again and redraws the card's inputs.
-function useLoad(fn, deps = []) {
-  const [st, setSt] = useState({ d: null, v: 0, err: "" });
-  const again = async () => {
-    try { const d = await fn(); setSt(s => ({ d, v: s.v + 1, err: "" })); }
-    catch (e) { setSt(s => ({ ...s, err: e.message })); }
-  };
-  useEffect(() => { again(); }, deps);
-  return [st.d, again, st.v, st.err];
-}
-const post = async (path, body, ms, after) => {
-  try { const r = await L.api(path, { json: body }); L.toast(r.note, ms); if (after) after(r); return r; } catch (e) { L.toast(e.message, 6000); }
-};
+import { $, S, val, chk, lines, commas, TIME, DAYS, clock, Pill, Mono, Toggle, Warn, Head, everyText, warnText, useLoad, post } from "./ui.jsx";
 
 /* ---------------- problems found in the config */
 const Issues = ({ list }) => list.length ? list.map((i, k) => <div key={k} className={"issue " + i.level}><span className="ic">{i.level === "error" ? "!" : i.level === "warning" ? "⚠" : "i"}</span><span>{i.message}</span>{i.line ? <span className="ln">{`line ${i.line}`}</span> : null}</div>)
