@@ -8,6 +8,7 @@ import { Health } from "./health.jsx";
 import { Players } from "./players.jsx";
 import { Mods } from "./mods.jsx";
 import { Config } from "./config.jsx";
+import { Settings } from "./settings.jsx";
 
 const S = () => L.state();
 const Icon = ({ n }) => <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" dangerouslySetInnerHTML={{ __html: L.I[n] }} />;
@@ -193,18 +194,6 @@ function ServerPick() {
   );
 }
 
-// A page that legacy.js still draws: it fills <main> itself, React leaves the inside alone.
-function LegacyMain({ name, reload }) {
-  const ref = useRef(null);
-  useEffect(() => {
-    const m = ref.current;
-    m.innerHTML = `<p class="muted">Loading…</p>`;
-    (L.VIEWS[name] || L.VIEWS.servers)(m).catch(e => { if (e.message !== "Please log in" && m.isConnected) m.innerHTML = `<div class="banner bad">${L.esc(e.message)}</div>`; });
-    return () => L.clearTimer();
-  }, [name, reload]);
-  return <main id="main" className="enter" ref={ref} />;
-}
-
 function Shell({ tab, reload, unread, onLang, logout }) {
   const [, redraw] = useState(0);
   const ses = S().SESSION, role = L.myRole();
@@ -230,7 +219,7 @@ function Shell({ tab, reload, unread, onLang, logout }) {
       <div>
         <nav className="mobilebar"><ServerPick />{navs}<button className="nav" onClick={flip}>Theme</button></nav>
         <SecurityBar />
-        {PAGES[tab] ? <main id="main" className="enter" key={tab}>{(P => <P reload={reload} />)(PAGES[tab])}</main> : <LegacyMain key={tab} name={tab} reload={reload} />}
+        <main id="main" className="enter" key={tab}>{(P => <P reload={reload} />)(PAGES[tab] || Overview)}</main>
       </div>
     </div>
   );
@@ -344,7 +333,7 @@ function Overview({ reload }) {
 }
 
 // Pages drawn by React; the rest are still in legacy.js
-const PAGES = { overview: Overview, servers: Servers, updates: Updates, logs: Logs, notifications: Notifications, network: Health, players: Players, mods: Mods, config: Config };
+const PAGES = { overview: Overview, servers: Servers, updates: Updates, logs: Logs, notifications: Notifications, network: Health, players: Players, mods: Mods, config: Config, settings: Settings };
 
 /* ------------------------------------------------------------------ the app */
 export function App() {
