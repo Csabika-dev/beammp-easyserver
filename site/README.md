@@ -2,18 +2,23 @@
 
 The website at https://csabika-dev.github.io/beammp-easyserver/ is built from this folder with React.
 
-- `src/Home.jsx`, `src/Features.jsx`, `src/Help.jsx`: the three pages, text included
+- `src/lang/en.js`: every piece of text on the site, in English
+- `src/lang/de.js`, `es.js`, `hu.js`, `pl.js`: the same text translated. Anything missing shows in English.
+  `**bold**`, `` `code` `` and `[text](url)` work inside the text.
+- `src/Home.jsx`, `src/Features.jsx`, `src/Help.jsx`: the three pages
 - `src/site.css`: all styles
-- `src/pages.jsx`: page titles and descriptions
+- `src/pages.jsx`: the list of pages
 - `build.mjs`: renders every page to plain HTML in `docs/` and bundles the script that makes them interactive
 
 Each page is complete HTML before any script runs, so it loads fast, works without JavaScript and is
-found by search engines. React then takes over the same markup in the browser.
+found by search engines. Each language gets its own copy: English at the top level, the others in
+`docs/de/`, `docs/es/`, `docs/hu/` and `docs/pl/`. To add a language, copy `src/lang/en.js`, translate it
+and add it to `LANGS` in `src/i18n.jsx`. React then takes over the same markup in the browser.
 
 ## Changing the site
 
 Edit the files in `src/` and push. The **Website** workflow builds `docs/` and commits it.
-Don't edit `docs/index.html`, `docs/features.html` or `docs/help.html` by hand: the next build replaces them.
+Don't edit `docs/index.html`, `docs/features.html`, `docs/help.html` or the language folders (`docs/de/` etc.) by hand: the next build replaces them.
 
 To build on your own computer (Node.js 20 or newer):
 
