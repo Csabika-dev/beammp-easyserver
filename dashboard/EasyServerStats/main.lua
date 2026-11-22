@@ -499,7 +499,8 @@ end
 -- right away and are sent to the dashboard as events, which saves them.
 local mod = { admins = {}, filter = false, words = {}, spam = false, spam_limit = 5,
               antibot = false, verify = true, per_ip = 3, join_flood = 8, guests = true,
-              report = true, votekick = false, votekick_min = 4, chatlog = true }
+              report = true, votekick = false, votekick_min = 4, chatlog = true,
+              kickwords = {}, kickwords_action = "kick" }
 local modRead = -1000
 
 local function splitList(v, lower)
@@ -519,12 +520,16 @@ local function readMod(now)
   if not f then return end
   local m = { admins = {}, filter = false, words = {}, spam = false, spam_limit = 5,
               antibot = false, verify = true, per_ip = 3, join_flood = 8, guests = true,
-              report = true, votekick = false, votekick_min = 4, chatlog = true }
+              report = true, votekick = false, votekick_min = 4, chatlog = true,
+              kickwords = {}, kickwords_action = "kick" }
   for line in f:lines() do
     local k, v = trim(line):match("^([%w_]+)%s*=%s*(.-)$")
     if k == "admins" then
       for _, n in ipairs(splitList(v, true)) do m.admins[n] = true end
     elseif k == "words" then m.words = splitList(v, true)
+    elseif k == "kickwords" then m.kickwords = splitList(v, true)
+    elseif k == "kickwords_action" then
+      local a = v:lower(); if a == "kick" or a == "ban60" or a == "ban1440" or a == "ban10080" or a == "banperm" then m.kickwords_action = a end
     elseif k == "filter" or k == "spam" or k == "antibot" or k == "verify" or k == "report" or k == "votekick"
         or k == "chatlog" then m[k] = v:lower() == "on"
     elseif k == "guests" then m.guests = v:lower() ~= "block"
@@ -752,6 +757,16 @@ local function adminCommand(id, name, cmd, arg)
   end
 end
 
+-- kick words: whole words only ("ass" doesn't match "class"), not case-sensitive
+local function kickWordIn(low)
+  for _, w in ipairs(mod.kickwords) do
+    local pat = w:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%0")
+    if w:match("^%w") then pat = "%f[%w]" .. pat end
+    if w:match("%w$") then pat = pat .. "%f[%W]" end
+    if low:find(pat) then return w end
+  end
+end
+
 -- returns true when the message must not be shown
 function esModChat(id, name, message)
   local t = now_()
@@ -773,6 +788,28 @@ function esModChat(id, name, message)
   if m and m > t then
     say(id, "You are muted for " .. math.ceil((m - t) / 60) .. " more minute(s).")
     return true
+  end
+  if #mod.kickwords > 0 and not isAdmin(lname) then
+    local w = kickWordIn(message:lower())
+    if w then
+      local act = mod.kickwords_action
+      local mins = ({ ban60 = 60, ban1440 = 1440, ban10080 = 10080, banperm = 0 })[act]
+      if mins then
+        local untilT = mins == 0 and 0 or t + mins * 60
+        local howLong = ({ [60] = "for 1 hour", [1440] = "for 1 day", [10080] = "for 7 days", [0] = "for good" })[mins]
+        gameBans[lname] = { untilT = untilT, reason = "Banned word" }
+        unbanned[lname] = nil
+        event("ban", string.format(',"name":"%s","by":"kick words","until":%d,"reason":"%s"', jsonEscape(name), untilT,
+          jsonEscape("said a banned word: " .. w)))
+        MP.DropPlayer(id, "Banned " .. howLong .. " for using a banned word.")
+        say(-1, name .. " was banned " .. howLong .. " for using a banned word.")
+      else
+        event("kick", string.format(',"name":"%s","by":"kick words","reason":"%s"', jsonEscape(name), jsonEscape("said a banned word: " .. w)))
+        MP.DropPlayer(id, "Kicked for using a banned word.")
+        say(-1, name .. " was kicked for using a banned word.")
+      end
+      return true
+    end
   end
   local cmd, arg = message:match("^%s*/(%a+)%s*(.-)%s*$")
   cmd = cmd and cmd:lower()
