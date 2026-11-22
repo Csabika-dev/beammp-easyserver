@@ -318,6 +318,24 @@ test("reports and vote kick can be switched off", function()
   esOnChat(1, "Alice", "secret")
   eq(read("chat.log"), before, "chat kept while off")
 end)
+test("kick words remove a player at once, whole words only", function()
+  write("moderation.txt", "admins=Boss\nkickwords=slur1,bad phrase\nkickwords_action=kick\n")
+  shift = shift + 20
+  local n = #dropped
+  eq(esOnChat(1, "Alice", "this is a classy slur1less word"), nil, "part of a word matched")
+  eq(#dropped, n)
+  eq(esOnChat(1, "Alice", "you SLUR1!"), 1)
+  eq(dropped[#dropped], 1, "not kicked")
+  assert(read("events.log"):find('"ev":"kick","name":"Alice","by":"kick words"', 1, true), "kick not logged")
+  esOnChat(3, "Boss", "slur1")
+  eq(dropped[#dropped], 1, "admin removed")
+  write("moderation.txt", "admins=Boss\nkickwords=slur1\nkickwords_action=banperm\n")
+  shift = shift + 20
+  esOnChat(2, "Bob", "slur1")
+  assert(read("events.log"):find('"ev":"ban","name":"Bob","by":"kick words","until":0', 1, true), "ban not logged")
+  local why = esOnAuth("Bob", "", false, { ip = "5.6.7.8" })
+  assert(why and why:find("banned"), "banned player can rejoin")
+end)
 os.time = realTime
 
 _print(string.format("%d passed, %d failed", passed, failed))
