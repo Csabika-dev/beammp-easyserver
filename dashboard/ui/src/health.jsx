@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import * as L from "./legacy.js";
 import { Blur, Ip } from "./pages.jsx";
-import { cacheGet, cachedApi, Skel, SkelCard } from "./ui.jsx";
+import { cacheGet, cachedApi, Oops, Skel, SkelCard } from "./ui.jsx";
 
 const MARK = { pass: ["ok", "✓"], ok: ["ok", "✓"], fail: ["bad", "✕"], bad: ["bad", "✕"], warn: ["warn", "!"], info: ["info", "i"] };
 const Check = ({ state, children }) => { const k = MARK[state] || MARK.info; return <div className="check"><span className={"mark " + k[0]}>{k[1]}</span><div>{children}</div></div>; };
@@ -132,7 +132,7 @@ function NetworkCheck({ tick }) {
     setDeep(false);
   };
   useEffect(() => { load(false); }, [tick]);
-  if (!d) return <div style={{ marginTop: 24 }}>{err ? <div className="banner bad">{err}</div> : <><Skel w={180} h={20} /><Skel w="45%" style={{ margin: "10px 0 16px" }} /><div className="grid g3">{[0, 1, 2].map(i => <SkelCard key={i} lines={2} />)}</div></>}</div>;
+  if (!d) return <div style={{ marginTop: 24 }}>{err ? <Oops err={err} retry={() => load(false)} /> : <><Skel w={180} h={20} /><Skel w="45%" style={{ margin: "10px 0 16px" }} /><div className="grid g3">{[0, 1, 2].map(i => <SkelCard key={i} lines={2} />)}</div></>}</div>;
   const Stat = ({ label, v, note, mono = true }) => <div className="card stat"><div className="label">{label}</div><div className={"value" + (mono ? " mono" : "")}>{v}</div><div className="note">{note}</div></div>;
   return (<div style={{ marginTop: 24 }}>
     <div className="row"><div><h2 style={{ fontSize: 20 }}>Network check</h2><p className="sub">{`Finds out whether players can reach your server on port ${d.port}.`}</p></div><span className="spacer" />
