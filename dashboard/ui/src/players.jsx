@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import * as L from "./legacy.js";
 import { useApi } from "./pages.jsx";
 import { Empty, PageWait } from "./ui.jsx";
+import { LapTimes, ProfileHost, Who } from "./extras.jsx";
 
 const S = () => L.state();
 const pad2 = n => String(n).padStart(2, "0");
@@ -11,6 +12,12 @@ export function canModerate() {
   const r = L.myRole();
   if (r && r.perms) return r.perms.includes("players");
   return (r ? r.role : S().SESSION.role) !== "viewer";
+}
+
+function canEditLaps() {
+  const r = L.myRole();
+  if (r && r.perms) return r.perms.includes("config");
+  return ["owner", "admin"].includes((r ? r.role : S().SESSION.role) || "owner");
 }
 
 /* ---------------- bar chart (players per day, busiest hours) */
@@ -141,7 +148,7 @@ function Moderation({ d, bn, ban, setBan, reload }) {
   const send = async () => { const t = say.trim(); if (!t) return; await act({ action: "say", name: "x", text: t }); setSay(""); };
   return (<div className="card" style={{ marginBottom: 16 }}>
     <div className="row"><h2 style={{ margin: 0 }}>Online now &amp; moderation</h2><span className="spacer" /><span className="small muted">Takes a second to reach the game</span></div>
-    {bn.online.length ? <table style={{ marginTop: 8 }}><tbody>{bn.online.map(n => <tr key={n}><td><b>{n}</b></td><td className="num"><div className="row" style={{ justifyContent: "flex-end", gap: 6 }}>
+    {bn.online.length ? <table style={{ marginTop: 8 }}><tbody>{bn.online.map(n => <tr key={n}><td><Who name={n} /></td><td className="num"><div className="row" style={{ justifyContent: "flex-end", gap: 6 }}>
       <button className="btn sm" onClick={() => act({ action: "mute", name: n, minutes: 10 })}>Mute 10 min</button>
       <button className="btn sm" onClick={() => act({ action: "unmute", name: n, minutes: 10 })}>Unmute</button>
       <button className="btn sm" onClick={() => act({ action: "kick", name: n, minutes: 10 })}>Kick</button>
@@ -156,7 +163,7 @@ function Moderation({ d, bn, ban, setBan, reload }) {
     <div className="row" style={{ gap: 8, marginTop: 10 }}><input type="text" placeholder="Send a message to everyone in the game chat" maxLength={300} value={say} onChange={e => setSay(e.target.value)} /><button className="btn" onClick={send}>Send</button></div>
     <h2 style={{ marginTop: 18 }}>{`Banned players (${bn.bans.length})`}</h2>
     {bn.bans.length ? <table><thead><tr><th>Player</th><th>Until</th><th>Reason</th><th>By</th><th></th></tr></thead><tbody>{bn.bans.map(b => <tr key={b.name}>
-      <td><b>{b.name}</b></td><td className="muted">{b.until ? L.fmtTime(b.until) : "Forever"}</td><td>{b.reason || "-"}</td><td className="muted">{b.by || "-"}</td>
+      <td><Who name={b.name} /></td><td className="muted">{b.until ? L.fmtTime(b.until) : "Forever"}</td><td>{b.reason || "-"}</td><td className="muted">{b.by || "-"}</td>
       <td className="num"><button className="btn sm" onClick={() => unban(b.name)}>Unban</button></td></tr>)}</tbody></table>
       : <p className="small muted">Nobody is banned. Admins you set under Config → Moderation can also ban from the game chat.</p>}
   </div>);
@@ -187,7 +194,7 @@ function Records({ d }) {
   const R = d.records || {}, any = ["speed", "dist", "streak"].some(k => (R[k] || []).length);
   if (!any && !d.records_on) return null;
   const Col = ({ title, list, val }) => <div className="card tight"><table><thead><tr><th>{title}</th><th className="num"></th></tr></thead><tbody>
-    {(list || []).length ? list.map((r, i) => <tr key={i}><td>{`${i + 1}. `}<b>{r.name}</b></td><td className="num">{val(r)}</td></tr>) : <tr><td colSpan={2} className="muted">Nobody yet</td></tr>}</tbody></table></div>;
+    {(list || []).length ? list.map((r, i) => <tr key={i}><td>{`${i + 1}. `}<Who name={r.name} /></td><td className="num">{val(r)}</td></tr>) : <tr><td colSpan={2} className="muted">Nobody yet</td></tr>}</tbody></table></div>;
   return (<>
     <h2 style={{ margin: "22px 0 10px" }}>Server records</h2>
     {!d.records_on && <p className="small muted">Records are paused - turn on "/top server records" under Config → Cars &amp; chat.</p>}
@@ -243,13 +250,15 @@ export function Players({ reload }) {
     </div>
     <div className="grid g2" style={{ marginTop: 16 }}>
       <div className="card tight"><table><thead><tr><th>Top players (30 days)</th><th className="num">Time played</th><th className="num">Sessions</th></tr></thead><tbody>
-        {d.top.length ? d.top.map(p => <tr key={p.name}><td><b>{p.name}</b><div className="small muted">{`last seen ${L.ago(p.last_seen)}`}</div></td><td className="num">{L.fmtDur(p.seconds)}</td><td className="num">{p.sessions}</td></tr>)
+        {d.top.length ? d.top.map(p => <tr key={p.name}><td><Who name={p.name} /><div className="small muted">{`last seen ${L.ago(p.last_seen)}`}</div></td><td className="num">{L.fmtDur(p.seconds)}</td><td className="num">{p.sessions}</td></tr>)
           : <tr><td colSpan={3} className="muted">No players yet</td></tr>}</tbody></table></div>
       <div className="card tight"><table><thead><tr><th>Recent sessions</th><th className="num">Started</th><th className="num">Length</th></tr></thead><tbody>
-        {d.recent.length ? d.recent.slice(0, 12).map((r, i) => <tr key={i}><td>{r.name}</td><td className="num muted">{L.fmtTime(r.start)}</td><td className="num">{r.minutes + " min"}</td></tr>)
+        {d.recent.length ? d.recent.slice(0, 12).map((r, i) => <tr key={i}><td><Who name={r.name} bold={false} /></td><td className="num muted">{L.fmtTime(r.start)}</td><td className="num">{r.minutes + " min"}</td></tr>)
           : <tr><td colSpan={3} className="muted">No sessions yet</td></tr>}</tbody></table></div>
     </div>
     <Records d={d} />
+    <LapTimes key={"l" + reload} canEdit={canEditLaps()} />
     <MapStats key={"s" + reload} />
+    <ProfileHost onBan={onBan} />
   </>);
 }
