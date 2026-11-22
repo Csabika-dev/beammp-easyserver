@@ -213,7 +213,14 @@ let CSRF = null, SESSION = null, TAB = "overview", TIMER = null;
    applied to everything that is drawn: text, placeholders, tooltips, toasts and questions. "{}" in a text
    stands for a name or number; in the translation "{}" are filled in order, or "{1}", "{2}" ... to reorder.
    Text without a translation stays English. */
-const LANGS = [["en", "English"], ["de", "Deutsch"], ["es", "Español"], ["hu", "Magyar"], ["pl", "Polski"]];
+let LANGS = [["en", "English"]];                // + every file in dashboard/lang (filled in by loadLangList)
+async function loadLangList() {
+  try {
+    const r = await fetch("/lang/index.json", { cache: "no-cache" });
+    const d = await r.json();
+    LANGS = [["en", "English"]].concat((d.languages || []).map(l => [l.code, l.name]));
+  } catch (e) {}
+}
 let LANG = "en", DICT = null, PATS = [];
 const escRe = x => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 function pickLang() {
@@ -243,7 +250,7 @@ async function loadLang(code) {
   }
   document.documentElement.lang = LANG;
 }
-function tr(text) {
+function tr(text, depth = 0) {
   if (!DICT || typeof text !== "string" || !/[A-Za-z]/.test(text)) return text;
   const core = text.trim().replace(/\s+/g, " ");
   if (!core) return text;
@@ -255,7 +262,8 @@ function tr(text) {
       const m = core.match(p.re);
       if (!m) continue;
       let i = 0;
-      out = p.v.replace(/\{(\d*)\}/g, (_, d) => { const x = m[d ? +d : ++i]; return x == null ? "" : x; });
+      // a filled-in part can be English text of its own ("Checks: {}. {}" + a sentence): translate it too
+      out = p.v.replace(/\{(\d*)\}/g, (_, d) => { const x = m[d ? +d : ++i]; return x == null ? "" : depth < 2 ? tr(x, depth + 1) : x; });
       break;
     }
     if (out === null) return text;
@@ -2602,7 +2610,7 @@ VIEWS.settings = async m => {
   };
 };
 
-loadLang(pickLang()).then(boot);
+loadLangList().then(() => loadLang(pickLang())).then(boot);
 if ("serviceWorker" in navigator && window.isSecureContext) navigator.serviceWorker.register("/sw.js").catch(() => {});
 </script>
 </body>
