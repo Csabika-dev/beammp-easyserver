@@ -1520,6 +1520,23 @@
   "{} planned": "{} zaplanowane",
   "Every {} hours": "Co {} godz.",
   "Every {} hour": "Co {} godz.",
-  "Every {} minutes": "Co {} min"
+  "Every {} minutes": "Co {} min",
+  "Every night the settings of all servers (config, allow-list, bans, moderation, messages, rotation) are saved. The last {} are kept.": "Każdej nocy zapisywane są ustawienia wszystkich serwerów (konfiguracja, lista dozwolonych, bany, moderacja, wiadomości, rotacja). Zachowywane jest ostatnich {}.",
+  "Every role can look at everything. Only you can manage accounts, passwords, internet access and server plugins.": "Każda rola może wszystko oglądać. Tylko ty możesz zarządzać kontami, hasłami, dostępem z internetu i pluginami serwera.",
+  "Manage your servers from your phone like a normal app - with its own icon, full screen, no browser bar.": "Zarządzaj serwerami z telefonu jak zwykłą aplikacją – z własną ikoną, na pełnym ekranie, bez paska przeglądarki.",
+  "May log in from the internet": "Może logować się z internetu",
+  "These use the channel of your Discord webhook (Settings → Notifications).": "Używają kanału twojego webhooka Discord (Ustawienia → Powiadomienia).",
+  "· players join via": "· gracze dołączają przez",
+  "Watching.": "Obserwuje.",
+  "· {} blocked so far · {} addresses known as players.": "· do tej pory zablokowano {} · {} adresów znanych jako gracze.",
+  "Reachable (about {} ms from here to the relay and back). UDP can't be tested from here - join once to be sure.": "Osiągalny (około {} ms stąd do przekaźnika i z powrotem). UDP nie da się stąd sprawdzić – dołącz raz, żeby mieć pewność.",
+  "Saved: {} - paste a new one to replace": "Zapisano: {} – wklej nowy, aby zastąpić",
+  "1. Wake-on-LAN": "1. Wake-on-LAN",
+  "of {} Mbit/s": "z {} Mbit/s",
+  "max {}": "maks. {}",
+  "line top = your {} Mbit/s": "górna linia = twoje {} Mbit/s",
+  "Online as {}": "Online jako {}",
+  "Open the app and scan this code with the phone's camera - the app connects to this dashboard.": "Otwórz aplikację i zeskanuj ten kod aparatem telefonu – aplikacja połączy się z tym panelem.",
+  "May log in from the internet (turn on Internet access first)": "Może logować się z internetu (najpierw włącz dostęp z internetu)"
  }
 }
