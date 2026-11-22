@@ -1,7 +1,7 @@
 // Config page. The forms keep their values in the inputs themselves (uncontrolled); Save reads them by id (see ui.jsx).
 import { useEffect, useRef, useState } from "react";
 import * as L from "./legacy.js";
-import { $, S, val, chk, lines, commas, TIME, DAYS, clock, Pill, Mono, Toggle, Warn, Head, everyText, warnText, useLoad, post } from "./ui.jsx";
+import { $, S, val, chk, lines, commas, TIME, DAYS, clock, Pill, Mono, Toggle, Warn, Head, everyText, warnText, useLoad, post, SkelCard, SkelPage } from "./ui.jsx";
 
 /* ---------------- problems found in the config */
 const Issues = ({ list }) => list.length ? list.map((i, k) => <div key={k} className={"issue " + i.level}><span className="ic">{i.level === "error" ? "!" : i.level === "warning" ? "⚠" : "i"}</span><span>{i.message}</span>{i.line ? <span className="ln">{`line ${i.line}`}</span> : null}</div>)
@@ -25,8 +25,8 @@ function Field({ f, maps }) {
 
 /* ---------------- who can join (allow-list) */
 function WhoCanJoin() {
-  const [al, again, v] = useLoad(() => L.api("/api/allowlist"));
-  if (!al) return null;
+  const [al, again, v] = useLoad("/api/allowlist");
+  if (!al) return <SkelCard />;
   const denied = al.denied.filter(x => !al.names.some(n => n.toLowerCase() === x.name.toLowerCase()));
   const allow = (e, name) => {
     e.preventDefault();
@@ -55,8 +55,8 @@ function WhoCanJoin() {
 
 /* ---------------- map vote */
 function MapVote() {
-  const [mv, again, v] = useLoad(() => L.api("/api/mapvote"));
-  if (!mv) return null;
+  const [mv, again, v] = useLoad("/api/mapvote");
+  if (!mv) return <SkelCard />;
   const save = () => post("/api/mapvote", { enabled: chk("mv_on"), maps: [...document.querySelectorAll("[data-vm]")].filter(x => x.checked).map(x => x.dataset.vm) }, undefined, again);
   return (<div className="card" style={{ marginTop: 16 }} key={v}>
     <Head title="Map vote" on={mv.enabled} pill={mv.enabled ? "On" : "Off"} />
@@ -69,8 +69,8 @@ function MapVote() {
 
 /* ---------------- restarts & updates */
 function Restarts() {
-  const [rs, again, v] = useLoad(() => L.api("/api/restarts"));
-  if (!rs) return null;
+  const [rs, again, v] = useLoad("/api/restarts");
+  if (!rs) return <SkelCard />;
   const save = () => {
     const body = { on: chk("rs_on"), every: Number(val("rs_every")), at: val("rs_at"), warn: Number(val("rs_warn")), when: val("rs_when") };
     if ($("rs_auto")) body.auto_update = chk("rs_auto");
@@ -94,8 +94,8 @@ function Restarts() {
 
 /* ---------------- vehicle rules */
 function VehicleRules() {
-  const [v, again, ver] = useLoad(() => L.api("/api/vehicles"));
-  if (!v) return null;
+  const [v, again, ver] = useLoad("/api/vehicles");
+  if (!v) return <SkelCard />;
   const r = v.rules, act = v.activity;
   const blockedSet = new Set(v.blocked.map(b => b.jbm.toLowerCase()));
   const sugg = v.mods.filter(m => (m.heavy || m.kind !== "car") && !blockedSet.has(m.jbm.toLowerCase()));
@@ -126,7 +126,7 @@ function VehicleRules() {
         <div className="small muted">{`${m.mod} · ${m.nodes.toLocaleString()} nodes, ${m.beams.toLocaleString()} beams`}</div></td><td className="num"><button className="btn sm" onClick={() => block(m.jbm, true)}>Block</button></td></tr>)}</tbody></table></>}
     <h3 style={{ marginTop: 16 }}>{`Spawned on this server (last ${act.days} days)`}</h3>
     {act.seen.length ? <table><tbody>{act.seen.slice(0, 25).map(s => <tr key={s.jbm}><td><span className="mono">{s.jbm}</span> <Kind k={s.kind} />{s.blocked && <span className="badge bad">blocked</span>}
-      <div className="small muted">{`${s.count}× by ${s.players} player${s.players === 1 ? "" : "s"} · last ${L.fmtTime(s.last)}`}</div></td>
+      <div className="small muted">{s.players === 1 ? `${s.count}× by 1 player · last ${L.fmtTime(s.last)}` : `${s.count}× by ${s.players} players · last ${L.fmtTime(s.last)}`}</div></td>
       <td className="num">{r.cars.some(c => c.toLowerCase() === s.jbm.toLowerCase()) ? <button className="btn sm" onClick={() => block(s.jbm, false)}>Allow</button> : s.blocked ? null : <button className="btn sm" onClick={() => block(s.jbm, true)}>Block</button>}</td></tr>)}</tbody></table>
       : <p className="small muted">Nothing yet - the list fills up as players spawn cars.</p>}
     {(act.blocked.length > 0 || act.spam.length > 0) && <><h3 style={{ marginTop: 16 }}>Refused lately</h3><ul className="small">
@@ -137,8 +137,8 @@ function VehicleRules() {
 
 /* ---------------- in-game tools */
 function Tools() {
-  const [tl, again, v] = useLoad(() => L.api("/api/tools").catch(() => null));
-  if (!tl) return null;
+  const [tl, again, v, terr] = useLoad("/api/tools");
+  if (!tl) return terr ? null : <SkelCard />;
   const save = () => post("/api/tools", { suggest: chk("tl_sug"), tp: chk("tl_tp"), tp_cd: val("tl_tpcd"), repair: val("tl_rep"), repair_cd: val("tl_repcd") }, 8000, again);
   return (<div className="card" style={{ marginTop: 16 }} key={v}>
     <Head title="In-game tools: commands, teleport & repair" on={tl.installed} pill={tl.installed ? "On" : "Off"} />
@@ -158,8 +158,8 @@ function Tools() {
 
 /* ---------------- security presets */
 function Presets({ reloadPage }) {
-  const [pr] = useLoad(() => L.api("/api/preset"));
-  if (!pr) return null;
+  const [pr] = useLoad("/api/preset");
+  if (!pr) return <SkelCard />;
   const use = p => {
     if (!confirm("Use the \"" + p.label + "\" preset?\n\n" + p.about + "\n\nYou can change every setting afterwards.")) return;
     post("/api/preset", { id: p.id, preset: p.label }, 8000, reloadPage);
@@ -175,10 +175,10 @@ function Presets({ reloadPage }) {
 
 /* ---------------- announcements at set times */
 function Timed() {
-  const [tm, again, v] = useLoad(() => L.api("/api/timed"));
+  const [tm, again, v] = useLoad("/api/timed");
   const [rows, setRows] = useState([]);
   useEffect(() => { if (tm) setRows(tm.items.map((x, i) => ({ ...x, _k: i }))); }, [tm, v]);
-  if (!tm) return null;
+  if (!tm) return <SkelCard />;
   const set = (i, patch) => setRows(rs => rs.map((r, j) => j === i ? { ...r, ...patch } : r));
   const add = () => { if (rows.length >= 20) return L.toast("At most 20"); setRows([...rows, { at: "20:00", days: [4, 5], text: "", discord: false, on: true, _k: Date.now() }]); };
   const save = () => post("/api/timed", { items: rows.map(({ _k, ...x }) => x) }, undefined, again);
@@ -198,9 +198,9 @@ function Timed() {
 
 /* ---------------- config history */
 function History({ reloadPage }) {
-  const [hi] = useLoad(() => L.api("/api/config/history"));
+  const [hi] = useLoad("/api/config/history");
   const [diff, setDiff] = useState(null), other = useRef(null);
-  if (!hi) return null;
+  if (!hi) return <SkelCard />;
   const others = S().SERVERS.filter(x => x.id !== S().SERVER);
   const show = async q => { try { setDiff(await L.api("/api/config/diff?" + q)); } catch (e) { L.toast(e.message); } };
   const cmp = (v, i) => show(i === 0 && hi.items[1] ? "v=" + encodeURIComponent(hi.items[1].id) + "&w=" + encodeURIComponent(hi.items[0].id) : "v=" + encodeURIComponent(v.id));
@@ -226,8 +226,8 @@ function History({ reloadPage }) {
 
 /* ---------------- templates, map rotation, welcome & announcements */
 function Templates({ reloadPage }) {
-  const [tp] = useLoad(() => L.api("/api/templates"));
-  if (!tp) return null;
+  const [tp] = useLoad("/api/templates");
+  if (!tp) return <SkelCard />;
   const use = t => {
     const map = chk("tpl_map");
     if (!confirm(`Use the ${t.label} template? It changes the player limit, car cleanup, AFK removal, chat tags, chat rules and the welcome message${map ? ", and switches the map to " + t.map : ""}.`)) return;
@@ -241,10 +241,10 @@ function Templates({ reloadPage }) {
     <Toggle id="tpl_map" on title="Also switch to the template's map" style={{ marginTop: 8 }}>Restarts the server if it's running</Toggle>
   </div>);
 }
-const everyOpt = (list, day) => list.map(n => <option key={n} value={n}>{n === 24 && day ? "Once a day" : `Every ${n}` + (day ? ` hour${n === 1 ? "" : "s"}` : " minutes")}</option>);
+const everyOpt = (list, day) => list.map(n => <option key={n} value={n}>{n === 24 && day ? "Once a day" : day ? (n === 1 ? "Every hour" : `Every ${n} hours`) : `Every ${n} minutes`}</option>);
 function Rotation() {
-  const [ro, again, v] = useLoad(() => L.api("/api/rotation"));
-  if (!ro) return null;
+  const [ro, again, v] = useLoad("/api/rotation");
+  if (!ro) return <SkelCard />;
   const save = () => post("/api/rotation", { on: chk("ro_on"), maps: [...document.querySelectorAll("[data-rm]")].filter(x => x.checked).map(x => x.dataset.rm), every: Number(val("ro_every")), at: val("ro_at"), warn: Number(val("ro_warn")), empty_only: chk("ro_empty") }, 6000, again);
   return (<div className="card" style={{ marginTop: 16 }} key={v}>
     <Head title="Map rotation" on={ro.on} pill={ro.on ? "On" : "Off"} />
@@ -261,8 +261,8 @@ function Rotation() {
   </div>);
 }
 function Messages() {
-  const [ms, again, v] = useLoad(() => L.api("/api/messages"));
-  if (!ms) return null;
+  const [ms, again, v] = useLoad("/api/messages");
+  if (!ms) return <SkelCard />;
   const save = () => post("/api/messages", { welcome: chk("ms_welcome"), welcome_text: val("ms_wtext"), announce: chk("ms_announce"), every: Number(val("ms_every")), messages: val("ms_list") }, undefined, again);
   return (<div className="card" style={{ marginTop: 16 }} key={v}>
     <Head title="Welcome message & announcements" on={ms.welcome || ms.announce} pill={ms.welcome && ms.announce ? "Both on" : ms.welcome ? "Welcome on" : ms.announce ? "Announcements on" : "Off"} />
@@ -279,10 +279,10 @@ function Messages() {
 /* ---------------- scheduled events */
 const LASTS = [30, 60, 90, 120, 180, 240, 360], ANNOUNCE = [[0, "Only when it starts"], [10, "10 min before"], [30, "30 min before"], [60, "1 hour before"], [120, "2 hours before"], [1440, "1 day before"]];
 function Events() {
-  const [d, again, v] = useLoad(() => L.api("/api/events"));
+  const [d, again, v] = useLoad("/api/events");
   const [list, setList] = useState([]);
   useEffect(() => { if (d) setList(d.events.map((e, i) => ({ ...e, _k: i }))); }, [d, v]);
-  if (!d) return null;
+  if (!d) return <SkelCard />;
   const set = (i, patch) => setList(xs => xs.map((x, j) => j === i ? { ...x, ...patch } : x));
   const flip = (arr, x, on) => on ? [...(arr || []), x] : (arr || []).filter(y => y !== x);
   const save = () => post("/api/events", { events: list.map(({ _k, ...e }) => ({ ...e, map: e.map || d.maps[0] })) }, undefined, again);
@@ -318,8 +318,8 @@ function Events() {
 /* ---------------- moderation & anti-bot */
 const KICK_ACTIONS = [["kick", "Kick them (they can rejoin)"], ["ban60", "Ban for 1 hour"], ["ban1440", "Ban for 1 day"], ["ban10080", "Ban for 7 days"], ["banperm", "Ban forever"]];
 function Moderation() {
-  const [md, again, v] = useLoad(() => L.api("/api/moderation"));
-  if (!md) return null;
+  const [md, again, v] = useLoad("/api/moderation");
+  if (!md) return <SkelCard />;
   const save = () => post("/api/moderation", {
     admins: commas("md_admins"), words: commas("md_words"), filter: chk("md_filter"), spam: chk("md_spam"), spam_limit: Number(val("md_spamlimit")),
     antibot: chk("md_antibot"), verify: chk("md_verify"), guests: !chk("md_guests"), per_ip: Number(val("md_perip")), join_flood: Number(val("md_flood")),
@@ -354,9 +354,9 @@ function Moderation() {
 
 /* ---------------- cars & chat */
 function CarsChat() {
-  const [ex, again, v] = useLoad(() => L.api("/api/extras"));
+  const [ex, again, v] = useLoad("/api/extras");
   const [every, setEvery] = useState(null);
-  if (!ex) return null;
+  if (!ex) return <SkelCard />;
   const ev = every ?? ex.every;
   const save = () => post("/api/extras", { clear: chk("ex_clear"), every: Number(val("ex_every")), at: val("ex_at"), warn: Number(val("ex_warn")), afk: chk("ex_afk"), afk_minutes: Number(val("ex_afkmin")),
     countdown: chk("ex_countdown"), tag: chk("ex_tag"), top: chk("ex_top"), tags: commas("ex_tags") }, 6000, () => { setEvery(null); again(); });
@@ -385,8 +385,8 @@ function CarsChat() {
 
 /* ---------------- join alerts (Discord) */
 function JoinAlerts() {
-  const [ja, again, v] = useLoad(() => L.api("/api/joinalerts"));
-  if (!ja) return null;
+  const [ja, again, v] = useLoad("/api/joinalerts");
+  if (!ja) return <SkelCard />;
   const save = test => post("/api/joinalerts", { enabled: chk("ja_on"), players: lines("ja_players"), mention: val("ja_mention"), address: chk("ja_addr"), test }, undefined, test ? null : again);
   return (<div className="card" style={{ marginTop: 16 }} key={v}>
     <Head title="Join alerts (Discord)" on={ja.enabled} pill={ja.enabled ? "On" : "Off"} />
@@ -403,12 +403,12 @@ function JoinAlerts() {
 /* ---------------- the page */
 export function Config({ reload }) {
   const [page, setPage] = useState(0);
-  const [d, , v, err] = useLoad(() => L.api("/api/config"), [reload, page]);
+  const [d, , v, err] = useLoad("/api/config", [reload, page]);
   const [mode, setMode] = useState(() => L.store.get("es-config-mode", "form"));
   const [issues, setIssues] = useState(null);
   const tmr = useRef(null);
   useEffect(() => { setIssues(null); }, [v]);
-  if (!d) return err ? <div className="banner bad">{err}</div> : <p className="muted">Loading…</p>;
+  if (!d) return err ? <div className="banner bad">{err}</div> : <SkelPage />;
   const reloadPage = () => setPage(p => p + 1);
   const pick = m => { L.store.set("es-config-mode", m); setMode(m); };
   const basic = d.fields.filter(f => !f.advanced && f.type !== "bool"), toggles = d.fields.filter(f => !f.advanced && f.type === "bool"), adv = d.fields.filter(f => f.advanced);
