@@ -10,12 +10,13 @@ import { Mods } from "./mods.jsx";
 import { Config } from "./config.jsx";
 import { Settings } from "./settings.jsx";
 import { cacheGet, cachedApi, cacheClear, prefetch, PageWait } from "./ui.jsx";
+import { Checklist, QuickSearch } from "./extras.jsx";
 
 // What each page asks for first: fetched quietly in the background after logging in, so pages open without waiting
 const PREFETCH = ["/api/overview", "/api/config", "/api/allowlist", "/api/mapvote", "/api/restarts", "/api/vehicles", "/api/tools", "/api/preset", "/api/timed",
   "/api/config/history", "/api/templates", "/api/rotation", "/api/messages", "/api/events", "/api/moderation", "/api/extras", "/api/joinalerts",
   "/api/mods", "/api/mods/updates", "/api/plugins", "/api/players", "/api/bans", "/api/updates", "/api/notifications", "/api/settings", "/api/supporter",
-  "/api/phoneapp", "/api/ntfy", "/api/discordbot", "/api/integrations", "/api/statuspage", "/api/users", "/api/devices", "/api/guard", "/api/backups", "/api/resources"];
+  "/api/phoneapp", "/api/ntfy", "/api/discordbot", "/api/integrations", "/api/statuspage", "/api/users", "/api/devices", "/api/guard", "/api/backups", "/api/resources", "/api/laps", "/api/checklist", "/api/resources?range=day"];
 
 const S = () => L.state();
 const Icon = ({ n }) => <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" dangerouslySetInnerHTML={{ __html: L.I[n] }} />;
@@ -228,6 +229,8 @@ function Shell({ tab, reload, unread, onLang, logout }) {
     <div className="app">
       <aside className="side">
         <div className="brand"><Logo /><div>BeamMP EasyServer<small>{"Dashboard " + ses.version + (ses.supporter ? " · ❤ Supporter" : "")}</small></div></div>
+        <button type="button" className="searchbtn" onClick={() => window.esQuickSearch && window.esQuickSearch()} aria-keyshortcuts="Control+K">
+          <Icon n="search" /><span>Search</span><kbd>{/Mac|iPhone|iPad/.test(navigator.platform) ? "⌘K" : "Ctrl K"}</kbd></button>
         <ServerPick />
         {GROUPS.filter(g => g[1].length).map(([title, items], i) => <div className="navgroup" key={i} role="group" aria-label={title || undefined}>
           {title && <div className="navhead">{title}</div>}{items.map(navBtn)}</div>)}
@@ -242,8 +245,9 @@ function Shell({ tab, reload, unread, onLang, logout }) {
         </div>
       </aside>
       <div>
-        <nav className="mobilebar"><ServerPick />{navs}<button className="nav" onClick={flip}>Theme</button><button className="nav" onClick={flipLook}>{glass ? "Classic look" : "Glass look"}</button></nav>
+        <nav className="mobilebar"><ServerPick /><button className="nav" aria-label="Search" onClick={() => window.esQuickSearch && window.esQuickSearch()}><Icon n="search" /></button>{navs}<button className="nav" onClick={flip}>Theme</button><button className="nav" onClick={flipLook}>{glass ? "Classic look" : "Glass look"}</button></nav>
         <SecurityBar />
+        <QuickSearch />
         <main id="main" className="enter" key={tab} ref={settle}>{(P => <P reload={reload} />)(PAGES[tab] || Overview)}</main>
       </div>
     </div>
@@ -330,6 +334,7 @@ function Overview({ reload }) {
     {!d.has_authkey && <Banner kind="warn" title="No AuthKey set." note="Players outside your network can't find the server." btn="Add AuthKey" onClick={go("config")} />}
     {d.update_available && <Banner kind="info" title="A BeamMP server update is available." btn="See update" onClick={go("updates")} />}
     {!!d.quarantined && <Banner kind="warn" title={d.quarantined + " mod(s) blocked by the virus check."} btn="Review" onClick={go("mods")} />}
+    <Checklist />
     <News />
     <div className="grid g4">
       <div className="card stat"><div className="label">Players online</div><div className="value">{online.length}<span className="muted small"> / {d.max_players ?? "?"}</span></div><div className="note">{online.length ? online.slice(0, 3).join(", ") + (online.length > 3 ? "…" : "") : "Nobody right now"}</div></div>
