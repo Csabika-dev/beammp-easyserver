@@ -3,13 +3,14 @@
 import { useEffect, useState } from "react";
 import * as L from "./legacy.js";
 import { Blur, Ip } from "./pages.jsx";
-import { $, S, val, chk, TIME, Pill, Mono, Toggle, Warn, useLoad, post, SkelCard } from "./ui.jsx";
+import { $, S, val, chk, TIME, Pill, Mono, Toggle, Warn, useLoad, post, SkelCard, Oops } from "./ui.jsx";
 import { Modal } from "./mods.jsx";
 
 const NEW_TAB = { target: "_blank", rel: "noopener noreferrer" };
 const isOwner = () => { const r = S().SESSION.role; return r === "owner" || !r; };
 
-const Failed = ({ title, err }) => <><h2>{title}</h2><p className="small muted">{err}</p></>;
+// A card that couldn't load: its name, why, and a Try again button.
+const Failed = ({ title, err, retry }) => <><h2>{title}</h2><p className="small muted">{err}</p>{retry && <button className="btn sm primary" onClick={retry}>Try again</button>}</>;
 const QR = ({ q, px }) => q ? <svg viewBox={`-4 -4 ${q[0] + 8} ${q[0] + 8}`} width={px} height={px} style={{ background: "#fff", borderRadius: 8, display: "block" }} role="img" aria-label="QR code"><path d={q[1]} fill="#000" /></svg> : null;
 // A QR code drawn from a path the server sent (only path letters and numbers are allowed through)
 export const KeyQR = ({ r, px, label }) => {
@@ -44,7 +45,7 @@ export function Supporter() {
 /* ---------------- phone app + push notifications */
 export function Phone() {
   const [d, again, v, err] = useLoad(["/api/phoneapp", "/api/ntfy"]);
-  if (err && !d) return <div className="card" style={{ margin: "0 0 16px" }}><Failed title="Phone app" err={err} /></div>;
+  if (err && !d) return <div className="card" style={{ margin: "0 0 16px" }}><Failed title="Phone app" err={err} retry={again} /></div>;
   if (!d) return <SkelCard style={{ margin: "0 0 16px" }} />;
   const [pa, nt] = d;
   const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
@@ -87,7 +88,7 @@ export function Phone() {
 export function DiscordBot() {
   const [keepOpen, setKeepOpen] = useState(false);
   const [b, again, v, err] = useLoad("/api/discordbot");
-  if (err && !b) return <div className="card" style={{ margin: "0 0 16px" }}><Failed title="Discord bot" err={err} /></div>;
+  if (err && !b) return <div className="card" style={{ margin: "0 0 16px" }}><Failed title="Discord bot" err={err} retry={again} /></div>;
   if (!b) return <SkelCard style={{ margin: "0 0 16px" }} />;
   const pill = !b.enabled ? <span className="badge">Off</span> : !b.has_token ? <span className="badge warn">No token yet</span> : b.state === "online" ? <span className="badge good">{"Online" + (b.bot_name ? " as " + b.bot_name : "")}</span>
     : b.state === "error" ? <span className="badge bad">Problem</span> : <span className="badge warn">Connecting…</span>;
@@ -130,7 +131,7 @@ export function DiscordBot() {
 export function Integrations() {
   const [d, again, v, err] = useLoad("/api/integrations");
   const T_ = "Telegram, Slack & other apps";
-  if (err && !d) return <div className="card" style={{ margin: "0 0 16px" }}><Failed title={T_} err={err} /></div>;
+  if (err && !d) return <div className="card" style={{ margin: "0 0 16px" }}><Failed title={T_} err={err} retry={again} /></div>;
   if (!d) return <SkelCard style={{ margin: "0 0 16px" }} />;
   const T = d.telegram, W = d.webhook;
   const send = async (body, re = true) => { try { const r = await L.api("/api/integrations", { json: body }); L.toast(r.note, 6000); if (re) again(); } catch (e) { L.toast(e.message, 8000); } };
@@ -161,7 +162,7 @@ export function Integrations() {
 /* ---------------- public status page */
 export function StatusPage() {
   const [d, again, v, err] = useLoad("/api/statuspage");
-  if (err && !d) return <div className="card" style={{ margin: "0 0 16px" }}><Failed title="Public status page" err={err} /></div>;
+  if (err && !d) return <div className="card" style={{ margin: "0 0 16px" }}><Failed title="Public status page" err={err} retry={again} /></div>;
   if (!d) return <SkelCard style={{ margin: "0 0 16px" }} />;
   const P = d.preview;
   const save = () => {
@@ -186,7 +187,7 @@ export function StatusPage() {
 /* ---------------- remembered devices */
 export function Devices({ tick }) {
   const [d, again, v, err] = useLoad("/api/devices", [tick]);
-  if (err && !d) return <div className="card" style={{ marginTop: 16 }}><Failed title="Remembered devices" err={err} /></div>;
+  if (err && !d) return <div className="card" style={{ marginTop: 16 }}><Failed title="Remembered devices" err={err} retry={again} /></div>;
   if (!d) return <SkelCard style={{ marginTop: 16 }} />;
   const owner = S().SESSION.role === "owner";
   const call = async body => { try { await L.api("/api/devices", { json: body }); L.toast("Forgotten"); again(); } catch (e) { L.toast(e.message); } };
@@ -220,7 +221,7 @@ function UserServers({ u, d, allRoles, rname, onSave, onClose }) {
 export function Users() {
   const [d, again, v, err] = useLoad("/api/users");
   const [srvFor, setSrvFor] = useState(null), [invite, setInvite] = useState(null);
-  if (err && !d) return <div className="card" style={{ margin: "0 0 16px" }}><Failed title="Users & roles" err={err} /></div>;
+  if (err && !d) return <div className="card" style={{ margin: "0 0 16px" }}><Failed title="Users & roles" err={err} retry={again} /></div>;
   if (!d) return <SkelCard style={{ margin: "0 0 16px" }} />;
   const allRoles = [...d.roles.map(r => ({ id: r, name: r })), ...d.custom_roles.map(r => ({ id: r.id, name: r.name }))];
   const rname = id => (allRoles.find(r => r.id === id) || { name: "deleted role" }).name;
@@ -314,7 +315,7 @@ function LoadGraphs({ upMbit }) {
 export function Backups() {
   const [d, again, v, err] = useLoad(["/api/backups", "/api/settings", "/api/resources"]);
   const [busy, setBusy] = useState("");
-  if (err && !d) return <p className="small muted">{err}</p>;
+  if (err && !d) return <Oops err={err} retry={again} style={{ marginTop: 16 }} />;
   if (!d) return <div className="grid g2" style={{ marginTop: 16 }}><SkelCard lines={5} /><SkelCard lines={5} /></div>;
   const [bk, st, rs] = d, n = rs.now || {}, owner = isOwner();
   const fmtUp = k => k == null ? "-" : k >= 1000 ? (k / 1000).toFixed(1) + " Mbit/s" : Math.round(k) + " kbit/s";
