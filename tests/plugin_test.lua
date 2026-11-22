@@ -338,5 +338,56 @@ test("kick words remove a player at once, whole words only", function()
 end)
 os.time = realTime
 
+-- ------------------------------------------------------------------ lap times
+test("an admin makes a loop track and laps are timed with the car's clock", function()
+  local pos, tim = { 0, 0, 0 }, 0
+  MP.GetPositionRaw = function() return { pos = { pos[1], pos[2], pos[3] }, tim = tim } end
+  MP.GetPlayerVehicles = function() return { [0] = '{"jbm":"sunburst2","vcf":{}}' } end
+  local onlyBoss = players
+  players = { [3] = "Boss" }
+  write("laps.txt", "mode=on\nradius=10\n")
+  esOnChat(3, "Boss", "/track new Ring")          -- start line at 0,0
+  assert(to(3)[1]:find("Start line set"), "no start: " .. tostring(to(3)[1]))
+  pos = { 300, 0, 0 } esOnChat(3, "Boss", "/track cp")
+  pos = { 300, 300, 0 } esOnChat(3, "Boss", "/track cp")
+  esOnChat(3, "Boss", "/track done")
+  assert(read("tracks.tsv"):find("Ring\t\tloop\t", 1, true), "track not saved: " .. read("tracks.tsv"))
+  chats = {}
+  -- drive a lap: across the start, both checkpoints, back over the start
+  local route = { { -20, 0, 0 }, { 20, 0, 0 }, { 150, 0, 0 }, { 290, 0, 0 }, { 310, 0, 0 }, { 300, 150, 0 }, { 300, 290, 0 },
+                  { 300, 310, 0 }, { 150, 150, 0 }, { 60, 60, 0 }, { 5, -5, 0 }, { -30, -10, 0 } }
+  for i, p in ipairs(route) do pos, tim = p, i * 2.5 esLapTick() end
+  local text = table.concat(to(-1), " | ")
+  assert(text:find("Boss: ") and text:find("new track record"), "no lap announced: " .. text)
+  assert(read("laptimes.tsv"):find("\tBoss\t", 1, true), "best lap not saved")
+  assert(read("laptimes.tsv"):find("sunburst2", 1, true), "car not saved")
+  -- a slower lap is only told to the driver
+  chats = {}
+  local route2 = { { 150, 0, 0 }, { 290, 0, 0 }, { 310, 0, 0 }, { 300, 150, 0 }, { 300, 290, 0 }, { 300, 310, 0 }, { 150, 150, 0 },
+                   { 60, 60, 0 }, { 5, -5, 0 } }
+  for i, p in ipairs(route2) do pos, tim = p, 30 + i * 4 esLapTick() end
+  assert(#to(-1) == 0, "slower lap announced to everyone")
+  assert(table.concat(to(3), " "):find("your best is"), "driver not told about the slower lap")
+  -- skipping a checkpoint doesn't count
+  chats = {}
+  local cut = { { -20, 0, 0 }, { 20, 0, 0 }, { 150, 150, 0 }, { 60, 60, 0 }, { 5, -5, 0 }, { -30, -10, 0 } }
+  for i, p in ipairs(cut) do pos, tim = p, 100 + i * 2 esLapTick() end
+  eq(#to(-1) + #to(3), 0, "a cut lap was timed")
+  esOnChat(2, "Bob", "/laps")
+  assert(table.concat(to(2), " "):find("Ring: 1%) Boss"), "/laps doesn't list the time")
+  esOnChat(2, "Bob", "/track new Cheat")
+  assert(table.concat(to(2), " "):find("Only the server's admins"), "non-admin could make a track")
+  players = onlyBoss
+end)
+
+test("lap times do nothing while they're off", function()
+  write("laps.txt", "mode=off\n")
+  chats = {}
+  esOnChat(3, "Boss", "/track new Off")
+  assert(table.concat(to(3), " "):find("turned off"), "tracks could be made while off")
+end)
+
+os.time = realTime
+
 _print(string.format("%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)
