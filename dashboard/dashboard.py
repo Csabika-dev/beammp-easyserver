@@ -149,6 +149,7 @@ DEFAULT_SETTINGS = {
     "statuspage_players": False,   # ...also show the names of online players
     "statuspage_title": "",
     "statuspage_mods": True,       # ...and the mod list with the download size
+    "statuspage_address": False,   # ...and the address to join with (the relay's when "Hide my IP" is on)
     "event_ads": False,            # advertise events: Discord/Telegram/webhook post when planned + a day before, in-game reminders
     "upnp_on": False,              # ask the router (UPnP) to forward the game ports - no router settings page needed
     "upnp_mapped": [],             # [port, "TCP"/"UDP"] pairs this dashboard opened, so old ones can be closed again
@@ -1670,6 +1671,210 @@ def read_records(limit=10):
     return {"speed": top("speed"), "dist": top("dist"), "streak": top("streak")}
 
 
+# ----------------------------------------------------------------------------- lap times
+# The plugin times laps on tracks admins make in the game (/track) and keeps each player's
+# best lap. Here: switch it on and off, rename/delete tracks, clear times, and show them.
+LAP_RADII = (8, 10, 15, 20, 30)
+TRACK_RE = re.compile(r"^([\w\-]+)\t([^\t]+)\t([^\t]*)\t(\w+)\t([\d.,;\-]+)$")
+
+
+def laps_file(name):
+    return os.path.join(I().STATS_DIR, name)
+
+
+def read_laps_cfg():
+    d = {"on": False, "radius": 15, "public": True}
+    for line in shared_read(laps_file("laps.txt"), 4096).splitlines():
+        k, _, v = line.partition("=")
+        v = v.strip()
+        if k == "mode":
+            d["on"] = v == "on"
+        elif k == "radius" and v.isdigit():
+            d["radius"] = int(v) if int(v) in LAP_RADII else 15
+        elif k == "public":
+            d["public"] = v != "off"
+    return d
+
+
+def write_laps_cfg(d):
+    shared_write(laps_file("laps.txt"), "mode=%s\nradius=%d\npublic=%s\n" % (
+        "on" if d["on"] else "off", d["radius"], "on" if d["public"] else "off"))
+
+
+def read_track_lines():
+    return [l for l in shared_read(laps_file("tracks.tsv"), 512 * 1024).splitlines() if TRACK_RE.match(l)]
+
+
+def read_tracks():
+    out = []
+    for line in read_track_lines():
+        tid, name, mp, kind, pts = TRACK_RE.match(line).groups()
+        out.append({"id": tid, "name": name[:40], "map": map_name(mp) if mp else "", "kind": "sprint" if kind == "sprint" else "loop",
+                    "checkpoints": max(0, pts.count(";") - (1 if kind == "sprint" else 0))})
+    return out
+
+
+def read_laptimes():
+    """{track id: [{"name", "ms", "car", "t"}] fastest first}"""
+    out = {}
+    for line in shared_read(laps_file("laptimes.tsv"), 2 * 1024 * 1024).splitlines():
+        p = line.split("\t")
+        if len(p) == 5 and p[2].isdigit() and p[4].isdigit():
+            out.setdefault(p[0], []).append({"name": p[1][:64], "ms": int(p[2]), "car": p[3][:40], "t": int(p[4])})
+    for rows in out.values():
+        rows.sort(key=lambda r: r["ms"])
+    return out
+
+
+def write_laptimes(times):
+    clean = lambda x: re.sub(r"[\t\r\n]", " ", str(x))
+    shared_write(laps_file("laptimes.tsv"), "".join("%s\t%s\t%d\t%s\t%d\n" % (tid, clean(r["name"]), r["ms"], clean(r["car"]), r["t"])
+                                                   for tid, rows in times.items() for r in rows))
+
+
+def fmt_lap(ms):
+    m, s = divmod(ms, 60000)
+    return ("%d:%06.3f" % (m, s / 1000.0)) if m else ("%.3f" % (s / 1000.0))
+
+
+def laps_summary(limit=10, only_map=None):
+    times = read_laptimes()
+    out = []
+    for t in read_tracks():
+        if only_map is not None and t["map"] and t["map"] != only_map:
+            continue
+        rows = times.get(t["id"], [])
+        t.update({"drivers": len(rows), "top": [dict(r, time=fmt_lap(r["ms"])) for r in rows[:limit]]})
+        out.append(t)
+    return out
+
+
+# ----------------------------------------------------------------------------- player profiles
+NOTES_MAX = 50
+PROFILE_EVENTS = ("kick", "ban", "unban", "mute", "report", "votekick", "vehblock", "vehspam", "refused", "denied", "lap")
+
+
+def player_profile(name):
+    """Everything known about one player on this server: play time, what happened to them, notes."""
+    lname = name.lower()
+    t_now = now()
+    evs = read_events(t_now - 365 * 86400)
+    sessions, _ = event_sessions(evs, t_now)
+    mine = [(a, b) for n, a, b in sessions if n.lower() == lname]
+    real = next((n for n, a, b in sessions if n.lower() == lname), name)
+    hist = []
+    reports_by = 0
+    for e in evs:
+        ev = e.get("ev")
+        if ev not in PROFILE_EVENTS:
+            continue
+        who, target = str(e.get("name") or ""), str(e.get("target") or "")
+        if ev == "report":
+            if who.lower() == lname:
+                reports_by += 1
+            if target.lower() != lname:
+                continue
+        elif who.lower() != lname:
+            continue
+        item = {"t": e["t"], "ev": ev}
+        for k in ("by", "reason", "minutes", "until", "jbm", "track", "ms", "car", "record", "why"):
+            if k in e:
+                item[k] = e[k]
+        if ev == "report":
+            item["by"] = who
+        if ev == "lap" and isinstance(e.get("ms"), int):
+            item["time"] = fmt_lap(e["ms"])
+        hist.append(item)
+    hist.reverse()
+    ban = next((b for b in read_bans() if b["name"].lower() == lname), None)
+    online = lname in [n.lower() for n in online_names()]
+    laps = []
+    times = read_laptimes()
+    for t in read_tracks():
+        rows = times.get(t["id"], [])
+        for i, r in enumerate(rows):
+            if r["name"].lower() == lname:
+                laps.append({"track": t["name"], "time": fmt_lap(r["ms"]), "pos": i + 1, "of": len(rows), "car": r["car"]})
+    rec = None
+    try:
+        with open_shared(I().RECORDS_FILE) as f:
+            for line in f.read(2 * 1024 * 1024).splitlines():
+                p = line.split("\t")
+                if len(p) == 4 and p[0].lower() == lname:
+                    rec = {"speed": round(float(p[1])), "dist": round(float(p[2]), 1), "streak": int(float(p[3]))}
+    except (OSError, ValueError):
+        pass
+    d30 = t_now - 30 * 86400
+    return {
+        "name": real, "online": online, "seen": bool(mine) or bool(hist),
+        "first_seen": min((a for a, b in mine), default=None), "last_seen": max((b for a, b in mine), default=None),
+        "sessions": len(mine), "seconds": int(sum(b - a for a, b in mine)),
+        "seconds_30d": int(sum(b - max(a, d30) for a, b in mine if b >= d30)),
+        "ban": ban, "history": hist[:100], "reports_by": reports_by, "laps": laps, "records": rec,
+        "notes": player_notes().get(lname, []),
+    }
+
+
+def player_notes():
+    v = I().meta.get("player_notes")
+    return v if isinstance(v, dict) else {}
+
+
+# ----------------------------------------------------------------------------- first-time setup checklist
+def setup_checklist():
+    """The steps a new server owner should do once, each ticked off by itself when it's done."""
+    inst = I()
+    g = toml_parse(APP.read_config_text())[0].get("General", {})
+    name = str(g.get("Name") or "")
+    private = g.get("Private") is True
+    s = APP.settings
+    played = any(e.get("ev") == "join" for e in read_events(now() - 365 * 86400)[-5000:])
+    reach = (APP.state.get("reach_ok") or {}).get(inst.id)
+    items = [
+        {"id": "name", "done": bool(name.strip()) and not re.search(r"BeamMP Server$|^BeamMP Server|^My Server$", name.strip()),
+         "go": "config"},
+        {"id": "authkey", "done": private or inst.has_authkey(), "go": "config"},
+        {"id": "mods", "done": any(x["enabled"] for x in list_mods() if x["name"] != TOOLS_MOD), "go": "mods"},
+        {"id": "reach", "done": bool(reach) or played, "go": "network"},
+        {"id": "invite", "done": played or bool(inst.meta.get("invited")), "go": "invite"},
+        {"id": "alerts", "done": any(s.get(k) for k in ("discord_enabled", "email_enabled", "ntfy_enabled", "telegram_enabled", "webhook_enabled"))
+                 , "go": "settings"},
+    ]
+    skipped = inst.meta.get("setup_skipped") if isinstance(inst.meta.get("setup_skipped"), list) else []
+    for it in items:
+        it["skipped"] = it["id"] in skipped
+    return {"items": items, "hidden": bool(inst.meta.get("setup_hidden")),
+            "done": sum(1 for it in items if it["done"] or it["skipped"]), "total": len(items)}
+
+
+# ----------------------------------------------------------------------------- performance history
+PERF_FILE = os.path.join(DATA_DIR, "performance.json")
+PERF_KEEP = 7 * 1440        # a week of one-minute samples
+
+
+def perf_series(hist, bucket):
+    """[t, cpu %, memory used %, upload Mbit/s, players, ping ms] averaged over `bucket` seconds."""
+    out, cur, key = [], [], None
+    def flush():
+        if not cur:
+            return
+        avg = lambda k: (lambda v: round(sum(v) / len(v), 1) if v else None)([x[k] for x in cur if x.get(k) is not None])
+        mem = [100.0 * (x["mem_total"] - x["mem_free"]) / x["mem_total"] for x in cur
+               if x.get("mem_total") and x.get("mem_free") is not None]
+        up = avg("up_kbps")
+        out.append([key, avg("cpu"), round(sum(mem) / len(mem), 1) if mem else None,
+                    round(up / 1000.0, 2) if up is not None else None,
+                    max(x.get("players") or 0 for x in cur), avg("ping")])
+    for x in hist:
+        k = int(x["t"] // bucket * bucket)
+        if k != key:
+            flush()
+            cur, key = [], k
+        cur.append(x)
+    flush()
+    return out
+
+
 MOD_DESC_RE = re.compile(r"\s*\|\s*(Mods: [\d.]+ [KMGT]?B|No mods to download)$")
 
 
@@ -2515,6 +2720,10 @@ def network_check(cfg, status, deep):
             c("Firewall", "info", fw["data"])
     if pip and not relay_on() and ipaddress.ip_address(pip) in ipaddress.ip_network("100.64.0.0/10"):
         tips.append("Your provider uses CGNAT (shared IP) - port forwarding won't work. Ask them for a public IPv4 address.")
+    if any(x["state"] == "ok" and (x["name"].startswith("Reachable") or x["name"] == "Public server list") for x in checks):
+        reach = dict(APP.state.get("reach_ok") or {})
+        reach[I().id] = now()
+        APP.state.update({"reach_ok": reach})
     if relay_on():
         pip = None      # don't show the home address on a page that's about the relay
     return {"port": port, "lan_ip": lip, "public_ip": pip, "checks": checks, "tips": tips,
@@ -5064,6 +5273,19 @@ def uptime_summary(iid, days=30):
 _STATUS_CACHE = {"t": 0, "data": None}
 
 
+def join_info(inst):
+    """How to join, for the status page. BeamMP has no links that open the game, so: the name to
+    search in the server list, and (only if the owner turned it on) the address for Direct Connect."""
+    g = toml_parse(APP.read_config_text())[0].get("General", {})
+    name = re.sub(r"\^.", "", str(g.get("Name") or "")).strip()[:80]
+    addr = None
+    if APP.settings.get("statuspage_address"):
+        host, port, via_relay = game_address(inst)
+        if host and (via_relay or duck_host() or public_ip()):
+            addr = {"host": host, "port": port}
+    return {"name": name, "listed": not g.get("Private") and inst.has_authkey(), "address": addr}
+
+
 def public_status():
     """What the public status page shows. No addresses, no admin data."""
     if now() - _STATUS_CACHE["t"] < 20 and _STATUS_CACHE["data"]:
@@ -5087,6 +5309,10 @@ def public_status():
                 t0 = event_next_start(e, now())
                 if t0 and (nxt is None or t0 < nxt["t"]):
                     nxt = {"name": e["name"], "t": t0, "map": map_name("/levels/%s/info.json" % e["map"]) if e.get("map") else ""}
+        lc = read_laps_cfg()
+        laps = [{"name": t["name"], "kind": t["kind"], "top": [{"name": r["name"], "time": r["time"], "car": r["car"]}
+                                                               for r in t["top"]]}
+                for t in laps_summary(10, map_name(g.get("Map")) or None) if t["top"]] if lc["on"] and lc["public"] else []
         mods = []
         if APP.settings.get("statuspage_mods"):
             mods = [{"name": re.sub(r"\.zip$", "", x["name"], flags=re.I), "size": x["size"], "map": bool(x["maps"])}
@@ -5094,7 +5320,8 @@ def public_status():
         servers.append({"name": inst.name, "state": state, "note": m["message"] if state == "maintenance" else "",
                         "mods": mods, "download": sum(x["size"] for x in mods),
                         "players": len(players), "max": g.get("MaxPlayers"), "names": players[:50] if show_names else [],
-                        "map": map_name(g.get("Map")) or "", "uptime": st.get("uptime") or 0, "history": up, "next_event": nxt})
+                        "map": map_name(g.get("Map")) or "", "uptime": st.get("uptime") or 0, "history": up, "next_event": nxt,
+                        "laps": laps, "join": join_info(inst) if st["state"] == "running" else None})
     use_server("main")
     data = {"title": APP.settings.get("statuspage_title") or server_name() or "BeamMP server", "servers": servers,
             "updated": now(), "version": EASY_VERSION}
@@ -5114,6 +5341,10 @@ main{max-width:760px;margin:0 auto;padding:28px 16px}h1{font-size:24px;margin:0 
 .up .dot{background:var(--up)}.down .dot{background:var(--down)}.maintenance .dot,.asleep .dot{background:var(--warn)}
 .bars{display:flex;gap:2px;margin-top:10px;height:28px}.bars i{flex:1;border-radius:2px;background:var(--none)}
 .stats{display:flex;gap:18px;margin-top:8px}.stats b{font-size:17px}
+.join{margin-top:10px;padding:10px 12px;border-radius:10px;background:var(--bg);border:1px solid var(--line)}
+code.sel{user-select:all;-webkit-user-select:all;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:1px 6px}
+.laps table{border-collapse:collapse;margin-top:6px;width:100%}.laps td{padding:3px 8px 3px 0;border-top:1px solid var(--line)}
+.mono{font-variant-numeric:tabular-nums}
 </style></head><body><main>__BODY__<p class="small mute" style="margin-top:22px">Updated __UPDATED__ · refreshes every minute · __CREDIT__</p></main></body></html>"""
 
 
@@ -5152,6 +5383,21 @@ def render_status_page(d):
             ne = s["next_event"]
             parts.append('<p class="small" style="margin:6px 0 0">📅 Next event: <b>%s</b> %s%s</p>' % (
                 e(ne["name"]), e(time.strftime("%a %d %b %H:%M", time.localtime(ne["t"]))), (" · " + e(ne["map"])) if ne["map"] else ""))
+        j = s.get("join")
+        if j and s["state"] == "up" and (j["listed"] or j["address"]):
+            how = []
+            if j["address"]:
+                how.append('In BeamMP: <b>Direct Connect</b> &rarr; IP <code class="sel">%s</code> port <code class="sel">%s</code>'
+                           % (e(str(j["address"]["host"])), e(str(j["address"]["port"]))))
+            if j["listed"]:
+                how.append('%s <b>%s</b> in the BeamMP server list and press Join.' % ("Or search" if how else "In BeamMP: search", e(j["name"])))
+            parts.append('<div class="join small"><b>How to join</b><br>%s<br><span class="mute">Need BeamMP? '
+                         '<a href="https://beammp.com" rel="noopener" style="color:inherit">beammp.com</a></span></div>' % "<br>".join(how))
+        for t in s.get("laps") or []:
+            rows = "".join('<tr><td class="mute">%d</td><td>%s</td><td class="mono">%s</td><td class="mute">%s</td></tr>'
+                           % (i + 1, e(r["name"]), e(r["time"]), e(r["car"])) for i, r in enumerate(t["top"]))
+            parts.append('<details class="small laps" style="margin-top:8px"><summary>🏁 Lap times: <b>%s</b> (%s)</summary>'
+                         '<table>%s</table></details>' % (e(t["name"]), "sprint" if t["kind"] == "sprint" else "loop", rows))
         h = s["history"]
         parts.append('<div class="bars">%s</div><div class="row small mute" style="justify-content:space-between"><span>30 days ago</span><span>today</span></div>'
                      % "".join(bar(x["pct"]) for x in h["days"]))
@@ -6420,10 +6666,10 @@ USERS_FILE = os.path.join(DATA_DIR, "users.json")
 ROLES = {"viewer": 0, "moderator": 1, "admin": 2, "owner": 3}
 USER_RE = re.compile(r"[A-Za-z0-9_.\-]{2,24}")
 # What each role may change (GET pages are open to every role unless listed in ADMIN_GET).
-MOD_GET = {"/api/chat", "/api/reports"}         # what players wrote: not for read-only viewers
+MOD_GET = {"/api/chat", "/api/reports", "/api/players/profile"}         # what players wrote: not for read-only viewers
 MOD_WRITE = {"/api/reports/close", "/api/players/act", "/api/bans/add", "/api/bans/remove", "/api/allowlist", "/api/server/action",
              "/api/notifications/read", "/api/notifications/clear", "/api/security/ack", "/api/logout",
-             "/api/events/stop", "/api/map", "/api/maintenance"}
+             "/api/events/stop", "/api/map", "/api/maintenance", "/api/players/note"}
 VIEWER_WRITE = {"/api/logout", "/api/notifications/read", "/api/logs/explain", "/api/devices",
                 "/api/me/password", "/api/me/2fa/begin", "/api/me/2fa/confirm", "/api/me/2fa/disable",
                 "/api/me/discord/link", "/api/me/discord/unlink"}
@@ -6521,6 +6767,7 @@ PERM_IDS = [g[0] for g in PERM_GROUPS]
 _PG_EXACT = {
     "/api/players/act": "players", "/api/players/clear": "players", "/api/bans/add": "players", "/api/bans/remove": "players",
     "/api/allowlist": "players", "/api/chat": "players", "/api/reports": "players", "/api/reports/close": "players",
+    "/api/players/profile": "players", "/api/players/note": "players", "/api/laps": "config",
     "/api/server/action": "server", "/api/maintenance": "server", "/api/restarts": "server",
     "/api/map": "map", "/api/rotation": "map", "/api/mapvote": "map", "/api/events": "map", "/api/events/stop": "map",
     "/api/modbrowser/install": "mods", "/api/modpack/code": "mods", "/api/modpack": "mods",
@@ -7010,6 +7257,7 @@ ACTION_LABELS = {
     "/api/2fa/confirm": "Turned on two-step login", "/api/2fa/disable": "Turned off two-step login",
     "/api/timed": "Changed timed announcements", "/api/tools": "Changed the in-game tools (/tp, /repair)", "/api/vehicles": "Changed the vehicle rules", "/api/vehicles/preset": "Vehicle rules preset: {preset}", "/api/vehicles/block": "Blocked/allowed vehicle {jbm}", "/api/plugins/install": "Installed a server plugin", "/api/plugins/toggle": "Turned a server plugin on/off: {id}", "/api/plugins/remove": "Removed the server plugin {id}", "/api/modpack/code": "Installed mods from a mod pack code", "/api/mods/light": "Light mode for map mods: {on}", "/api/maintenance": "Maintenance mode {state}", "/api/preset": "Applied the preset {preset}", "/api/servers/clone": "Cloned a server",
     "/api/config/restore": "Restored an older config", "/api/statuspage": "Changed the status page", "/api/joinalerts": "Changed join alerts",
+    "/api/laps": "Lap times: {action}", "/api/players/note": "Wrote a note about {name}",
     "/api/updates/install": "Installed a BeamMP update", "/api/duckdns": "Changed DuckDNS", "/api/integrations": "Changed notification integrations",
 }
 SAFE_FIELDS = ("action", "name", "player", "map", "state", "preset", "minutes", "reason", "enabled", "role", "on")
@@ -7717,10 +7965,21 @@ class App:
             if inst.server.status()["state"] == "running":
                 players += len(online_names())
         use_server("main")
-        sample = {"t": t, "cpu": cpu, "mem_total": tot, "mem_free": avail, "up_kbps": up, "players": players}
-        hist = self.__dict__.setdefault("res_hist", [])
+        o = read_json(os.path.join(INSTANCES["main"].STATS_DIR, "online.json"), None) if "main" in INSTANCES else None
+        ping = o.get("ping") if isinstance(o, dict) and t - int(o.get("t", 0)) < 120 and isinstance(o.get("ping"), int) else None
+        sample = {"t": t, "cpu": cpu, "mem_total": tot, "mem_free": avail, "up_kbps": up, "players": players, "ping": ping}
+        if "res_hist" not in self.__dict__:          # the last week survives a restart of the dashboard
+            old = read_json(PERF_FILE, [])
+            self.res_hist = [x for x in old if isinstance(x, dict) and isinstance(x.get("t"), (int, float)) and x["t"] > t - 7 * 86400] \
+                if isinstance(old, list) else []
+        hist = self.res_hist
         hist.append(sample)
-        del hist[:-1440]                    # 24 hours, one sample a minute
+        del hist[:-PERF_KEEP]               # a week, one sample a minute
+        if len(hist) % 10 == 0:
+            try:
+                write_json(PERF_FILE, hist)
+            except OSError:
+                pass
         self.res = sample
         last = lambda n: hist[-n:] if len(hist) >= n else []
         warned = self.__dict__.setdefault("res_warned", {})
@@ -7735,6 +7994,12 @@ class App:
                  "Only %s MB of %s MB is free. The game server can start lagging or crash. Close programs you don't "
                  "need, use fewer or smaller mods, or lower the player limit (Config -> Max players)."
                  % (sample["mem_free"], sample["mem_total"]))
+        laggy = [x for x in last(5) if x.get("players") and x.get("ping") is not None and x["ping"] >= 250]
+        if last(5) and len(laggy) == 5:
+            warn("ping", "Players have a lot of lag",
+                 "The players' average ping has been above 250 ms for 5 minutes (now %d ms, %d players). If the "
+                 "computer and upload graphs on the Health page look fine, it's their connection or the distance to "
+                 "your server. If they're full, lower the player limit." % (sample["ping"], players))
         busy = [x for x in last(5) if x["cpu"] is not None and x["cpu"] >= 90]
         if last(5) and len(busy) == 5:
             warn("cpu", "This computer's processor is at its limit",
@@ -9821,6 +10086,120 @@ class Handler(BaseHTTPRequestHandler):
                 pass
         self.send(200, {"ok": True})
 
+    # ---------- lap times
+    def get_laps(self, q):
+        cfg = read_laps_cfg()
+        g = toml_parse(APP.read_config_text())[0].get("General", {})
+        self.send(200, dict(cfg, radii=list(LAP_RADII), tracks=laps_summary(25), map=map_name(g.get("Map")) or "",
+                            plugin=os.path.exists(os.path.join(I().STATS_DIR, "main.lua")),
+                            status_page=bool(APP.settings.get("statuspage_on"))))
+
+    def post_laps(self, q):
+        b = self.body_json()
+        act = b.get("action")
+        if not act:
+            cfg = read_laps_cfg()
+            if "on" in b:
+                cfg["on"] = bool(b["on"])
+            if "public" in b:
+                cfg["public"] = bool(b["public"])
+            if "radius" in b:
+                try:
+                    r = int(b["radius"])
+                except (TypeError, ValueError):
+                    r = 0
+                if r not in LAP_RADII:
+                    return self.fail(400, "Pick a line width from the list")
+                cfg["radius"] = r
+            write_laps_cfg(cfg)
+            _STATUS_CACHE["t"] = 0
+            return self.send(200, {"ok": True, "note": "Saved - the game picks it up within 10 seconds." if cfg["on"] else "Saved - lap times are off."})
+        tid = str(b.get("id") or "")
+        lines = read_track_lines()
+        mine = [l for l in lines if l.split("\t", 1)[0] == tid]
+        if not mine:
+            return self.fail(404, "That track doesn't exist any more")
+        times = read_laptimes()
+        if act == "rename":
+            name = re.sub(r"[\t\r\n;,]", " ", clean_msg(b.get("name") or "")).strip()[:40]
+            if not name:
+                return self.fail(400, "Give the track a name")
+            if any(l.split("\t")[1].lower() == name.lower() and l.split("\t", 1)[0] != tid for l in lines):
+                return self.fail(400, "There's already a track with that name")
+            p = mine[0].split("\t")
+            p[1] = name
+            shared_write(laps_file("tracks.tsv"), "".join((("\t".join(p) if l is mine[0] else l) + "\n") for l in lines))
+            note = "Renamed."
+        elif act == "delete":
+            shared_write(laps_file("tracks.tsv"), "".join(l + "\n" for l in lines if l is not mine[0]))
+            times.pop(tid, None)
+            write_laptimes(times)
+            note = "Track and its times deleted."
+        elif act == "clear":
+            times.pop(tid, None)
+            write_laptimes(times)
+            note = "Times cleared - the next lap is a new record."
+        elif act == "remove_time":
+            who = str(b.get("name") or "").lower()
+            times[tid] = [r for r in times.get(tid, []) if r["name"].lower() != who]
+            write_laptimes(times)
+            note = "Time removed."
+        else:
+            return self.fail(400, "Unknown action")
+        _STATUS_CACHE["t"] = 0
+        self.send(200, {"ok": True, "note": note})
+
+    # ---------- player profiles
+    def get_players_profile(self, q):
+        name = str(q.get("name") or "").strip()[:64]
+        if not name:
+            return self.fail(400, "Which player?")
+        self.send(200, player_profile(name))
+
+    def post_players_note(self, q):
+        b = self.body_json()
+        name = str(b.get("name") or "").strip()[:64]
+        if not name:
+            return self.fail(400, "Which player?")
+        lname = name.lower()
+        notes = dict(player_notes())
+        mine = list(notes.get(lname, []))
+        if b.get("delete"):
+            mine = [n for n in mine if n.get("id") != b["delete"]]
+            note = "Note deleted."
+        else:
+            text = clean_msg(b.get("text") or "").strip()[:500]
+            if not text:
+                return self.fail(400, "Write something first")
+            if len(mine) >= NOTES_MAX:
+                return self.fail(400, "That's a lot of notes - delete some old ones first")
+            mine.insert(0, {"id": secrets.token_hex(4), "t": now(), "by": getattr(_TL, "user", "owner") or "owner", "text": text})
+            note = "Note saved. Only people who can see this dashboard can read it."
+        if mine:
+            notes[lname] = mine
+        else:
+            notes.pop(lname, None)
+        if len(notes) > 2000:
+            return self.fail(400, "Too many players with notes")
+        set_server_meta(I().id, player_notes=notes)
+        self.send(200, {"ok": True, "note": note, "notes": mine})
+
+    # ---------- first-time setup checklist
+    def get_checklist(self, q):
+        self.send(200, setup_checklist())
+
+    def post_checklist(self, q):
+        b = self.body_json()
+        inst = I()
+        if "hidden" in b:
+            set_server_meta(inst.id, setup_hidden=bool(b["hidden"]) or None)
+        if b.get("skip") in ("name", "authkey", "mods", "reach", "invite", "alerts"):
+            sk = [x for x in (inst.meta.get("setup_skipped") or []) if x != b["skip"]] + ([b["skip"]] if b.get("on", True) else [])
+            set_server_meta(inst.id, setup_skipped=sk or None)
+        if b.get("invited"):
+            set_server_meta(inst.id, invited=True)
+        self.send(200, dict(setup_checklist(), ok=True))
+
     # ---------- hide my IP
     def get_relay_check(self, q):
         """Test every server through the relay (TCP; UDP can't be tested from here)."""
@@ -10683,6 +11062,7 @@ class Handler(BaseHTTPRequestHandler):
         s = APP.settings
         base = dashboard_url().rstrip("/")
         self.send(200, {"on": bool(s.get("statuspage_on")), "players": bool(s.get("statuspage_players")), "mods": bool(s.get("statuspage_mods")),
+                        "address": bool(s.get("statuspage_address")), "relay": relay_on(),
                         "title": s.get("statuspage_title") or "", "url": base + "/status", "lan_url": "http://%s:%s/status" % (lan_ip(), s.get("port")),
                         "remote": bool(s.get("remote_enabled")), "credit": bool(s.get("credit_link")), "preview": public_status()})
 
@@ -10697,6 +11077,8 @@ class Handler(BaseHTTPRequestHandler):
             upd["statuspage_title"] = clean_msg(b["title"])[:80]
         if "mods" in b:
             upd["statuspage_mods"] = bool(b["mods"])
+        if "address" in b:
+            upd["statuspage_address"] = bool(b["address"])
         if "credit" in b:
             upd["credit_link"] = bool(b["credit"])
         APP.settings.update(upd)
@@ -10906,7 +11288,12 @@ class Handler(BaseHTTPRequestHandler):
     def get_resources(self, q):
         app = APP
         hist = getattr(app, "res_hist", [])
-        self.send(200, {"now": getattr(app, "res", None), "history": hist[-int(q.get("n") or 60):],
+        rng = q.get("range")
+        series = None
+        if rng in ("day", "week"):
+            cut = now() - (86400 if rng == "day" else 7 * 86400)
+            series = perf_series([x for x in hist if x["t"] >= cut], 300 if rng == "day" else 1800)
+        self.send(200, {"now": getattr(app, "res", None), "history": hist[-min(1440, int(q.get("n") or 60)):], "series": series,
                         "upload_mbit": app.settings.get("upload_mbit") or 0, "cpus": os.cpu_count() or 1})
 
     def post_resources(self, q):
