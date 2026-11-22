@@ -5170,7 +5170,26 @@ def timed_msgs(inst):
 
 
 # ----------------------------------------------------------------------------- phone app (installable web app)
-LANG_PATH_RE = re.compile(r"/lang/(de|es|hu|pl)\.json")
+LANG_PATH_RE = re.compile(r"/lang/([a-z]{2}(?:-[a-z]{2})?)\.json")
+LANG_DIR = os.path.join(HERE, "lang")
+
+
+def lang_index():
+    """The translations next to the dashboard (lang/xx.json): [{"code", "name"}]. Adding a language = adding a file."""
+    out = []
+    try:
+        names = sorted(os.listdir(LANG_DIR))
+    except OSError:
+        return out
+    for n in names:
+        m = LANG_PATH_RE.fullmatch("/lang/" + n)
+        if not m:
+            continue
+        d = read_json(os.path.join(LANG_DIR, n), {})
+        name = d.get("language") if isinstance(d, dict) else None
+        if isinstance(name, str) and name.strip():
+            out.append({"code": m.group(1), "name": name.strip()[:40]})
+    return out
 APP_FILES = ("/manifest.webmanifest", "/sw.js", "/icon-192.png", "/icon-512.png", "/apple-touch-icon.png")
 # Network first, so the dashboard is always live; the cached page only shows
 # when the server can't be reached. API answers are never cached.
@@ -8703,6 +8722,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.page()
             if method == "GET" and path in APP_FILES:
                 return self.app_file(path)
+            if method == "GET" and path == "/lang/index.json":
+                return self.send(200, {"languages": lang_index()}, extra={"Cache-Control": "no-cache"})
             if method == "GET" and LANG_PATH_RE.fullmatch(path):
                 return self.lang_file(path)
             public = {("GET", "/api/session"), ("POST", "/api/login"), ("POST", "/api/setup"),
@@ -8794,7 +8815,7 @@ class Handler(BaseHTTPRequestHandler):
         """A translation of the dashboard (dashboard/lang/xx.json). Public: the login page is translated too."""
         code = LANG_PATH_RE.fullmatch(path).group(1)
         try:
-            with open(os.path.join(HERE, "lang", code + ".json"), "rb") as f:
+            with open(os.path.join(LANG_DIR, code + ".json"), "rb") as f:
                 body = f.read(2 * 1024 * 1024)
         except OSError:
             return self.fail(404, "not found")
