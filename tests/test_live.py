@@ -215,6 +215,62 @@ class Live(unittest.TestCase):
         finally:
             D.APP.write_config_text(before)
 
+    def test_reports_and_chat_history(self):
+        import json as _json
+        inst = D.I()
+        S = D.APP._monitor_init(inst)
+        t = D.now()
+        chat = os.path.join(inst.STATS_DIR, "chat.log")
+        with open(chat, "w") as f:
+            for i, (n, m) in enumerate((("Bob", "get out of my way"), ("Bob", "[click](http://evil.example)"),
+                                        ("Alice", "stop ramming me"), ("Alice", "/report Bob ramming"))):
+                f.write(_json.dumps({"t": t - 30 + i, "name": n, "msg": m}) + "\n")
+            f.write(_json.dumps({"t": t - 20, "name": "Bob", "msg": "badword", "hid": 1}) + "\n")
+        with open(os.path.join(inst.STATS_DIR, "events.log"), "a") as f:
+            f.write(_json.dumps({"t": t, "ev": "report", "name": "Alice", "target": "Bob", "reason": "ramming [x](y)"}) + "\n")
+        try:
+            D.APP._monitor_one(inst, S)
+            r = self.owner.call("/api/reports")[1]
+            mine = next(x for x in r["items"] if x["by"] == "Alice" and x["target"] == "Bob" and x["t"] == t)
+            self.assertTrue(mine["open"])
+            self.assertEqual(mine["reason"], "ramming (x)(y)")             # no clickable links in Discord
+            self.assertIn("stop ramming me", [c["msg"] for c in mine["chat"]])
+            self.assertNotIn("/report Bob ramming", [c["msg"] for c in mine["chat"]])
+            note = next(n for n in D.APP.notifier.items if n["kind"] == "report")
+            self.assertIn("Alice reported Bob", note["title"])
+            self.assertNotIn("](http", note["message"])
+            # search + context
+            d = self.owner.call("/api/chat?q=ramming")[1]
+            self.assertEqual([c["msg"] for c in d["lines"]], ["stop ramming me", "/report Bob ramming"])
+            d = self.owner.call("/api/chat?player=bob")[1]
+            self.assertEqual(len(d["lines"]), 3)
+            self.assertTrue(any(c["hid"] for c in d["lines"]))
+            d = self.owner.call("/api/chat?around=%d" % (t - 28))[1]
+            self.assertEqual(len(d["lines"]), 5)
+            self.assertEqual(self.owner.call("/api/reports/close", {"id": mine["id"]})[0], 200)
+            self.assertFalse(next(x for x in self.owner.call("/api/reports")[1]["items"] if x["id"] == mine["id"])["open"])
+            self.assertEqual(self.owner.call("/api/reports/close", {"id": "nope"})[0], 404)
+            self.assertEqual(self.owner.call("/api/chat/clear", {})[0], 200)
+            self.assertFalse(os.path.exists(chat))
+        finally:
+            if os.path.exists(chat):
+                os.remove(chat)
+
+    def test_moderation_settings_for_reports_and_vote_kick(self):
+        c = self.owner
+        d = c.call("/api/moderation")[1]
+        self.assertTrue(d["report"])
+        self.assertFalse(d["votekick"])
+        self.assertTrue(d["chatlog"])
+        try:
+            self.assertEqual(c.call("/api/moderation", {"votekick": True, "votekick_min": 2})[0], 400)
+            self.assertEqual(c.call("/api/moderation", {"votekick": True, "votekick_min": 5, "chatlog": False})[0], 200)
+            with open(D.I().MOD_FILE) as f:
+                text = f.read()
+            self.assertIn("votekick=on\nvotekick_min=5\nchatlog=off", text)
+        finally:
+            c.call("/api/moderation", {"votekick": False, "votekick_min": 4, "chatlog": True})
+
     def test_webhook_cannot_target_home_network(self):
         for u in ("https://127.0.0.1:30815/api/logout", "https://169.254.169.254/latest/", "https://192.168.1.1/",
                   "http://hooks.example/x", "https://10.0.0.1@evil.example/"):
@@ -304,6 +360,10 @@ class Live(unittest.TestCase):
         for p in ("/api/export", "/api/modpack", "/api/activity", "/api/users", "/api/phoneapp", "/api/health/report"):
             self.assertEqual(mod.call(p)[0], 403, "moderator GET " + p)
         self.assertEqual(view.call("/api/overview")[0], 200)
+        for p in ("/api/chat", "/api/reports"):             # what players wrote: moderators yes, viewers no
+            self.assertEqual(mod.call(p)[0], 200, "moderator GET " + p)
+            self.assertEqual(view.call(p)[0], 403, "viewer GET " + p)
+        self.assertEqual(mod.call("/api/chat/clear", {})[0], 403, "moderator deleted the chat history")
 
     def test_tampered_user_list_locks_extra_accounts(self):
         o = self.owner
