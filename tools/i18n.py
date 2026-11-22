@@ -99,7 +99,7 @@ def add(t, where):
     if re.fullmatch(r"[\w\-./:#{}]+", t) and not re.search(r"[A-Z][a-z]", t) and " " not in t: return   # ids, classes, urls
     if re.fullmatch(r"\{\}[\w\-]+|[\w\-]+\{\}", t): return
     if t.startswith(("http", "/api/", "#", ".", "&", "M{}")) or re.search(r"[;{}]\s*$", t.replace("{}", "")) : return
-    if re.search(r"^(var\(|rgba?\(|\d+px|[a-z-]+:)", t): return
+    if re.search(r"^(var\(|rgba?\(|\d+px|[a-z-]+:)", t) or t == "noopener noreferrer": return
     keys.setdefault(t, where)
 
 ATTR_RE = re.compile(r'\b(placeholder|title|aria-label|alt)="([^"]*)"')
@@ -139,11 +139,15 @@ jsx = re.sub(r"//[^\n]*", "", jsx)
 jsx = re.sub(r"`[^`]*`", "0", jsx)   # template strings were read above
 for m in re.finditer(r"(?<![=\w])>([^<>{}]*[A-Za-z][^<>{}]*)(?=[<{])|\}([^<>{}]*[A-Za-z][^<>{}]*)(?=<)", jsx):
     t = m.group(1) or m.group(2)
-    if not re.search(r"[;=]|\breturn\b|\bcase\b|\)\s*$", t): add(t, "jsx")
+    if not re.search(r"[;=]|&&|\|\||\breturn\b|\bcase\b|\)\s*$|^\s*[:?]", t): add(t, "jsx")
 CODE_ATTR = r"(?:className|cls|k|key|type|autoComplete|inputMode|rel|target|href|kind|role|shapeRendering|fill|viewBox|value|name|n|d|x|y|width|height|style)"
 for m in re.finditer(r'(\b' + CODE_ATTR + r'=)?"((?:[^"\\\n]|\\.)*)"', jsx):
     if m.group(1): continue
     lit = unesc(m.group(2))
+    if re.search(r"(className|cls)=\{[^}]*$", jsx[max(0, m.start() - 60):m.start()]): continue   # class names
+    b4, af = jsx[:m.start()].rstrip()[-1:], jsx[m.end():].lstrip()[:2]
+    if lit and b4 == "+": lit = "{}" + lit
+    if lit and af[:1] == "+" and af != "++": lit = lit + "{}"
     if re.fullmatch(r"[#.\[\w\-=\]\s:>\"*,()/]+", lit) and not re.search(r"^[A-Z][a-z]", lit) and not re.search(r"[a-z] [a-z]", lit):
         continue
     add(lit, "jsx")
