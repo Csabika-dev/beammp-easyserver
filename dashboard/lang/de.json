@@ -1512,6 +1512,23 @@
   "{} planned": "{} geplant",
   "Every {} hours": "Alle {} Stunden",
   "Every {} hour": "Alle {} Stunde",
-  "Every {} minutes": "Alle {} Minuten"
+  "Every {} minutes": "Alle {} Minuten",
+  "Every night the settings of all servers (config, allow-list, bans, moderation, messages, rotation) are saved. The last {} are kept.": "Jede Nacht werden die Einstellungen aller Server gesichert (Konfiguration, Zulassungsliste, Banns, Moderation, Nachrichten, Rotation). Die letzten {} werden behalten.",
+  "Every role can look at everything. Only you can manage accounts, passwords, internet access and server plugins.": "Jede Rolle kann alles ansehen. Nur du kannst Konten, Passwörter, den Internetzugriff und Server-Plugins verwalten.",
+  "Manage your servers from your phone like a normal app - with its own icon, full screen, no browser bar.": "Verwalte deine Server vom Handy aus wie eine normale App – mit eigenem Symbol, im Vollbild, ohne Browserleiste.",
+  "May log in from the internet": "Darf sich aus dem Internet anmelden",
+  "These use the channel of your Discord webhook (Settings → Notifications).": "Diese nutzen den Kanal deines Discord-Webhooks (Einstellungen → Benachrichtigungen).",
+  "· players join via": "· Spieler treten bei über",
+  "Watching.": "Wacht.",
+  "· {} blocked so far · {} addresses known as players.": "· bisher {} blockiert · {} Adressen als Spieler bekannt.",
+  "Reachable (about {} ms from here to the relay and back). UDP can't be tested from here - join once to be sure.": "Erreichbar (etwa {} ms von hier zum Relay und zurück). UDP lässt sich von hier nicht testen – tritt einmal bei, um sicherzugehen.",
+  "Saved: {} - paste a new one to replace": "Gespeichert: {} – füge eine neue ein, um sie zu ersetzen",
+  "1. Wake-on-LAN": "1. Wake-on-LAN",
+  "of {} Mbit/s": "von {} Mbit/s",
+  "max {}": "max. {}",
+  "line top = your {} Mbit/s": "Linie oben = deine {} Mbit/s",
+  "Online as {}": "Online als {}",
+  "Open the app and scan this code with the phone's camera - the app connects to this dashboard.": "Öffne die App und scanne diesen Code mit der Handykamera – die App verbindet sich mit diesem Dashboard.",
+  "May log in from the internet (turn on Internet access first)": "Darf sich aus dem Internet anmelden (schalte zuerst den Internetzugriff ein)"
  }
 }
