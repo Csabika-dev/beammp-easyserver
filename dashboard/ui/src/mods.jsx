@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import * as L from "./legacy.js";
+import { cacheGet, cachedApi, SkelCard, SkelPage } from "./ui.jsx";
 
 const S = () => L.state();
 const NEW_TAB = { target: "_blank", rel: "noopener noreferrer" };
@@ -81,11 +82,11 @@ function PluginReview({ j, onClose }) {
 
 /* ---------------- server plugins */
 function Plugins() {
-  const [d, setD] = useState(null), [busy, setBusy] = useState({}), [review, setReview] = useState(null);
+  const [d, setD] = useState(() => cacheGet("/api/plugins") ?? null), [busy, setBusy] = useState({}), [review, setReview] = useState(null);
   const file = useRef(null);
-  const load = async () => { try { setD(await L.api("/api/plugins")); } catch (e) { setD(null); } };
+  const load = async () => { try { setD(await cachedApi("/api/plugins")); } catch (e) { setD(null); } };
   useEffect(() => { load(); }, []);
-  if (!d) return null;
+  if (!d) return <SkelCard lines={5} style={{ marginTop: 16 }} />;
   const inst = Object.fromEntries(d.installed.filter(p => !p.id.startsWith("file-") && !p.id.startsWith("manual-")).map(p => [p.id, p]));
   const Errs = ({ p }) => p.errors ? <div className="small" style={{ color: "var(--crit-ink)" }}>{`${p.errors} Lua error${p.errors === 1 ? "" : "s"} in the log: `}<span className="mono">{p.last_error}</span></div> : null;
   const call = async (path, body) => { try { const r = await L.api(path, { json: body }); if (r.note) L.toast(r.note, 7000); load(); } catch (e) { L.toast(e.message, 7000); } };
@@ -157,18 +158,19 @@ function ModRow({ x, u, act, useMap, update }) {
 
 /* ---------------- the page */
 export function Mods({ reload }) {
-  const [tick, setTick] = useState(0), [data, setData] = useState(null), [err, setErr] = useState("");
+  const [tick, setTick] = useState(0), [err, setErr] = useState("");
+  const [data, setData] = useState(() => cacheGet("/api/mods") && cacheGet("/api/mods/updates") ? { d: cacheGet("/api/mods"), mu: cacheGet("/api/mods/updates") } : null);
   const [sort, setSort] = useState(() => L.store.get("es-modsort", "name"));
   const [scan, setScan] = useState(false), [mpres, setMpres] = useState(""), [updBusy, setUpdBusy] = useState(false);
   const mpfile = useRef(null);
   const again = () => setTick(t => t + 1);
   useEffect(() => {
     let live = true;
-    Promise.all([L.api("/api/mods"), L.api("/api/mods/updates").catch(() => ({ mods: {} }))])
+    Promise.all([cachedApi("/api/mods"), cachedApi("/api/mods/updates").catch(() => ({ mods: {} }))])
       .then(([d, mu]) => { if (live) { setData({ d, mu }); setErr(""); } }, e => { if (live && e.message !== "Please log in") setErr(e.message); });
     return () => { live = false; };
   }, [reload, tick]);
-  if (!data) return err ? <div className="banner bad">{err}</div> : <p className="muted">Loading…</p>;
+  if (!data) return err ? <div className="banner bad">{err}</div> : <SkelPage />;
   const { d, mu } = data, U = mu.mods || {}, ST = d.storage || {}, SETS = d.sets || [];
   const roomLeft = ST.free == null ? null : Math.max(0, ST.free - (ST.spare || 0));
   const mods = sort === "size" ? [...d.mods].sort((a, b) => b.size - a.size) : d.mods;
@@ -253,7 +255,7 @@ export function Mods({ reload }) {
       <div className="row"><div style={{ flex: 1, minWidth: 240 }}><h2 style={{ margin: 0 }}>Mod sets</h2><p className="small muted" style={{ margin: "4px 0 0" }}>Save the mods that are on now under a name, like "Drift night", and switch between sets in one click. Mods outside the set are turned off, not deleted.</p></div>
         <button className="btn sm" onClick={saveSet}>Save as a set…</button></div>
       {SETS.length ? <table style={{ marginTop: 10 }}><tbody>{SETS.map(x => <tr key={x.name}><td><b>{x.name}</b>{x.active && <span className="badge good">on now</span>}
-        <div className="small muted">{`${x.mods.length} mod${x.mods.length === 1 ? "" : "s"} · ${L.fmtSize(x.size)}`}{x.missing.length > 0 && <>{" · "}<span style={{ color: "var(--warn-ink)" }}>{`${x.missing.length} no longer on the server`}</span></>}</div></td>
+        <div className="small muted">{x.mods.length === 1 ? "1 mod" : `${x.mods.length} mods`}{" · " + L.fmtSize(x.size)}{x.missing.length > 0 && <>{" · "}<span style={{ color: "var(--warn-ink)" }}>{`${x.missing.length} no longer on the server`}</span></>}</div></td>
         <td className="num"><div className="row" style={{ justifyContent: "flex-end" }}>{!x.active && <button className="btn sm primary" onClick={() => setBtn("apply", x.name)}>Switch to this set</button>}
           <button className="btn sm" title="Replace this set with the mods that are on now" onClick={() => setBtn("save", x.name)}>Update</button>
           <button className="btn sm danger" onClick={() => setBtn("delete", x.name)}>Delete</button></div></td></tr>)}</tbody></table>
