@@ -29,6 +29,8 @@ export default {
   },
 
   common: {
+    // "What's new": {v} is the version from CHANGELOG.md.
+    newTitle: "New in {v}", newRolling: "In Rolling now. They come to Stable once they've been tested.", newStable: "Out now in the Stable version.",
     download: "Download",
     copy: "Copy", copied: "Copied", pressCtrlC: "Press Ctrl+C",
     license: "MIT license. Not made by or affiliated with the BeamMP team or BeamNG GmbH. EasyServer builds on their work and on many mod and plugin authors: [see the credits]({GH}#-credits).",
@@ -107,14 +109,6 @@ export default {
         text: "One link shows whether the server is up, who's online, which mods to download and the next event. No login, and no addresses or settings on show." },
     ],
 
-    newTitle: "New in 1.15",
-    newSub: "In Rolling now. They come to Stable once they've been tested.",
-    news: [
-      ["Vehicle rules", "Block props, trailers or any car, and stop spawn spam. Mod cars heavy enough to lag everyone are found automatically."],
-      ["Server plugins", "Install community game modes like CareerMP, freeRoamMP and BeamJoy, straight from each author's page."],
-      ["Run it as a team", "Invite friends with a link that works once and expires after an hour, and choose what each one can do on each server. They can sign in with Discord."],
-    ],
-
     alsoTitle: "Also included",
     alsoSub: "All optional. Turn on what you need.",
     also: [
@@ -191,12 +185,6 @@ export default {
       ["Players and bans", ["Kick, mute and ban from the dashboard, from Discord or with a chat command. There's also an invite-only list and maintenance mode."]],
       ["Mods", ["Drag a zip onto the page or pick one from the BeamNG repository. Each one is virus-scanned before players download it.", "Share your whole mod list with a short code, and a friend's server can install the same set."]],
       ["Backups and alerts", ["Back up and restore your config. Get a message on Discord, email, Telegram or your phone when the server crashes."]],
-    ],
-    newTitle: "New in 1.15", newSub: "In the Rolling version now. They move to Stable once they've been tested.",
-    newRows: [
-      ["Vehicle rules", ["Block props, the huge physics props, trailers or any car you pick. Mod cars heavy enough to lag everyone are spotted automatically.", "There's a spawn cooldown too, and presets for racing and roleplay servers."]],
-      ["Server plugins", ["Install community game modes like CareerMP, freeRoamMP and BeamJoy. They download from each author's own page, and you can see which files go where before you install."]],
-      ["Run it as a team", ["Send a friend an invite link that works once and stops working after an hour. Give them a role, like viewer or moderator, for each server.", "They can sign in with Discord instead of a password. Anyone who logs in from outside your home network needs a two-step login code."]],
     ],
     closing: "Download it, run it and follow the steps. Most people are online in about five minutes. If you get stuck, the Help page and the community can help.",
     footnote: "The Mac version is experimental and only in Rolling.",
