@@ -38,7 +38,8 @@ nav .links a[aria-current]::after{transform:scaleX(1)}
 
 /* ---------- Hero ---------- */
 .hero{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,6fr);gap:48px;align-items:center;padding:40px 0 64px}
-h1{font-size:clamp(42px,5.8vw,76px);line-height:.95}
+h1{font-size:clamp(42px,5.8vw,76px);line-height:.95;overflow-wrap:break-word;hyphens:auto}
+html:not([lang=en]) .hero h1{font-size:clamp(36px,4.6vw,62px)}
 .lane{display:block;width:124px;height:10px;margin:26px 0 22px;background:repeating-linear-gradient(90deg,var(--line) 0 34px,transparent 34px 45px)}
 .hero p{max-width:30em;color:var(--mute);margin:0 0 26px}
 .hero .shot{margin-right:calc(-1 * max(24px,(100vw - 1100px)/2 + 24px));min-width:0}
@@ -232,3 +233,72 @@ mark{background:color-mix(in srgb,var(--line) 55%,transparent);color:inherit;bor
 .closing p{color:var(--mute);max-width:36em;margin:0 0 22px}
 footer{padding:40px 0 56px;color:var(--mute);font-size:14px}
 footer p{margin:0 0 6px;max-width:60em}
+
+/* ---------- Language picker ---------- */
+.langpick{position:relative;margin-left:4px}
+.langpick summary{list-style:none;display:flex;align-items:center;gap:6px;cursor:pointer;font-size:14px;font-weight:700;color:var(--mute);padding:6px 10px;border:2px solid var(--rule);border-radius:6px;transition:border-color .2s,color .2s}
+.langpick summary::-webkit-details-marker{display:none}
+.langpick summary:hover,.langpick[open] summary{border-color:var(--ink);color:var(--ink)}
+.langpick ul{position:absolute;right:0;top:calc(100% + 8px);margin:0;padding:6px;list-style:none;min-width:150px;background:var(--raise);border:2px solid var(--ink);border-radius:8px;z-index:30;transform-origin:top right}
+.langpick[open] ul{animation:pop .22s var(--ease)}
+.langpick a{display:block;padding:7px 10px;border-radius:5px;color:var(--ink);text-decoration:none;font-size:15px;transition:background-color .15s,padding-left .2s var(--ease)}
+.langpick a:hover{background:var(--code);padding-left:16px}
+.langpick a[aria-current]{font-weight:700;box-shadow:inset 4px 0 0 var(--line)}
+@keyframes pop{from{opacity:0;transform:scale(.92) translateY(-6px)}}
+@media (max-width:420px){.langpick summary{padding:5px 7px}}
+
+/* ---------- Point at things: they answer ---------- */
+/* Headline words hop one after another when the mouse passes over the headline. */
+.hop .w{display:inline-block;transition:color .2s}
+@media (hover:hover) and (prefers-reduced-motion:no-preference){
+  .hop:hover .w{animation:hop .6s var(--ease) calc(var(--i) * 35ms)}
+  .hop .w:hover{color:var(--blue)}
+}
+@keyframes hop{0%,100%{transform:none}35%{transform:translateY(-.16em)}}
+
+/* Section titles get their road line painted underneath while you're in the section. */
+.sweep{background:linear-gradient(var(--line),var(--line)) left bottom/0% 5px no-repeat;padding-bottom:4px;transition:background-size .5s var(--ease)}
+section:hover .sweep,section:focus-within .sweep{background-size:100% 5px}
+
+/* Rows lean in with a yellow marker. */
+.row{position:relative}
+.row::before{content:"";position:absolute;left:-16px;top:18px;bottom:18px;width:4px;border-radius:2px;background:var(--line);transform:scaleY(0);transform-origin:top;transition:transform .3s var(--ease)}
+.row h3{transition:transform .3s var(--ease)}
+.row p{transition:color .3s}
+@media (hover:hover){
+  .row:hover::before{transform:scaleY(1)}
+  .row:hover h3{transform:translateX(6px)}
+  .row:hover p{color:var(--ink)}
+}
+.also div{position:relative;transition:border-color .3s}
+.also h3{transition:transform .3s var(--ease),color .2s}
+.also div::after{content:"";position:absolute;left:0;bottom:-1px;height:2px;width:100%;background:var(--line);transform:scaleX(0);transform-origin:left;transition:transform .35s var(--ease)}
+@media (hover:hover){.also div:hover::after{transform:scaleX(1)}.also div:hover h3{transform:translateX(4px)}}
+
+.btn{transition:background-color .15s,color .15s,border-color .15s,transform .2s var(--ease)}
+@media (hover:hover){.btn:hover{transform:translateY(-2px)}}
+.btn:active{transform:translateY(0)}
+
+/* The dashboard tilts a little toward the mouse. */
+.tour-frame{transform:perspective(1400px) rotateX(var(--rx,0deg)) rotateY(var(--ry,0deg));transition:transform .25s ease-out;will-change:transform}
+.ex-panel img,figure img{transition:transform .4s var(--ease)}
+@media (hover:hover){.ex-panel img:hover,figure img:hover{transform:scale(1.02)}}
+.stop-num{transition:border-color .25s,background-color .25s,color .25s,transform .25s var(--ease)}
+@media (hover:hover){.road-stops button:hover .stop-num{transform:translateY(-3px)}}
+
+/* ---------- Parts slide in as you scroll to them ---------- */
+@media (prefers-reduced-motion:no-preference){
+  html.js:not(.reveal-all) [data-reveal=""]:not([data-shown]){opacity:0;transform:translateY(30px)}
+  [data-reveal=""]{transition:opacity .8s var(--ease),transform .8s var(--ease)}
+  html.js:not(.reveal-all) [data-reveal="stagger"]:not([data-shown]) > *{opacity:0}
+  [data-reveal="stagger"][data-shown] > *{animation:rise .6s var(--ease) backwards}
+  [data-reveal="stagger"][data-shown] > :nth-child(2){animation-delay:.07s}
+  [data-reveal="stagger"][data-shown] > :nth-child(3){animation-delay:.14s}
+  [data-reveal="stagger"][data-shown] > :nth-child(4){animation-delay:.21s}
+  [data-reveal="stagger"][data-shown] > :nth-child(5){animation-delay:.28s}
+  [data-reveal="stagger"][data-shown] > :nth-child(6){animation-delay:.35s}
+  [data-reveal="stagger"][data-shown] > :nth-child(7){animation-delay:.42s}
+  [data-reveal="stagger"][data-shown] > :nth-child(8){animation-delay:.49s}
+  [data-reveal="stagger"][data-shown] > :nth-child(n+9){animation-delay:.56s}
+}
+@media (prefers-reduced-motion:reduce){.tour-frame{transform:none!important}}
