@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as L from "./legacy.js";
 import { Ip } from "./pages.jsx";
-import { $, S, val, chk, Toggle, useLoad } from "./ui.jsx";
+import { $, S, val, chk, Toggle, useLoad, SkelPage } from "./ui.jsx";
 import { Supporter, Phone, DiscordBot, Integrations, StatusPage, Devices, Users, Backups, KeyQR } from "./settings-cards.jsx";
 import { Power } from "./power.jsx";
 
@@ -48,7 +48,7 @@ function TwoStep({ s, reloadPage }) {
 
 /* ---------------- BeamMP-only guard */
 function Guard({ on }) {
-  const [g, again, v, err] = useLoad(() => L.api("/api/guard"));
+  const [g, again, v, err] = useLoad("/api/guard");
   if (err && !g) return <div className="small">{err}</div>;
   if (!g) return <div className="small" />;
   if (g.mac) return <div className="small"><p className="muted">Not available on a Mac yet: players reach the server through the Mac, so they all look like the same address.</p></div>;
@@ -142,8 +142,8 @@ function ExportImport() {
 /* ---------------- the page */
 export function Settings({ reload }) {
   const [page, setPage] = useState(0), [pwTick, setPwTick] = useState(0);
-  const [s, , v, err] = useLoad(() => L.api("/api/settings"), [reload, page]);
-  if (!s) return err ? <div className="banner bad">{err}</div> : <p className="muted">Loading…</p>;
+  const [s, , v, err] = useLoad("/api/settings", [reload, page]);
+  if (!s) return err ? <div className="banner bad">{err}</div> : <SkelPage cards={6} />;
   const reloadPage = () => setPage(p => p + 1);
   const { SESSION } = S(), owner = SESSION.role === "owner" || !SESSION.role, N = s.notify;
   const saveNotif = async quiet => {
