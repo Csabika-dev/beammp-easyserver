@@ -1,6 +1,7 @@
 // Dashboard pages written in React. Each gets `reload` (bumped when the page should load again).
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import * as L from "./legacy.js";
+import { cacheGet, cachedApi, Skel, SkelPage } from "./ui.jsx";
 
 const S = () => L.state();
 export const Ip = ({ children }) => <span className="ipb" title="Hidden - click to show">{children}</span>;
@@ -17,15 +18,15 @@ export function Blur({ text }) {
 
 // Load data for a page; again whenever `reload` or the deps change.
 export function useApi(path, reload, deps = []) {
-  const [state, setState] = useState({ d: null, err: "" });
+  const [state, setState] = useState(() => ({ d: cacheGet(path) ?? null, err: "" }));
   const load = useCallback(async () => {
-    try { setState({ d: await L.api(path), err: "" }); }
+    try { setState({ d: await cachedApi(path), err: "" }); }
     catch (e) { if (e.message !== "Please log in") setState(s => ({ ...s, err: e.message })); }
   }, [path]);
   useEffect(() => { load(); }, [load, reload, ...deps]);
   return [state.d, state.err, load];
 }
-const Wait = ({ err }) => err ? <div className="banner bad">{err}</div> : <p className="muted">Loading…</p>;
+const Wait = ({ err }) => err ? <div className="banner bad">{err}</div> : <SkelPage />;
 const Pill = ({ ok, yes, no }) => <span className={"pill " + (ok ? "good" : "warn")}><span className="dot" />{ok ? yes : no}</span>;
 
 /* ------------------------------------------------------------------ Updates */
@@ -120,7 +121,7 @@ function Activity() {
         <input placeholder="Filter by name" value={who} onChange={e => setWho(e.target.value)} style={{ maxWidth: 200 }} />
         <select value={via} onChange={e => setVia(e.target.value)} style={{ width: "auto" }}><option value="">Everywhere</option>{Object.entries(VIA).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
         <button className="btn sm" onClick={load}>Filter</button></div>
-      {!d ? <p className="muted small">Loading…</p> : d.rows.length ? (
+      {!d ? <div aria-busy="true">{[96, 88, 92, 70, 84].map((w, i) => <Skel key={i} w={w + "%"} style={{ marginTop: 10 }} />)}</div> : d.rows.length ? (
         <table className="small" style={{ width: "100%", borderCollapse: "collapse" }}><tbody>
           {d.rows.map((r, i) => (
             <tr key={i} style={{ borderTop: "1px solid var(--line)" }}>
