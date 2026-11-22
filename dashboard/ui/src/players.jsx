@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as L from "./legacy.js";
 import { useApi } from "./pages.jsx";
-import { SkelPage } from "./ui.jsx";
+import { Empty, PageWait } from "./ui.jsx";
 
 const S = () => L.state();
 const pad2 = n => String(n).padStart(2, "0");
@@ -108,9 +108,11 @@ function Chat() {
   if (!d) return null;
   const role = S().SESSION.role;
   const go = () => load({ q: q.trim(), player });
-  const clear = async () => {
-    if (!confirm("Delete the whole chat history of this server? This can't be undone.")) return;
-    try { const r = await L.api("/api/chat/clear", { json: {} }); L.toast(r.note); load({}); } catch (e) { L.toast(e.message); }
+  // Deleted with Undo: the messages disappear now and are really deleted a few seconds later.
+  const clear = () => {
+    const before = d;
+    setD({ ...d, lines: [], total: 0 });
+    L.undoable("Chat history deleted.", "/api/chat/clear", {}, { onUndo: () => setD(before), after: r => { if (r && r.note) L.toast(r.note); load({}); } });
   };
   return (<div className="card" style={{ marginBottom: 16 }}>
     <div className="row"><h2 style={{ margin: 0 }}>Chat history</h2><span className="spacer" />
@@ -201,10 +203,10 @@ function Records({ d }) {
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 export function Players({ reload }) {
   const [tick, setTick] = useState(0);
-  const [d, err] = useApi("/api/players", reload, [tick]);
-  const [bn] = useApi("/api/bans", reload, [tick]);
+  const [d, err, loadD] = useApi("/api/players", reload, [tick]);
+  const [bn, bnErr, loadB] = useApi("/api/bans", reload, [tick]);
   const [ban, setBan] = useState({ name: "", len: "0", reason: "" });
-  if (!d || !bn) return err ? <div className="banner bad">{err}</div> : <SkelPage />;
+  if (!d || !bn) return <PageWait err={(!d && err) || (!bn && bnErr)} retry={() => Promise.all([loadD(), loadB()])} />;
   const s = d.summary, hm = d.heatmap, hmMax = Math.max(0.0001, ...hm.flat().filter(v => v !== null));
   const shade = v => v === null ? "var(--surface-2)" : `var(--heat-${Math.min(6, Math.round(v / hmMax * 6))})`;
   const again = () => { setBan({ name: "", len: "0", reason: "" }); setTick(t => t + 1); };
@@ -213,7 +215,9 @@ export function Players({ reload }) {
   const mod = canModerate();
   return (<>
     <div className="row"><div><h1>Players</h1><p className="sub">Activity over the last 30 days. Recorded by the EasyServerStats plugin on your server.</p></div><span className="spacer" /><button className="btn sm" onClick={clear}>Clear statistics</button></div>
-    {!d.has_data && <div className="banner info">No player data yet. Statistics start once the server runs with the stats plugin and someone plays.</div>}
+    {!d.has_data && <div className="card" style={{ marginBottom: 16 }}><Empty title="No players yet"
+      actions={<><button className="btn primary" onClick={() => L.openInvite()}>Invite friends</button><button className="btn" onClick={() => L.bridge.show("network")}>Check friends can join</button></>}>
+      Statistics start once the server runs and someone plays. Send your friends the join info, or check the network if they can't get in.</Empty></div>}
     <Maintenance key={"m" + reload} />
     {mod && <Reports key={"r" + reload} onBan={onBan} />}
     <Moderation d={d} bn={bn} ban={ban} setBan={setBan} reload={again} />
