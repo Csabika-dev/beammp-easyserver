@@ -1501,6 +1501,14 @@
   "{} warning": "{} figyelmeztetés",
   "{} warnings": "{} figyelmeztetés",
   "· internet address": "· internetes cím",
-  "· this computer": "· ez a számítógép"
+  "· this computer": "· ez a számítógép",
+  "Average players online by time of day": "Átlagos online játékosszám napszak szerint",
+  "Average players online by time of day · busiest around {}:00": "Átlagos online játékosszám napszak szerint · a legtöbben {}:00 körül",
+  "Click a message to see what was said around it.": "Kattints egy üzenetre, hogy lásd, mi hangzott el körülötte.",
+  "Counted since {}.": "Számolva {} óta.",
+  "Newest {} of {} messages.": "A legújabb {} a(z) {} üzenetből.",
+  "Nobody is online right now (or the server isn't reporting).": "Most senki sincs online (vagy a szerver nem jelent).",
+  "Nobody is online right now.": "Most senki sincs online.",
+  "The chat history is turned off (Config → Moderation).": "A chatelőzmények ki vannak kapcsolva (Konfiguráció → Moderáció)."
  }
 }
