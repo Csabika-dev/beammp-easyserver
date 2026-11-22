@@ -209,11 +209,18 @@ function Shell({ tab, reload, unread, onLang, logout }) {
   const glass = L.store.get("es-look", "glass") !== "classic";
   const flipLook = () => { L.store.set("es-look", glass ? "classic" : "glass"); L.applyTheme(); redraw(x => x + 1); };
   const flip = () => { L.store.set("es-theme", dark ? "light" : "dark"); L.applyTheme(); redraw(x => x + 1); if (tab === "players") L.bridge.show("players"); };
-  const navs = L.myTabs().map(([k, label]) => (
-    <button key={k} className={"nav" + (k === tab ? " active" : "")} onClick={() => L.bridge.show(k)}>
+  const navBtn = ([k, label]) => (
+    <button key={k} className={"nav" + (k === tab ? " active" : "")} aria-current={k === tab ? "page" : undefined} onClick={() => L.bridge.show(k)}>
       <Icon n={k} /><span>{label}</span>{k === "notifications" && <span className={"count" + (unread ? "" : " hidden")}>{unread}</span>}
     </button>
-  ));
+  );
+  // The menu in groups: the server itself, keeping an eye on it, and (down in the corner) the
+  // dashboard's own setup. Someone who may only see some pages gets only those; empty groups go.
+  const mine = L.myTabs(), has = new Map(mine);
+  const group = keys => keys.filter(k => has.has(k)).map(k => [k, has.get(k)]);
+  const GROUPS = [[null, group(["overview"])], ["Server", group(["config", "mods", "players"])], ["Keep an eye on", group(["network", "logs", "notifications"])]];
+  const corner = group(["servers", "updates", "settings"]);
+  const navs = [...GROUPS.flatMap(g => g[1]), ...corner].map(navBtn);   // the phone bar: one row in the same order
   // A page slides in once when you open it. After that, parts that finish loading or refresh
   // appear in place, so nothing slides around under your finger.
   const settle = useCallback(el => { if (el) setTimeout(() => el.classList.remove("enter"), 900); }, []);
@@ -221,7 +228,11 @@ function Shell({ tab, reload, unread, onLang, logout }) {
     <div className="app">
       <aside className="side">
         <div className="brand"><Logo /><div>BeamMP EasyServer<small>{"Dashboard " + ses.version + (ses.supporter ? " · ❤ Supporter" : "")}</small></div></div>
-        <ServerPick />{navs}<div className="grow" />
+        <ServerPick />
+        {GROUPS.filter(g => g[1].length).map(([title, items], i) => <div className="navgroup" key={i} role="group" aria-label={title || undefined}>
+          {title && <div className="navhead">{title}</div>}{items.map(navBtn)}</div>)}
+        <div className="grow" />
+        {corner.length > 0 && <div className="navgroup corner" role="group" aria-label="Dashboard setup">{corner.map(navBtn)}</div>}
         <div className="foot">
           <button className="iconbtn" title="Light / dark mode" onClick={flip}><Icon n={dark ? "sun" : "moon"} /></button>
           <button className="iconbtn" title={glass ? "Classic look" : "Glass look"} aria-pressed={glass} onClick={flipLook}><Icon n="glass" /></button>
