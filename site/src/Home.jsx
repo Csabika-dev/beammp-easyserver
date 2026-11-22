@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Md, useSite } from "./i18n.jsx";
 import { useNews } from "./news.jsx";
-import { Command, Fold, Footer, GH, LATEST, Nav, Words, useOpenSet, useReducedMotion } from "./shared.jsx";
+import { Command, DownloadButton, Fold, Footer, GH, LATEST, Nav, Words, useLatestVersion, useOpenSet, useReducedMotion } from "./shared.jsx";
 
 const LINUX_STABLE = "curl -fsSL https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/stable/linux/install.sh | sudo bash";
 const LINUX_ROLLING = "curl -fsSL https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/main/linux/install.sh | sudo bash";
@@ -79,7 +79,7 @@ function Hero() {
         <span className="lane" aria-hidden="true" />
         <p>{t.home.lead}</p>
         <div className="btns">
-          <a className="btn go" href={LATEST} data-goatcounter-click="download-stable">{t.common.download}</a>
+          <DownloadButton />
           <a className="btn" href="#start">{t.home.how}</a>
         </div>
       </div>
@@ -193,6 +193,13 @@ function Explorer() {
 
 /* ---------- The rest ---------- */
 
+// The Stable download in the Downloads section, with the version number once GitHub tells us.
+function StableButton() {
+  const { t } = useSite();
+  const v = useLatestVersion();
+  return <a className="btn go" href={LATEST} data-goatcounter-click="download-stable">{t.home.stableButton}{v ? " (" + v + ")" : ""}</a>;
+}
+
 function Faq() {
   const { t } = useSite();
   const [open, toggle] = useOpenSet();
@@ -250,7 +257,7 @@ export function Home() {
               <div><h3>{h.stable}</h3><p className="what">{h.stableWhat}</p>
                 <ul><li><Md s={h.stableWin} /></li>
                   <li><Md s={h.linuxLabel} /><Command>{LINUX_STABLE}</Command></li></ul>
-                <a className="btn go" href={LATEST} data-goatcounter-click="download-stable">{h.stableButton}</a></div>
+                <StableButton /></div>
               <div><h3>{h.rolling}</h3><p className="what">{h.rollingWhat}</p>
                 <ul><li><Md s={h.rollingWin} /></li>
                   <li><Md s={h.linuxLabel} /><Command>{LINUX_ROLLING}</Command></li>
@@ -271,7 +278,7 @@ export function Home() {
           <h2 className="hop"><Words text={t.common.tryTitle} /></h2>
           <p>{h.closing}</p>
           <div className="btns">
-            <a className="btn go" href={LATEST} data-goatcounter-click="download-stable">{t.common.download}</a>
+            <DownloadButton />
             <a className="btn" href={GH} data-goatcounter-click="github">{t.common.viewOnGithub}</a>
           </div>
         </div>
