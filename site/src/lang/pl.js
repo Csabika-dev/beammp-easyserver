@@ -27,6 +27,8 @@ export default {
   },
 
   common: {
+    // "What's new": {v} is the version from CHANGELOG.md.
+    newTitle: "Nowości w {v}", newRolling: "Już w Rolling. Trafią do Stable, gdy zostaną przetestowane.", newStable: "Już w wersji Stable.",
     download: "Pobierz",
     copy: "Kopiuj", copied: "Skopiowano", pressCtrlC: "Naciśnij Ctrl+C",
     license: "Licencja MIT. Nie jest tworzony przez zespół BeamMP ani BeamNG GmbH i nie jest z nimi powiązany. EasyServer opiera się na ich pracy oraz pracy wielu autorów modów i pluginów: [zobacz podziękowania]({GH}#-credits).",
@@ -105,14 +107,6 @@ export default {
         text: "Jeden link pokazuje, czy serwer działa, kto jest online, które mody pobrać i jakie jest następne wydarzenie. Bez logowania i bez pokazywania adresów czy ustawień." },
     ],
 
-    newTitle: "Nowości w 1.15",
-    newSub: "Już w Rolling. Trafią do Stable, gdy zostaną przetestowane.",
-    news: [
-      ["Zasady pojazdów", "Blokuj rekwizyty, przyczepy lub dowolne auta i zatrzymaj spam spawnów. Modowe auta tak ciężkie, że wszystkim zacina, są wykrywane automatycznie."],
-      ["Pluginy serwera", "Instaluj tryby gry od społeczności, jak CareerMP, freeRoamMP i BeamJoy, prosto ze strony każdego autora."],
-      ["Prowadźcie go zespołem", "Zaproś znajomych linkiem, który działa raz i wygasa po godzinie, i wybierz, co każdy może robić na każdym serwerze. Mogą logować się przez Discorda."],
-    ],
-
     alsoTitle: "W zestawie także",
     alsoSub: "Wszystko opcjonalne. Włącz to, czego potrzebujesz.",
     also: [
@@ -189,12 +183,6 @@ export default {
       ["Gracze i bany", ["Wyrzucaj, wyciszaj i banuj z panelu, z Discorda albo komendą na czacie. Jest też lista zaproszonych i tryb konserwacji."]],
       ["Mody", ["Przeciągnij zip na stronę albo wybierz mod z repozytorium BeamNG. Każdy jest skanowany antywirusem, zanim gracze go pobiorą.", "Udostępnij całą listę modów krótkim kodem, a serwer znajomego zainstaluje ten sam zestaw."]],
       ["Kopie zapasowe i powiadomienia", ["Twórz kopię konfiguracji i przywracaj ją. Dostań wiadomość na Discordzie, e-mailem, na Telegramie albo na telefon, gdy serwer padnie."]],
-    ],
-    newTitle: "Nowości w 1.15", newSub: "Już w wersji Rolling. Trafią do Stable, gdy zostaną przetestowane.",
-    newRows: [
-      ["Zasady pojazdów", ["Blokuj rekwizyty, ogromne rekwizyty z fizyką, przyczepy lub dowolne wybrane auto. Modowe auta tak ciężkie, że wszystkim zacina, są wykrywane automatycznie.", "Jest też odstęp między spawnami i presety dla serwerów wyścigowych i roleplay."]],
-      ["Pluginy serwera", ["Instaluj tryby gry od społeczności, jak CareerMP, freeRoamMP i BeamJoy. Pobierają się ze strony każdego autora, a przed instalacją widzisz, który plik trafia gdzie."]],
-      ["Prowadźcie go zespołem", ["Wyślij znajomemu link z zaproszeniem, który działa raz i przestaje działać po godzinie. Daj mu rolę, np. widza albo moderatora, na każdym serwerze.", "Zamiast hasła mogą logować się przez Discorda. Każdy, kto loguje się spoza twojej sieci domowej, potrzebuje kodu logowania dwuetapowego."]],
     ],
     closing: "Pobierz, uruchom i idź za krokami. Większość osób jest online po około pięciu minutach. Jeśli utkniesz, pomoże strona Pomoc i społeczność.",
     footnote: "Wersja na Maca jest eksperymentalna i dostępna tylko w Rolling.",
@@ -331,6 +319,15 @@ export default {
         { ol: ["**Stan → Pobierz raport diagnostyczny**. Klucze, hasła i adresy są z niego usuwane.",
           "[Zapytaj na forum społeczności]({ASK}) i dołącz raport. Błędy zgłaszaj w [issues]({GH}/issues/new/choose)."] },
         "Znalazłeś problem z bezpieczeństwem? Użyj [prywatnego zgłoszenia]({GH}/security/advisories/new) zamiast publikować go publicznie."]],
+    ],
+  },
+  // Translations of the "What's new" cards, by version. The cards themselves come from the
+  // <!-- website --> block in CHANGELOG.md; when a new version has no translation here yet, it shows in English.
+  whatsNew: {
+    "1.15": [
+      ["Zasady pojazdów", "Blokuj rekwizyty, przyczepy lub dowolne auta i zatrzymaj spam spawnów. Modowe auta tak ciężkie, że wszystkim zacina, są wykrywane automatycznie."],
+      ["Pluginy serwera", "Instaluj tryby gry od społeczności, jak CareerMP, freeRoamMP i BeamJoy, prosto ze strony każdego autora."],
+      ["Prowadźcie go zespołem", "Zaproś znajomych linkiem, który działa raz i wygasa po godzinie, i wybierz, co każdy może robić na każdym serwerze. Mogą logować się przez Discorda."],
     ],
   },
 };
