@@ -3,7 +3,7 @@
 // the frame while they're moved over; they reach the app through `bridge`.
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as L from "./legacy.js";
-import { Logs, Notifications, Updates } from "./pages.jsx";
+import { Logs, Notifications, Servers, Updates } from "./pages.jsx";
 
 const S = () => L.state();
 const Icon = ({ n }) => <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" dangerouslySetInnerHTML={{ __html: L.I[n] }} />;
@@ -340,7 +340,7 @@ function Overview({ reload }) {
 }
 
 // Pages drawn by React; the rest are still in legacy.js
-const PAGES = { overview: Overview, updates: Updates, logs: Logs, notifications: Notifications };
+const PAGES = { overview: Overview, servers: Servers, updates: Updates, logs: Logs, notifications: Notifications };
 
 /* ------------------------------------------------------------------ the app */
 export function App() {
