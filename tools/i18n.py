@@ -77,6 +77,13 @@ def parse_template(i):
         buf.append(c); i += 1
 
 parse(0)
+# template strings (`...${x}...`) in the React files count as one text with {} for each ${x}
+_legacy = code
+code = re.sub(r"(?<![:\"'\w])//[^\n]*", "", jsx)
+_i = code.find("`")
+while _i >= 0:
+    _i = code.find("`", parse_template(_i + 1))
+code = _legacy
 
 keys = {}
 def norm(t):
@@ -129,10 +136,11 @@ html_text(re.sub(r"<style[\s\S]*?</style>", "", html_head), "head")
 
 # React (app.jsx): text between tags, the attributes people read, and quoted text that isn't code
 jsx = re.sub(r"//[^\n]*", "", jsx)
+jsx = re.sub(r"`[^`]*`", "0", jsx)   # template strings were read above
 for m in re.finditer(r"(?<![=\w])>([^<>{}]*[A-Za-z][^<>{}]*)(?=[<{])|\}([^<>{}]*[A-Za-z][^<>{}]*)(?=<)", jsx):
     t = m.group(1) or m.group(2)
     if not re.search(r"[;=]|\breturn\b|\bcase\b|\)\s*$", t): add(t, "jsx")
-CODE_ATTR = r"(?:className|key|type|autoComplete|inputMode|rel|target|href|kind|role|shapeRendering|fill|viewBox|value|name|n|d|x|y|width|height|style)"
+CODE_ATTR = r"(?:className|cls|k|key|type|autoComplete|inputMode|rel|target|href|kind|role|shapeRendering|fill|viewBox|value|name|n|d|x|y|width|height|style)"
 for m in re.finditer(r'(\b' + CODE_ATTR + r'=)?"((?:[^"\\\n]|\\.)*)"', jsx):
     if m.group(1): continue
     lit = unesc(m.group(2))
