@@ -1482,6 +1482,25 @@
   "✕ Higher latency (more lag)": "✕ Nagyobb késleltetés (több lag)",
   "💤 Going to sleep in a few seconds": "💤 Pár másodperc múlva elalszik",
   "💤 Going to sleep in a few seconds…": "💤 Pár másodperc múlva elalszik…",
-  "🛡 Active checks: {}. {}": "🛡 Aktív ellenőrzések: {}. {}"
+  "🛡 Active checks: {}. {}": "🛡 Aktív ellenőrzések: {}. {}",
+  "Forward port {} TCP + UDP to": "Továbbítsd a(z) {} TCP + UDP portot ide:",
+  "Friends outside your home can only join when your router forwards port {} (TCP + UDP) to this computer. Most routers let the dashboard do that itself (UPnP) - one click, no router settings page. It's checked every 20 minutes and put back after a router restart.": "A házon kívüli barátok csak akkor tudnak csatlakozni, ha a routered továbbítja a(z) {} portot (TCP + UDP) erre a számítógépre. A legtöbb router engedi, hogy ezt a vezérlőpult maga intézze (UPnP) – egy kattintás, router-beállítóoldal nélkül. 20 percenként ellenőrizzük, és router-újraindítás után visszaállítjuk.",
+  "No luck? Forward port {} TCP + UDP to": "Nem sikerült? Továbbítsd kézzel a(z) {} TCP + UDP portot ide:",
+  "Server health report": "Szerver-állapotjelentés",
+  "The dashboard re-checks every 30 minutes and saves a report by itself when something breaks.": "A vezérlőpult 30 percenként újra ellenőriz, és magától elment egy jelentést, ha valami elromlik.",
+  "Your Mac asked the router to open port {} but it said no ({}). Forward port {} TCP + UDP to": "A Maced megkérte a routert, hogy nyissa meg a(z) {} portot, de az nemet mondott ({}). Továbbítsd a(z) {} TCP + UDP portot ide:",
+  "Your Mac asked the router to open port {} but it said no. Forward port {} TCP + UDP to": "A Maced megkérte a routert, hogy nyissa meg a(z) {} portot, de az nemet mondott. Továbbítsd a(z) {} TCP + UDP portot ide:",
+  "Your Mac asks the router to keep port {} (TCP + UDP) open to": "A Maced megkéri a routert, hogy tartsa nyitva a(z) {} portot (TCP + UDP) ide:",
+  "by hand in your router's settings page (search \"": "kézzel a router beállítóoldalán (keress rá: „",
+  "by hand in your router's settings page, or turn on \"Hide my IP\" (Settings).": "kézzel a router beállítóoldalán, vagy kapcsold be az „IP-cím elrejtése” opciót (Beállítások).",
+  "in your router's settings page (search \"": "a router beállítóoldalán (keress rá: „",
+  "while the Mac is on, and checks it every 20 minutes (last time {}).": "amíg a Mac be van kapcsolva, és 20 percenként ellenőrzi (utoljára {}).",
+  "while the Mac is on, and checks it every 20 minutes.": "amíg a Mac be van kapcsolva, és 20 percenként ellenőrzi.",
+  "{} problem": "{} probléma",
+  "{} problems": "{} probléma",
+  "{} warning": "{} figyelmeztetés",
+  "{} warnings": "{} figyelmeztetés",
+  "· internet address": "· internetes cím",
+  "· this computer": "· ez a számítógép"
  }
 }
