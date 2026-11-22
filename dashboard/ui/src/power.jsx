@@ -54,7 +54,7 @@ export function Power() {
   }, []);
   const reload = full => { fresh.current = !!full; setChecking(!!full); again(); };
   if (asleep) return <div className="card" style={{ margin: "0 0 16px" }}><h2>Sleep &amp; wake-up</h2><p>💤 Going to sleep in a few seconds…</p></div>;
-  if (err && !p) return <div className="card" style={{ margin: "0 0 16px" }}><h2>Sleep &amp; wake-up</h2><p className="small muted">{err}</p></div>;
+  if (err && !p) return <div className="card" style={{ margin: "0 0 16px" }}><h2>Sleep &amp; wake-up</h2><p className="small muted">{err}</p><button className="btn sm primary" onClick={() => reload(false)}>Try again</button></div>;
   if (!p) return <SkelCard lines={6} style={{ margin: "0 0 16px" }} />;
   const St = p.settings, wired = p.adapters.filter(a => !a.wifi), main = p.adapters.find(a => a.name === p.main);
   const wolOk = main && main.wol === "on";
