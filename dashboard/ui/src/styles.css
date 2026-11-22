@@ -314,3 +314,9 @@ html[data-look=glass] .skel{background:rgba(127,140,170,.16)}
   html[data-look=glass] .mobilebar .nav{border-radius:999px}
 }
 @media (max-width:520px){.banner{flex-wrap:wrap}}
+/* the menu in groups, with the dashboard's own setup down in the corner */
+.navgroup{display:flex;flex-direction:column;gap:2px}
+.navgroup+.navgroup{margin-top:14px}
+.navhead{font-size:11.5px;font-weight:600;color:var(--muted);padding:0 10px 4px;letter-spacing:.01em}
+.navgroup.corner{margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}
+.side{overflow-y:auto}
