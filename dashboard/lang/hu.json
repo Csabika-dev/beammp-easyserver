@@ -1515,6 +1515,12 @@
   "up to date": "naprakész",
   "up to date ({})": "naprakész ({})",
   "By {} ·": "Készítő: {} ·",
-  "By {} · {}": "Készítő: {} · {}"
+  "By {} · {}": "Készítő: {} · {}",
+  "At the scheduled restart, if a new BeamMP server version is out. All servers use the same BeamMP program, so the others restart too.": "Az ütemezett újraindításkor, ha megjelent egy új BeamMP-szerververzió. Minden szerver ugyanazt a BeamMP-programot használja, ezért a többi is újraindul.",
+  "One click sets who can join, guests, anti-bot checks, the chat filter and flood protection together.": "Egy kattintással egyszerre beállítható, ki csatlakozhat, a vendégek, az anti-bot ellenőrzések, a chatszűrő és az elárasztás elleni védelem.",
+  "{} planned": "{} tervezve",
+  "Every {} hours": "{} óránként",
+  "Every {} hour": "{} óránként",
+  "Every {} minutes": "{} percenként"
  }
 }
