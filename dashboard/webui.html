@@ -139,6 +139,7 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 .chatbox{max-height:340px;overflow:auto;background:var(--surface-2);border-radius:8px;padding:8px 10px;font-size:13.5px;line-height:1.55}
 .chatline{cursor:pointer;border-radius:4px;padding:0 4px;overflow-wrap:anywhere}.chatline:hover{background:var(--surface)}.chatline.hid{opacity:.65}
 .report{border-top:1px solid var(--line);padding:10px 0}.report:first-of-type{border-top:0}.report.done{opacity:.6}
+.langpick{width:auto;max-width:110px;padding:3px 6px;font-size:12.5px;height:auto;margin:0 4px}
 .bar{height:6px;background:var(--surface-2);border-radius:3px;overflow:hidden;margin-top:6px}.bar i{display:block;height:100%;width:0;background:var(--accent)}
 /* logs */
 .log{font-family:var(--mono);font-size:12.5px;line-height:1.55;background:var(--surface-2);border-radius:10px;padding:12px 14px;height:520px;overflow:auto;white-space:pre-wrap;word-break:break-word}
@@ -206,6 +207,90 @@ const raw = s => ({__raw: s});
 const IN_APP = /EasyServerApp/.test(navigator.userAgent);
 const store = { get(k, d) { try { return localStorage.getItem(k) ?? d; } catch (e) { return d; } }, set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} } };
 let CSRF = null, SESSION = null, TAB = "overview", TIMER = null;
+
+/* ------------------------------------------------------------------ languages
+   The page is written in English. A language file (dashboard/lang/xx.json, English text -> translation) is
+   applied to everything that is drawn: text, placeholders, tooltips, toasts and questions. "{}" in a text
+   stands for a name or number; in the translation "{}" are filled in order, or "{1}", "{2}" ... to reorder.
+   Text without a translation stays English. */
+const LANGS = [["en", "English"], ["de", "Deutsch"], ["es", "Español"], ["hu", "Magyar"], ["pl", "Polski"]];
+let LANG = "en", DICT = null, PATS = [];
+const escRe = x => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function pickLang() {
+  const saved = store.get("es-lang", "");
+  if (LANGS.some(l => l[0] === saved)) return saved;
+  const nav = (navigator.languages || [navigator.language || "en"]).map(x => String(x).slice(0, 2).toLowerCase());
+  return nav.find(c => LANGS.some(l => l[0] === c)) || "en";
+}
+async function loadLang(code) {
+  LANG = "en"; DICT = null; PATS = [];
+  if (code !== "en") {
+    try {
+      const r = await fetch("/lang/" + code + ".json", { cache: "no-cache" });
+      if (!r.ok) throw new Error("no language file");
+      const d = await r.json(), S = d.strings || {};
+      DICT = Object.create(null);
+      for (const [k, v] of Object.entries(S)) {
+        if (typeof v !== "string" || !v) continue;
+        DICT[k] = v;
+        if (!k.includes("{}") || !/[A-Za-z]{2}/.test(k.replace(/\{\}/g, ""))) continue;
+        const parts = k.split("{}");
+        PATS.push({ re: new RegExp("^" + parts.map(escRe).join("([\\s\\S]+?)") + "$"), v, pre: parts[0], post: parts[parts.length - 1], len: k.length });
+      }
+      PATS.sort((a, b) => b.len - a.len);         // the most specific text first
+      LANG = code;
+    } catch (e) { DICT = null; }
+  }
+  document.documentElement.lang = LANG;
+}
+function tr(text) {
+  if (!DICT || typeof text !== "string" || !/[A-Za-z]/.test(text)) return text;
+  const core = text.trim().replace(/\s+/g, " ");
+  if (!core) return text;
+  let out = DICT[core];
+  if (out === undefined) {
+    out = null;
+    for (const p of PATS) {
+      if (!core.startsWith(p.pre) || !core.endsWith(p.post)) continue;
+      const m = core.match(p.re);
+      if (!m) continue;
+      let i = 0;
+      out = p.v.replace(/\{(\d*)\}/g, (_, d) => { const x = m[d ? +d : ++i]; return x == null ? "" : x; });
+      break;
+    }
+    if (out === null) return text;
+  }
+  return text.match(/^\s*/)[0] + out + text.match(/\s*$/)[0];
+}
+const trLines = t => typeof t === "string" ? t.split("\n").map(tr).join("\n") : t;
+const NO_TR = "script,style,textarea,code,pre,.mono,.log,.chatbox,[data-notr]";
+function trNode(n) {
+  if (!DICT || !n) return;
+  if (n.nodeType === 3) { const v = tr(n.nodeValue); if (v !== n.nodeValue) n.nodeValue = v; return; }
+  if (n.nodeType !== 1 || n.closest(NO_TR)) return;
+  const w = document.createTreeWalker(n, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+    acceptNode: x => x.nodeType === 1 && x.matches(NO_TR) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
+  for (let x = n; x; x = w.nextNode()) {
+    if (x.nodeType === 3) { const v = tr(x.nodeValue); if (v !== x.nodeValue) x.nodeValue = v; continue; }
+    for (const a of ["placeholder", "title", "aria-label"]) { const v = x.getAttribute(a); if (v) { const t = tr(v); if (t !== v) x.setAttribute(a, t); } }
+    if (x.tagName === "INPUT" && (x.type === "button" || x.type === "submit") && x.value) x.value = tr(x.value);
+  }
+}
+new MutationObserver(ms => { if (DICT) for (const m of ms) m.addedNodes.forEach(trNode); })
+  .observe(document.documentElement, { childList: true, subtree: true });
+{
+  const c0 = window.confirm.bind(window), p0 = window.prompt.bind(window), a0 = window.alert.bind(window);
+  window.confirm = m => c0(trLines(m));
+  window.prompt = (m, d) => p0(trLines(m), d);
+  window.alert = m => a0(trLines(m));
+}
+function langPicker(id) {
+  return `<select id="${id}" class="langpick" aria-label="Language" data-notr>${LANGS.map(l => `<option value="${l[0]}" ${l[0] === LANG ? "selected" : ""}>${l[1]}</option>`).join("")}</select>`;
+}
+function wireLangPicker(id) {
+  const el = $("#" + id); if (!el) return;
+  el.onchange = async () => { store.set("es-lang", el.value); await loadLang(el.value); boot(); };
+}
 
 function toast(msg, ms = 3500) { const t = $("#toast"); t.textContent = msg; t.classList.remove("hidden"); clearTimeout(t._t); t._t = setTimeout(() => t.classList.add("hidden"), ms); }
 let SERVER = new URLSearchParams(location.search).get("srv") || store.get("es-server", "main"), SERVERS = [];
@@ -381,7 +466,8 @@ function switchServer(id) {
 }
 
 function authShell(inner) {
-  $("#root").innerHTML = `<div class="center"><div class="card authcard"><div class="logo">${LOGO_SVG}</div>${inner}</div></div>`;
+  $("#root").innerHTML = `<div class="center"><div class="card authcard"><div class="row"><div class="logo">${LOGO_SVG}</div><span class="spacer"></span>${langPicker("langsel0")}</div>${inner}</div></div>`;
+  wireLangPicker("langsel0");
 }
 
 function renderSetup() {
@@ -476,13 +562,13 @@ function renderShell() {
   $("#root").innerHTML = `<div class="app">
     <aside class="side"><div class="brand"><div class="logo">${LOGO_SVG}</div><div>BeamMP EasyServer<small>Dashboard ${esc(SESSION.version)}${SESSION.supporter ? " · ❤ Supporter" : ""}</small></div></div>
       ${picker}${navs}<div class="grow"></div>
-      <div class="foot"><button class="iconbtn" id="theme" title="Light / dark mode">${icon("moon")}</button><button class="small muted" id="myacct" title="My account" style="background:none;border:0;cursor:pointer;padding:0;color:inherit">${esc(SESSION.user || "owner")}${myRole() ? " · " + esc(myRole().name) : ""}</button><span class="spacer"></span><button class="iconbtn" id="logout" title="Log out">${icon("logout")}</button></div>
+      <div class="foot"><button class="iconbtn" id="theme" title="Light / dark mode">${icon("moon")}</button><button class="small muted" id="myacct" title="My account" style="background:none;border:0;cursor:pointer;padding:0;color:inherit">${esc(SESSION.user || "owner")}${myRole() ? " · " + esc(myRole().name) : ""}</button><span class="spacer"></span>${langPicker("langsel")}<button class="iconbtn" id="logout" title="Log out">${icon("logout")}</button></div>
     </aside>
     <div><nav class="mobilebar">${picker}${navs}<button class="nav" id="theme2">Theme</button></nav><div id="secbar"></div><main id="main"></main></div></div>`;
   document.querySelectorAll("[data-srv]").forEach(el => el.onchange = () => switchServer(el.value));
   document.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => show(b.dataset.tab));
   const flip = () => { const cur = document.documentElement.dataset.theme; store.set("es-theme", cur === "dark" ? "light" : "dark"); applyTheme(); setThemeIcon(); if (TAB === "players") show("players"); };
-  $("#theme").onclick = flip; $("#theme2").onclick = flip; setThemeIcon();
+  $("#theme").onclick = flip; $("#theme2").onclick = flip; setThemeIcon(); wireLangPicker("langsel");
   $("#myacct").onclick = () => openMyAccount();
   $("#logout").onclick = async () => { try { await api("/api/logout", { method: "POST" }); } catch (e) {} try { if ("caches" in window) (await caches.open("es-shell-v2")).delete("/__wake.json"); } catch (e) {} clearInterval(SECTIMER); boot(); };
   clearInterval(SECTIMER); checkSecurity(); SECTIMER = setInterval(() => checkSecurity().catch(() => {}), 30000);
@@ -791,6 +877,8 @@ VIEWS.config = async m => {
       <label class="f"><span>Admins (comma-separated BeamMP names)</span><input type="text" id="md_admins" value="${esc(md.admins.join(", "))}" placeholder="e.g. Bazsi, Dani"><small>Admins can use <span class="mono">/kick name</span>, <span class="mono">/ban name 1d reason</span>, <span class="mono">/mute name 10</span>, <span class="mono">/unmute</span> and <span class="mono">/unban</span> in the game chat</small></label>
       <label class="toggle"><input type="checkbox" id="md_filter" ${md.filter ? "checked" : ""}><span><b>Chat filter</b><small>Hides messages with the words below, @everyone and Discord invite links, and refuses player names with links or those words. 3 blocked messages in 10 minutes = 5 minute mute. Off by default</small></span></label>
       <label class="f"><span>Blocked words (comma-separated)</span><input type="text" id="md_words" value="${esc(md.words.join(", "))}" placeholder="words you don't want in chat"></label>
+      <label class="f"><span>Kick words (comma-separated)</span><input type="text" id="md_kwords" value="${esc((md.kickwords || []).join(", "))}" placeholder="words that get a player removed at once"><small>A player who writes one of these is removed straight away - even with the chat filter off. Whole words only ("ass" doesn't match "class"), capitals don't matter. Admins are never removed. Empty = off</small></label>
+      <label class="f" style="max-width:260px"><span>When someone uses a kick word</span><select id="md_kact">${[["kick", "Kick them (they can rejoin)"], ["ban60", "Ban for 1 hour"], ["ban1440", "Ban for 1 day"], ["ban10080", "Ban for 7 days"], ["banperm", "Ban forever"]].map(o => `<option value="${o[0]}" ${md.kickwords_action === o[0] ? "selected" : ""}>${o[1]}</option>`).join("")}</select></label>
       <label class="toggle"><input type="checkbox" id="md_spam" ${md.spam ? "checked" : ""}><span><b>Anti-spam</b><small>More than the number below of messages in 10 seconds = 2 minute mute. Admins are never muted. Off by default</small></span></label>
       <label class="f" style="max-width:220px"><span>Messages per 10 seconds</span><input type="number" id="md_spamlimit" min="2" max="30" value="${esc(md.spam_limit)}"></label>
       <h2 style="margin-top:16px">Reports, vote kick &amp; chat history</h2>
@@ -896,6 +984,7 @@ VIEWS.config = async m => {
     const body = { admins: list("#md_admins"), words: list("#md_words"), filter: $("#md_filter").checked, spam: $("#md_spam").checked,
                    spam_limit: Number($("#md_spamlimit").value), antibot: $("#md_antibot").checked, verify: $("#md_verify").checked,
                    guests: !$("#md_guests").checked, per_ip: Number($("#md_perip").value), join_flood: Number($("#md_flood").value),
+                   kickwords: list("#md_kwords"), kickwords_action: $("#md_kact").value,
                    report: $("#md_report").checked, votekick: $("#md_votekick").checked, votekick_min: Number($("#md_vkmin").value), chatlog: $("#md_chatlog").checked };
     try { const r = await api("/api/moderation", { json: body }); toast(r.note, 5000); show("config"); } catch (e) { toast(e.message); }
   };
@@ -2513,7 +2602,7 @@ VIEWS.settings = async m => {
   };
 };
 
-boot();
+loadLang(pickLang()).then(boot);
 if ("serviceWorker" in navigator && window.isSecureContext) navigator.serviceWorker.register("/sw.js").catch(() => {});
 </script>
 </body>
