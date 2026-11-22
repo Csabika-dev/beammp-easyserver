@@ -1500,6 +1500,12 @@
   "Newest {} of {} messages.": "Neueste {} von {} Nachrichten.",
   "Nobody is online right now (or the server isn't reporting).": "Gerade ist niemand online (oder der Server meldet sich nicht).",
   "Nobody is online right now.": "Gerade ist niemand online.",
-  "The chat history is turned off (Config → Moderation).": "Der Chatverlauf ist ausgeschaltet (Konfiguration → Moderation)."
+  "The chat history is turned off (Config → Moderation).": "Der Chatverlauf ist ausgeschaltet (Konfiguration → Moderation).",
+  "Mods from the BeamNG repository": "Mods aus dem BeamNG-Repository",
+  "Mods from the BeamNG repository · last check {}": "Mods aus dem BeamNG-Repository · zuletzt geprüft {}",
+  "up to date": "aktuell",
+  "up to date ({})": "aktuell ({})",
+  "By {} ·": "Von {} ·",
+  "By {} · {}": "Von {} · {}"
  }
 }
