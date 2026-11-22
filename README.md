@@ -65,7 +65,7 @@ Then work through the [guides](#-guides) below - start with [Let friends join ov
 | **Overview** | Status, who's online, uptime, start / stop / restart, switch the map in one click, **Copy invite** (a ready-to-paste Discord message with the address) |
 | **Servers** | Run several servers on one computer, copy a server, CPU / RAM / download limits per server |
 | **Config** | Every server setting in a simple form (or as text) with plain-English checks; who can join, map vote, events, map rotation, templates, **security presets**, **teleport & repair**, announcements, restarts, moderation & anti-bot, and **"What changed?"** with one-click undo |
-| **Mods** | Drag & drop mods (each one virus-checked), **browse and install mods from the BeamNG repository**, turn them on/off, **light mode** for map mods, one-click mod updates, **modpacks** |
+| **Mods** | Drag & drop mods (each one virus-checked), **browse and install mods from the BeamNG repository**, turn them on/off, **mod sets** (switch between saved groups of mods), disk space, **light mode** for map mods, one-click mod updates, **modpacks** |
 | **Players** | Players per day, busiest hours, top players, server records, **per-map statistics**, kick / mute / ban, **maintenance mode** |
 | **Health** | **Health report** (internet, BeamMP backend, server, port, config, AuthKey, plugin, mods, reachability, disk, memory), **diagnostic reports**, the **"someone can't join?"** doctor, the port checker and **automatic port forwarding (UPnP)** |
 | **Updates** | New BeamMP server and EasyServer versions, one-click server update |
@@ -284,6 +284,10 @@ From Discord (with the bot): `/whitelist add name`, `/whitelist remove name`, `/
 - The card at the top shows how much players download before they can join.
 - Turn on **Light mode**: only the map mod for the map being played is sent. The other map mods wait (badge *waiting - light mode*) and come back by themselves when you switch to their map - from Config, a map vote, rotation or an event. Mods that aren't maps are always sent.
 - Turn on **Show the download size in the server description** so players see it in the server list.
+
+**Mod sets:** turn on the mods you want for one kind of night, click **Save as a set…** and give it a name. Later, **Switch to this set** turns on exactly those mods and turns the rest off (nothing is deleted). **Update** saves the mods that are on now into that set.
+
+**Running out of space:** the top card shows how much room the mods take and how much is free on the drive. Sort the list **Biggest first** to see what to turn off or delete. An upload that won't fit is refused before it starts. On a Raspberry Pi, a USB 3 stick or SSD is faster and bigger than the SD card.
 
 **Share or move mods:** **Mods → Modpack → Download modpack** gives you one .zip of all enabled mods with checksums. On another EasyServer: **Import a modpack…** (virus-checked again). Players on slow internet can copy the files from the modpack's `mods` folder into `Documents\BeamNG.drive\mods\multiplayer` before joining.
 
@@ -509,7 +513,7 @@ Forgot the password or lost your phone? Linux: `sudo beammp reset-login`. Window
 <details>
 <summary><b>Backups and moving to a new computer</b></summary>
 
-- **Nightly backups** (on by default, Settings → Automatic backups): every server's settings, invite list, bans, moderation, messages and rotation at 03:30, optionally with mods. The last 7 are kept - download one any time.
+- **Nightly backups** (on by default, Settings → Automatic backups): every server's settings, invite list, bans, moderation, messages and rotation at 03:30, optionally with mods. The last 7 are kept - download one any time, or click **Restore** to put it back (the owner; how things are right now is saved first, so it can be undone).
 - **Move or restore:** **Settings → Backup / move to another computer → Export settings** (or **+ mods**). On the new EasyServer: **Import…** the file. Mods are virus-checked again; keys and passwords are never exported, so paste the AuthKey again.
 </details>
 
