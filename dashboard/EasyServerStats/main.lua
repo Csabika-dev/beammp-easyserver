@@ -19,6 +19,7 @@
 --   tools.txt      written by the dashboard: /tp and /repair settings (key=value); needs the client mod
 --                  easyserver_tools.zip that the dashboard puts into Resources/Client
 --   vehicles.txt   written by the dashboard: vehicle rules (blocked cars and props, spawn cooldown, spam limit)
+--   tracks.tsv / laptimes.tsv / laps.txt  lap times: tracks made in the game with /track, best laps, on/off (see below)
 --   chat.log       every chat message, for the dashboard's chat history (only while it's on; rolls over at 5 MB)
 
 local DIR = "Resources/Server/EasyServerStats/"
@@ -73,9 +74,25 @@ local function writeOnline()
   for _, name in pairs(players) do
     names[#names + 1] = '"' .. jsonEscape(name) .. '"'
   end
+  -- the players' average ping, for the dashboard's lag graph (the game sends it with every position)
+  local sum, n = 0, 0
+  for pid, _ in pairs(players) do
+    local ok, vs = pcall(MP.GetPlayerVehicles, pid)
+    if ok and type(vs) == "table" then
+      for vid, _ in pairs(vs) do
+        local ok2, raw = pcall(MP.GetPositionRaw, pid, vid)
+        local ping = ok2 and type(raw) == "table" and tonumber(raw.ping)
+        if ping and ping >= 0 then
+          if ping < 5 then ping = ping * 1000 end      -- sent in seconds by some game versions
+          if ping < 10000 then sum, n = sum + ping, n + 1 end
+        end
+        break
+      end
+    end
+  end
   local f = io.open(ONLINE .. ".tmp", "w")
   if not f then return end
-  f:write(string.format('{"t":%d,"players":[%s]}', os.time(), table.concat(names, ",")))
+  f:write(string.format('{"t":%d,"players":[%s]%s}', os.time(), table.concat(names, ","), n > 0 and string.format(',"ping":%d', math.floor(sum / n + 0.5)) or ""))
   f:close()
   os.remove(ONLINE)
   os.rename(ONLINE .. ".tmp", ONLINE)
@@ -1606,6 +1623,344 @@ function esMsgLeft(id)
   end
 end
 
+-- Lap times. Admins make a track in the game with /track: the start line where their car is,
+-- then checkpoints in order, then either "/track done" (a loop: the start line is also the
+-- finish) or "/track finish" (a sprint: this spot is the finish). Every lap is timed with the
+-- game's own clock from the car, so a laggy connection doesn't change the time.
+--   tracks.tsv    id <TAB> name <TAB> map <TAB> loop|sprint <TAB> x,y,z;x,y,z;...  (first point = start)
+--   laptimes.tsv  track id <TAB> player <TAB> ms <TAB> car <TAB> unix time   (each player's best lap)
+--   laps.txt      written by the dashboard: "mode=on|off", "radius=15" (how wide a line is, in metres)
+local TRACKS = DIR .. "tracks.tsv"
+local LAPTIMES = DIR .. "laptimes.tsv"
+local LAPCFG = DIR .. "laps.txt"
+local lap = { on = false, radius = 15, read = -1000, tracks = {}, best = {}, map = nil }
+local lapRun = {}      -- "pid:vid" -> { x, y, z, tim, track, idx, start, left }
+local lapDraft = {}    -- pid -> { name, pts }
+
+local function currentMap()
+  if lap.map == nil then
+    local ok, m = pcall(function() return MP.Get(MP.Settings.Map) end)
+    lap.map = (ok and type(m) == "string") and m or ""
+  end
+  return lap.map
+end
+
+local function readTracks()
+  local list = {}
+  local f = io.open(TRACKS, "r")
+  if f then
+    for line in f:lines() do
+      local id, name, map, kind, pts = line:match("^([%w%-]+)\t([^\t]+)\t([^\t]*)\t(%a+)\t([%d%.,;%-]+)$")
+      if id then
+        local t = { id = id, name = name, map = map, kind = kind == "sprint" and "sprint" or "loop", pts = {} }
+        for x, y, z in pts:gmatch("([%-%d%.]+),([%-%d%.]+),([%-%d%.]+)") do
+          t.pts[#t.pts + 1] = { tonumber(x), tonumber(y), tonumber(z) }
+        end
+        if #t.pts >= 2 then list[#list + 1] = t end
+      end
+    end
+    f:close()
+  end
+  lap.tracks = list
+end
+
+local function writeTracks()
+  local f = io.open(TRACKS .. ".tmp", "w")
+  if not f then return end
+  for _, t in ipairs(lap.tracks) do
+    local pts = {}
+    for _, p in ipairs(t.pts) do pts[#pts + 1] = string.format("%.2f,%.2f,%.2f", p[1], p[2], p[3]) end
+    f:write(table.concat({ t.id, t.name, t.map, t.kind, table.concat(pts, ";") }, "\t") .. "\n")
+  end
+  f:close()
+  os.remove(TRACKS)
+  os.rename(TRACKS .. ".tmp", TRACKS)
+end
+
+local function readBest()
+  lap.best = {}
+  local f = io.open(LAPTIMES, "r")
+  if not f then return end
+  for line in f:lines() do
+    local id, name, ms, car, t = line:match("^([%w%-]+)\t([^\t]+)\t(%d+)\t([^\t]*)\t(%d+)$")
+    if id then
+      lap.best[id] = lap.best[id] or {}
+      lap.best[id][name:lower()] = { name = name, ms = tonumber(ms), car = car, t = tonumber(t) }
+    end
+  end
+  f:close()
+end
+
+local function writeBest()
+  local f = io.open(LAPTIMES .. ".tmp", "w")
+  if not f then return end
+  for id, rows in pairs(lap.best) do
+    for _, r in pairs(rows) do
+      f:write(string.format("%s\t%s\t%d\t%s\t%d\n", id, r.name, r.ms, r.car, r.t))
+    end
+  end
+  f:close()
+  os.remove(LAPTIMES)
+  os.rename(LAPTIMES .. ".tmp", LAPTIMES)
+end
+
+local function readLapCfg(now)
+  if now - lap.read < 10 then return end
+  lap.read = now
+  local on, radius = false, 15
+  local f = io.open(LAPCFG, "r")
+  if f then
+    for line in f:lines() do
+      local k, v = line:match("^(%w+)=(.-)%s*$")
+      if k == "mode" then on = v == "on"
+      elseif k == "radius" then radius = math.max(5, math.min(60, tonumber(v) or 15)) end
+    end
+    f:close()
+  end
+  lap.on, lap.radius = on, radius
+  readTracks()      -- the dashboard can rename or delete tracks
+  readBest()        -- ...and clear their times
+end
+
+local function fmtLap(ms)
+  local m = math.floor(ms / 60000)
+  local s = (ms % 60000) / 1000
+  return m > 0 and string.format("%d:%06.3f", m, s) or string.format("%.3f", s)
+end
+
+local function ranked(id)
+  local list = {}
+  for _, r in pairs(lap.best[id] or {}) do list[#list + 1] = r end
+  table.sort(list, function(a, b) return a.ms < b.ms end)
+  return list
+end
+
+local function activeTracks()
+  local map, out = currentMap(), {}
+  for _, t in ipairs(lap.tracks) do
+    if map == "" or t.map == "" or t.map == map then out[#out + 1] = t end
+  end
+  return out
+end
+
+-- Did the car pass within the line's radius between two samples? Returns how far along (0..1).
+local function crossed(a, b, p, r)
+  local dx, dy, dz = b[1] - a[1], b[2] - a[2], b[3] - a[3]
+  local len2 = dx * dx + dy * dy + dz * dz
+  local u = 0
+  if len2 > 0 then u = math.max(0, math.min(1, ((p[1] - a[1]) * dx + (p[2] - a[2]) * dy + (p[3] - a[3]) * dz) / len2)) end
+  local cx, cy, cz = a[1] + u * dx - p[1], a[2] + u * dy - p[2], a[3] + u * dz - p[3]
+  if cx * cx + cy * cy + cz * cz <= r * r then return u end
+  return nil
+end
+
+local function carName(pid, vid)
+  local vs = MP.GetPlayerVehicles(pid)
+  local data = type(vs) == "table" and vs[vid]
+  local m = type(data) == "string" and data:match('"jbm"%s*:%s*"([^"]+)"')
+  return (m or ""):gsub("[%c\t]", ""):sub(1, 40)
+end
+
+local function lapDone(pid, vid, t, ms)
+  local name = tostring(MP.GetPlayerName(pid) or ""):gsub("[%c\t]", "")
+  if name == "" or ms < 3000 then return end
+  local rows = lap.best[t.id] or {}
+  lap.best[t.id] = rows
+  local before = ranked(t.id)[1]
+  local mine = rows[name:lower()]
+  if mine and ms >= mine.ms then
+    say(pid, "Lap " .. fmtLap(ms) .. " on " .. t.name .. " - your best is " .. fmtLap(mine.ms) .. ".")
+    return
+  end
+  rows[name:lower()] = { name = name, ms = ms, car = carName(pid, vid), t = os.time() }
+  writeBest()
+  local pos = 0
+  for i, r in ipairs(ranked(t.id)) do if r.name == name then pos = i break end end
+  local note = (not before or ms < before.ms) and " - new track record!" or (" - personal best, P" .. pos)
+  say(-1, name .. ": " .. fmtLap(ms) .. " on " .. t.name .. note)
+  event("lap", string.format(',"track":"%s","name":"%s","ms":%d,"car":"%s","record":%s', jsonEscape(t.name), jsonEscape(name), ms,
+    jsonEscape(rows[name:lower()].car), (not before or ms < before.ms) and "true" or "false"))
+end
+
+function esLapTick(fromPlayer)
+  if fromPlayer ~= nil then return end   -- sent by a player, not by the server's timer
+  readLapCfg(os.time())
+  if not lap.on then lapRun = {} return end
+  local tracks = activeTracks()
+  if #tracks == 0 then return end
+  local r, keep = lap.radius, {}
+  for pid, _ in pairs(players()) do
+    local vs = MP.GetPlayerVehicles(pid)
+    if type(vs) == "table" then
+      for vid, _ in pairs(vs) do
+        local raw = MP.GetPositionRaw(pid, vid)
+        local p, tim = type(raw) == "table" and raw.pos, type(raw) == "table" and tonumber(raw.tim)
+        if type(p) == "table" and p[1] and tim then
+          local key = pid .. ":" .. vid
+          local s = lapRun[key]
+          local cur = { p[1], p[2], p[3] }
+          if s and (tim < s.tim or tim - s.tim > 5 or (cur[1] - s.x) ^ 2 + (cur[2] - s.y) ^ 2 > 400 ^ 2) then
+            s.track = nil                    -- reset, teleport or a long gap: that lap doesn't count
+          end
+          if s then
+            local a = { s.x, s.y, s.z }
+            local at = function(u) return s.tim + u * (tim - s.tim) end
+            if s.track then
+              local t = s.track
+              local target = t.pts[s.idx] or (t.kind == "loop" and t.pts[1])
+              if t.kind == "loop" and s.idx > #t.pts then target = t.pts[1] end
+              if not s.left then
+                local d = (cur[1] - t.pts[1][1]) ^ 2 + (cur[2] - t.pts[1][2]) ^ 2
+                if d > (3 * r) ^ 2 then s.left = true end
+              end
+              local u = target and (s.left or s.idx > 1) and crossed(a, cur, target, r)
+              if u then
+                local finish = (t.kind == "loop" and s.idx > #t.pts) or (t.kind == "sprint" and s.idx == #t.pts)
+                if finish then
+                  local tEnd = at(u)
+                  lapDone(pid, vid, t, math.floor((tEnd - s.start) * 1000 + 0.5))
+                  if t.kind == "loop" then s.start, s.idx, s.left = tEnd, 2, false else s.track = nil end
+                else
+                  s.idx = s.idx + 1
+                end
+              end
+            end
+            if not s.track then
+              for _, t in ipairs(tracks) do
+                local u = crossed(a, cur, t.pts[1], r)
+                if u then s.track, s.idx, s.start, s.left = t, 2, at(u), false break end
+              end
+            end
+            s.x, s.y, s.z, s.tim = cur[1], cur[2], cur[3], tim
+            keep[key] = s
+          else
+            keep[key] = { x = cur[1], y = cur[2], z = cur[3], tim = tim }
+          end
+        end
+      end
+    end
+  end
+  lapRun = keep
+end
+
+local resetBeforeLaps = esOnReset
+function esOnReset(pid, vid)
+  resetBeforeLaps(pid, vid)
+  local s = lapRun[pid .. ":" .. vid]
+  if s then s.track = nil end
+end
+
+local function carPos(pid)
+  local vs = MP.GetPlayerVehicles(pid)
+  if type(vs) ~= "table" then return nil end
+  for vid, _ in pairs(vs) do
+    local raw = MP.GetPositionRaw(pid, vid)
+    local p = type(raw) == "table" and raw.pos
+    if type(p) == "table" and p[1] then return { p[1], p[2], p[3] } end
+  end
+  return nil
+end
+
+local function trackCmd(id, name, arg)
+  local sub, rest = arg:match("^(%a*)%s*(.-)$")
+  sub = (sub or ""):lower()
+  if sub == "" or sub == "help" then
+    say(id, "Make a track: /track new <name> at the start line, drive to each checkpoint and type /track cp, then /track done (a loop) or /track finish (a sprint, where you are is the finish). Also: /track undo, /track cancel, /track list, /track delete <name>.")
+    return 1
+  end
+  if sub == "list" then
+    local names = {}
+    for _, t in ipairs(activeTracks()) do names[#names + 1] = t.name .. " (" .. t.kind .. ", " .. (#t.pts - 1) .. " checkpoints)" end
+    say(id, #names > 0 and ("Tracks on this map: " .. table.concat(names, ", ")) or "There are no tracks on this map yet.")
+    return 1
+  end
+  if not isAdmin(name:lower()) then say(id, "Only the server's admins can make tracks (dashboard: Config -> Moderation -> Admins).") return 1 end
+  if not lap.on then say(id, "Lap times are turned off on this server (dashboard: Players -> Lap times).") return 1 end
+  local d = lapDraft[id]
+  if sub == "new" then
+    local p = carPos(id)
+    if not p then say(id, "Get in a car first - the start line goes where your car is.") return 1 end
+    local tname = rest:gsub("[%c\t;,]", ""):sub(1, 40)
+    if tname == "" then say(id, "Give the track a name: /track new <name>") return 1 end
+    lapDraft[id] = { name = tname, pts = { p } }
+    say(id, "Start line set for " .. tname .. ". Drive to the next checkpoint and type /track cp.")
+    return 1
+  end
+  if sub == "delete" then
+    local want, keep, gone = rest:lower(), {}, nil
+    for _, t in ipairs(lap.tracks) do if not gone and t.name:lower() == want then gone = t else keep[#keep + 1] = t end end
+    if not gone then say(id, "No track called " .. rest .. ".") return 1 end
+    lap.tracks = keep
+    writeTracks()
+    say(id, "Deleted " .. gone.name .. ". Its lap times stay in the dashboard until you clear them there.")
+    return 1
+  end
+  if not d then say(id, "Start with /track new <name> at the start line.") return 1 end
+  if sub == "cancel" then lapDraft[id] = nil say(id, "Track cancelled.") return 1 end
+  if sub == "undo" then
+    if #d.pts > 1 then table.remove(d.pts) say(id, "Removed the last checkpoint (" .. (#d.pts - 1) .. " left).")
+    else say(id, "Nothing to undo - use /track cancel to start again.") end
+    return 1
+  end
+  if sub == "cp" or sub == "finish" then
+    local p = carPos(id)
+    if not p then say(id, "Get in a car first.") return 1 end
+    local last = d.pts[#d.pts]
+    if (p[1] - last[1]) ^ 2 + (p[2] - last[2]) ^ 2 < (2 * lap.radius) ^ 2 then
+      say(id, "That's too close to the last point - drive a bit further.") return 1
+    end
+    d.pts[#d.pts + 1] = p
+    if sub == "cp" then say(id, "Checkpoint " .. (#d.pts - 1) .. " set. Next checkpoint: /track cp. Done: /track done (loop) or /track finish (sprint).") return 1 end
+  end
+  if sub == "done" or sub == "finish" then
+    if sub == "done" and #d.pts < 2 then say(id, "A loop needs at least one checkpoint, so a lap can't be cut short. Drive on and type /track cp.") return 1 end
+    for _, t in ipairs(lap.tracks) do
+      if t.name:lower() == d.name:lower() then say(id, "There's already a track called " .. t.name .. " - delete it first or pick another name.") return 1 end
+    end
+    local tid = string.format("%x%04x", os.time(), math.random(0, 65535))
+    lap.tracks[#lap.tracks + 1] = { id = tid, name = d.name, map = currentMap(), kind = sub == "finish" and "sprint" or "loop", pts = d.pts }
+    writeTracks()
+    lapDraft[id] = nil
+    event("track", string.format(',"name":"%s","by":"%s"', jsonEscape(d.name), jsonEscape(name)))
+    say(-1, name .. " made a new track: " .. d.name .. "! Cross the start line to set a time. Best times: /laps")
+    return 1
+  end
+  say(id, "Unknown /track command. Type /track for help.")
+  return 1
+end
+
+local function lapsCmd(id)
+  if not lap.on then say(id, "Lap times are turned off on this server.") return 1 end
+  local tracks = activeTracks()
+  if #tracks == 0 then say(id, "There are no tracks on this map yet.") return 1 end
+  for _, t in ipairs(tracks) do
+    local out = {}
+    for i, r in ipairs(ranked(t.id)) do
+      if i > 3 then break end
+      out[#out + 1] = i .. ") " .. r.name .. " " .. fmtLap(r.ms)
+    end
+    say(id, t.name .. ": " .. (#out > 0 and table.concat(out, "   ") or "no times yet"))
+  end
+  return 1
+end
+
+local chatBeforeLaps = esOnChat
+function esOnChat(id, name, message)
+  local cmd, arg = tostring(message or ""):match("^%s*/(%a+)%s*(.-)%s*$")
+  cmd = cmd and cmd:lower()
+  if cmd == "track" or cmd == "tracks" then lap.read = -1000 readLapCfg(os.time()) return trackCmd(id, tostring(name or ""), arg) end
+  if cmd == "laps" then lap.read = -1000 readLapCfg(os.time()) return lapsCmd(id) end
+  return chatBeforeLaps(id, name, message)
+end
+
+local leftBeforeLaps = esMsgLeft
+function esMsgLeft(id)
+  leftBeforeLaps(id)
+  lapDraft[id] = nil
+end
+
+readLapCfg(os.time())
+
 MP.RegisterEvent("onPlayerAuth", "esOnAuth")
 MP.RegisterEvent("onPlayerJoining", "esOnJoin")
 MP.RegisterEvent("onPlayerJoin", "esOnJoined")
@@ -1624,6 +1979,8 @@ MP.CreateEventTimer("esTick", 1000)
 MP.RegisterEvent("esToolsHello", "esToolsHello")
 MP.RegisterEvent("esToolsTick", "esToolsTick")
 MP.CreateEventTimer("esToolsTick", 15000)
+MP.RegisterEvent("esLapTick", "esLapTick")
+MP.CreateEventTimer("esLapTick", 250)
 
 event("start")
 writeOnline()
