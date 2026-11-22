@@ -34,6 +34,14 @@ export default {
     license: "MIT-Lizenz. Nicht vom BeamMP-Team oder der BeamNG GmbH erstellt oder mit ihnen verbunden. EasyServer baut auf ihrer Arbeit und der vieler Mod- und Plugin-Autoren auf: [zu den Credits]({GH}#-credits).",
     tryTitle: "Probier es auf deinem PC aus",
     viewOnGithub: "Auf GitHub ansehen",
+    downloadFor: "Für {os} herunterladen",
+    downloadVFor: "{v} für {os} herunterladen",
+    setupFor: "Auf {os} einrichten",
+    macRolling: "Mac: Rolling-Version (experimentell)",
+    onPhone: "Für deinen PC herunterladen",
+    otherSystems: "Andere Systeme und Versionen",
+    themeDark: "Zum dunklen Design wechseln",
+    themeLight: "Zum hellen Design wechseln",
   },
 
   tour: {
@@ -329,5 +337,17 @@ export default {
       ["Server-Plugins", "Community-Spielmodi wie CareerMP, freeRoamMP und BeamJoy direkt von der Seite des jeweiligen Autors installieren."],
       ["Als Team betreiben", "Lade Freunde mit einem Link ein, der einmal funktioniert und nach einer Stunde abläuft, und bestimme pro Server, was jeder darf. Anmeldung auch mit Discord."],
     ],
+  },
+  notFound: {
+    title: "Seite nicht gefunden - BeamMP EasyServer",
+    h1: "404: falsch abgebogen",
+    joke: "Diese Seite ist härter gecrasht als ein BeamNG-Auto bei Vollgas, und für sie gibt es keinen Reset-Knopf.",
+    text: "Wenn du schon mal hier bist: Schau, wie weit du kommst.",
+    start: "Drück die Leertaste oder tippe auf die Straße, um loszufahren",
+    again: "Gecrasht! Leertaste drücken oder tippen, um es nochmal zu versuchen",
+    best: "Rekord",
+    gameLabel: "Minispiel: ein Auto springt über Pylonen und Reifen",
+    home: "Zur Startseite",
+    help: "Hilfe & FAQ",
   },
 };
