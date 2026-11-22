@@ -1521,6 +1521,23 @@
   "{} planned": "{} tervezve",
   "Every {} hours": "{} óránként",
   "Every {} hour": "{} óránként",
-  "Every {} minutes": "{} percenként"
+  "Every {} minutes": "{} percenként",
+  "Every night the settings of all servers (config, allow-list, bans, moderation, messages, rotation) are saved. The last {} are kept.": "Minden éjjel elmenti az összes szerver beállításait (konfiguráció, engedélylista, kitiltások, moderáció, üzenetek, rotáció). Az utolsó {} mentést megtartja.",
+  "Every role can look at everything. Only you can manage accounts, passwords, internet access and server plugins.": "Minden szerep mindent láthat. Csak te kezelheted a fiókokat, jelszavakat, az internetes elérést és a szerverpluginokat.",
+  "Manage your servers from your phone like a normal app - with its own icon, full screen, no browser bar.": "Kezeld a szervereidet a telefonodról, mint egy rendes appot – saját ikonnal, teljes képernyőn, böngészősáv nélkül.",
+  "May log in from the internet": "Beléphet az internetről",
+  "These use the channel of your Discord webhook (Settings → Notifications).": "Ezek a Discord-webhookod csatornáját használják (Beállítások → Értesítések).",
+  "· players join via": "· a játékosok itt csatlakoznak:",
+  "Watching.": "Figyel.",
+  "· {} blocked so far · {} addresses known as players.": "· eddig {} letiltva · {} cím ismert játékosként.",
+  "Reachable (about {} ms from here to the relay and back). UDP can't be tested from here - join once to be sure.": "Elérhető (kb. {} ms innen a továbbítóig és vissza). Az UDP-t innen nem lehet tesztelni – csatlakozz egyszer, hogy biztos legyél.",
+  "Saved: {} - paste a new one to replace": "Mentve: {} – illessz be egy újat a cseréhez",
+  "1. Wake-on-LAN": "1. Wake-on-LAN",
+  "of {} Mbit/s": "{} Mbit/s-ból",
+  "max {}": "max. {}",
+  "line top = your {} Mbit/s": "felső vonal = a te {} Mbit/s-od",
+  "Online as {}": "Online mint {}",
+  "Open the app and scan this code with the phone's camera - the app connects to this dashboard.": "Nyisd meg az appot, és olvasd be ezt a kódot a telefon kamerájával – az app csatlakozik ehhez a vezérlőpulthoz.",
+  "May log in from the internet (turn on Internet access first)": "Beléphet az internetről (előbb kapcsold be az internetes hozzáférést)"
  }
 }
