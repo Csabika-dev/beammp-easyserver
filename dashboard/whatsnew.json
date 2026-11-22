@@ -1,0 +1,97 @@
+{
+ "about": "Made from CHANGELOG.md by site/build.mjs - don't edit by hand.",
+ "version": "1.15",
+ "status": "rolling",
+ "languages": {
+  "en": {
+   "title": "New in 1.15",
+   "note": "In Rolling now. They come to Stable once they've been tested.",
+   "items": [
+    [
+     "Vehicle rules",
+     "Block props, trailers or any car, and stop spawn spam. Mod cars heavy enough to lag everyone are found automatically."
+    ],
+    [
+     "Server plugins",
+     "Install community game modes like CareerMP, freeRoamMP and BeamJoy, straight from each author's page."
+    ],
+    [
+     "Run it as a team",
+     "Invite friends with a link that works once and expires after an hour, and choose what each one can do on each server. They can sign in with Discord."
+    ]
+   ]
+  },
+  "de": {
+   "title": "Neu in 1.15",
+   "note": "Jetzt in Rolling. Sie kommen nach Stable, sobald sie getestet sind.",
+   "items": [
+    [
+     "Fahrzeugregeln",
+     "Requisiten, Anhänger oder beliebige Autos sperren und Spawn-Spam stoppen. Mod-Autos, die so schwer sind, dass alle ruckeln, werden automatisch erkannt."
+    ],
+    [
+     "Server-Plugins",
+     "Community-Spielmodi wie CareerMP, freeRoamMP und BeamJoy direkt von der Seite des jeweiligen Autors installieren."
+    ],
+    [
+     "Als Team betreiben",
+     "Lade Freunde mit einem Link ein, der einmal funktioniert und nach einer Stunde abläuft, und bestimme pro Server, was jeder darf. Anmeldung auch mit Discord."
+    ]
+   ]
+  },
+  "es": {
+   "title": "Novedades de 1.15",
+   "note": "Ya en Rolling. Pasan a Stable cuando están probadas.",
+   "items": [
+    [
+     "Reglas de vehículos",
+     "Bloquea objetos, remolques o cualquier coche, y frena el spam de apariciones. Los coches mod tan pesados que dan tirones a todos se detectan solos."
+    ],
+    [
+     "Plugins de servidor",
+     "Instala modos de juego de la comunidad como CareerMP, freeRoamMP y BeamJoy, directamente desde la página de cada autor."
+    ],
+    [
+     "Gestionadlo en equipo",
+     "Invita a amigos con un enlace que funciona una vez y caduca a la hora, y elige qué puede hacer cada uno en cada servidor. Pueden entrar con Discord."
+    ]
+   ]
+  },
+  "hu": {
+   "title": "Az 1.15 újdonságai",
+   "note": "Már a Rollingban. Tesztelés után kerülnek a Stable-be.",
+   "items": [
+    [
+     "Járműszabályok",
+     "Tilts le kellékeket, utánfutókat vagy bármilyen autót, és állítsd le a spawnspamet. A mindenkit lagoltató nehéz mod autókat magától kiszúrja."
+    ],
+    [
+     "Szerverpluginek",
+     "Telepíts közösségi játékmódokat, például CareerMP-t, freeRoamMP-t és BeamJoyt, egyenesen a szerzőjük oldaláról."
+    ],
+    [
+     "Csapatban üzemeltetve",
+     "Hívd meg a barátaidat egy linkkel, ami egyszer működik és egy óra múlva lejár, és döntsd el, ki mit csinálhat az egyes szervereken. Discorddal is beléphetnek."
+    ]
+   ]
+  },
+  "pl": {
+   "title": "Nowości w 1.15",
+   "note": "Już w Rolling. Trafią do Stable, gdy zostaną przetestowane.",
+   "items": [
+    [
+     "Zasady pojazdów",
+     "Blokuj rekwizyty, przyczepy lub dowolne auta i zatrzymaj spam spawnów. Modowe auta tak ciężkie, że wszystkim zacina, są wykrywane automatycznie."
+    ],
+    [
+     "Pluginy serwera",
+     "Instaluj tryby gry od społeczności, jak CareerMP, freeRoamMP i BeamJoy, prosto ze strony każdego autora."
+    ],
+    [
+     "Prowadźcie go zespołem",
+     "Zaproś znajomych linkiem, który działa raz i wygasa po godzinie, i wybierz, co każdy może robić na każdym serwerze. Mogą logować się przez Discorda."
+    ]
+   ]
+  }
+ }
+}
