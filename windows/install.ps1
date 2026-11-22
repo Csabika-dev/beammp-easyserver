@@ -274,6 +274,12 @@ function Install-Dashboard($dir, [hashtable]$preset = $null) {
     $dst = Join-Path $esDir 'dashboard'
     New-Item -ItemType Directory -Force -Path $dst, (Join-Path $esDir 'data') | Out-Null
     foreach ($f in 'dashboard.py', 'webui.html', 'modscan.py', 'tlsgen.py', 'upnp.py', 'guard.py') { Copy-Item -Force (Join-Path $src $f) (Join-Path $dst $f) }
+    # dashboard translations (a missing one just means that language shows English)
+    $langSrc = Join-Path $src 'lang'
+    if (Test-Path $langSrc) {
+        New-Item -ItemType Directory -Force -Path (Join-Path $dst 'lang') | Out-Null
+        Copy-Item -Force (Join-Path $langSrc '*.json') (Join-Path $dst 'lang')
+    }
     # player statistics plugin, runs inside the BeamMP server
     $plug = Join-Path $dir 'Resources\Server\EasyServerStats'
     New-Item -ItemType Directory -Force -Path $plug | Out-Null
