@@ -24,6 +24,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Link-preview cards and icons (only when their text or pictures changed)
+        working-directory: site
+        run: node images/make.mjs
       - name: Build
         working-directory: site
         run: |
