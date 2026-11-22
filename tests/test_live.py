@@ -268,8 +268,13 @@ class Live(unittest.TestCase):
             with open(D.I().MOD_FILE) as f:
                 text = f.read()
             self.assertIn("votekick=on\nvotekick_min=5\nchatlog=off", text)
+            self.assertEqual(c.call("/api/moderation", {"kickwords_action": "nuke"})[0], 400)
+            self.assertEqual(c.call("/api/moderation", {"kickwords": ["Slur1", "bad, phrase"], "kickwords_action": "ban1440"})[0], 200)
+            d = c.call("/api/moderation")[1]
+            self.assertEqual(d["kickwords"], ["slur1", "bad phrase"])
+            self.assertEqual(d["kickwords_action"], "ban1440")
         finally:
-            c.call("/api/moderation", {"votekick": False, "votekick_min": 4, "chatlog": True})
+            c.call("/api/moderation", {"votekick": False, "votekick_min": 4, "chatlog": True, "kickwords": [], "kickwords_action": "kick"})
 
     def test_webhook_cannot_target_home_network(self):
         for u in ("https://127.0.0.1:30815/api/logout", "https://169.254.169.254/latest/", "https://192.168.1.1/",
