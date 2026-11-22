@@ -10,17 +10,22 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { readNews } from "./news.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const docs = join(here, "..", "docs");
 const assets = join(docs, "assets");
 mkdirSync(assets, { recursive: true });
 
+// "What's new" comes from CHANGELOG.md, so adding a version there updates the site.
+const news = readNews(join(here, "..", "CHANGELOG.md"));
+console.log("What's new:", news ? `${news.version} (${news.status}), ${news.items.map(i => i[0]).join(", ")}` : "none");
+
 const common = {
   bundle: true,
   jsx: "automatic",
   loader: { ".jsx": "jsx" },
-  define: { "process.env.NODE_ENV": '"production"' },
+  define: { "process.env.NODE_ENV": '"production"', __NEWS__: JSON.stringify(news) },
   nodePaths: process.env.NODE_PATH ? process.env.NODE_PATH.split(":") : [],
   logLevel: "warning",
 };
