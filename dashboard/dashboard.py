@@ -1705,7 +1705,9 @@ def refresh_mod_desc():
 # ----------------------------------------------------------------------------- moderation
 MOD_DEFAULTS = {"admins": [], "filter": False, "words": [], "spam": False, "spam_limit": 5,
                 "antibot": False, "verify": True, "per_ip": 3, "join_flood": 8, "guests": True,
-                "report": True, "votekick": False, "votekick_min": 4, "chatlog": True}
+                "report": True, "votekick": False, "votekick_min": 4, "chatlog": True,
+                "kickwords": [], "kickwords_action": "kick"}
+KICKWORD_ACTIONS = ("kick", "ban60", "ban1440", "ban10080", "banperm")
 NAME_RE = re.compile(r"[^\t\r\n,]{1,64}")
 
 
@@ -1743,8 +1745,10 @@ def read_mod():
         if not m:
             continue
         k, v = m.groups()
-        if k in ("admins", "words"):
+        if k in ("admins", "words", "kickwords"):
             d[k] = [x.strip() for x in v.split(",") if x.strip()][:500]
+        elif k == "kickwords_action" and v in KICKWORD_ACTIONS:
+            d[k] = v
         elif k in ("filter", "spam", "antibot", "verify", "report", "votekick", "chatlog"):
             d[k] = v.lower() == "on"
         elif k == "votekick_min" and v.isdigit() and 3 <= int(v) <= 20:
@@ -1761,11 +1765,11 @@ def write_mod(d):
     shared_write(I().MOD_FILE,
                  "# Managed by the BeamMP EasyServer dashboard (Config -> Moderation).\n"
                  "admins=%s\nfilter=%s\nwords=%s\nspam=%s\nspam_limit=%d\nantibot=%s\nverify=%s\nper_ip=%d\njoin_flood=%d\nguests=%s\n"
-                 "report=%s\nvotekick=%s\nvotekick_min=%d\nchatlog=%s\n" % (
+                 "report=%s\nvotekick=%s\nvotekick_min=%d\nchatlog=%s\nkickwords=%s\nkickwords_action=%s\n" % (
                      ",".join(d["admins"]), onoff(d["filter"]), ",".join(d["words"]), onoff(d["spam"]), d["spam_limit"],
                      onoff(d["antibot"]), onoff(d["verify"]), d["per_ip"], d["join_flood"],
                      "allow" if d["guests"] else "block", onoff(d["report"]), onoff(d["votekick"]), d["votekick_min"],
-                     onoff(d["chatlog"])))
+                     onoff(d["chatlog"]), ",".join(d["kickwords"]), d["kickwords_action"]))
 
 
 # ----------------------------------------------------------------------------- reports + chat history
@@ -5166,6 +5170,7 @@ def timed_msgs(inst):
 
 
 # ----------------------------------------------------------------------------- phone app (installable web app)
+LANG_PATH_RE = re.compile(r"/lang/(de|es|hu|pl)\.json")
 APP_FILES = ("/manifest.webmanifest", "/sw.js", "/icon-192.png", "/icon-512.png", "/apple-touch-icon.png")
 # Network first, so the dashboard is always live; the cached page only shows
 # when the server can't be reached. API answers are never cached.
@@ -8698,6 +8703,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.page()
             if method == "GET" and path in APP_FILES:
                 return self.app_file(path)
+            if method == "GET" and LANG_PATH_RE.fullmatch(path):
+                return self.lang_file(path)
             public = {("GET", "/api/session"), ("POST", "/api/login"), ("POST", "/api/setup"),
                       ("GET", "/api/teaminvite/info"), ("POST", "/api/teaminvite/accept"),
                       ("POST", "/api/discord/start"), ("POST", "/api/discord/finish")}
@@ -8782,6 +8789,16 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, SW_JS.encode(), "text/javascript", {"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"})
         size = {"/icon-192.png": 192, "/icon-512.png": 512, "/apple-touch-icon.png": 180}[path]
         return self.send(200, app_icon_png(size), "image/png", {"Cache-Control": "max-age=86400"})
+
+    def lang_file(self, path):
+        """A translation of the dashboard (dashboard/lang/xx.json). Public: the login page is translated too."""
+        code = LANG_PATH_RE.fullmatch(path).group(1)
+        try:
+            with open(os.path.join(HERE, "lang", code + ".json"), "rb") as f:
+                body = f.read(2 * 1024 * 1024)
+        except OSError:
+            return self.fail(404, "not found")
+        return self.send(200, body, "application/json", {"Cache-Control": "no-cache"})
 
     def page(self):
         nonce = secrets.token_urlsafe(16)
@@ -9291,14 +9308,18 @@ class Handler(BaseHTTPRequestHandler):
         for k in ("filter", "spam", "antibot", "verify", "guests", "report", "votekick", "chatlog"):
             if k in b:
                 d[k] = bool(b[k])
-        for k in ("admins", "words"):
+        if "kickwords_action" in b:
+            if b["kickwords_action"] not in KICKWORD_ACTIONS:
+                return self.fail(400, "bad kick word action")
+            d["kickwords_action"] = b["kickwords_action"]
+        for k in ("admins", "words", "kickwords"):
             if k in b:
                 if not isinstance(b[k], list):
                     return self.fail(400, "bad list")
                 items = []
                 for x in b[k][:500]:
                     x = re.sub(r"[\t\r\n,]", "", str(x)).strip()[:64]
-                    if k == "words":
+                    if k in ("words", "kickwords"):
                         x = x.lower()
                     if x and x not in items:
                         items.append(x)
