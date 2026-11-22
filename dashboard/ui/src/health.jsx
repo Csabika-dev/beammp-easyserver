@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import * as L from "./legacy.js";
 import { Blur, Ip } from "./pages.jsx";
+import { cacheGet, cachedApi, Skel, SkelCard } from "./ui.jsx";
 
 const MARK = { pass: ["ok", "✓"], ok: ["ok", "✓"], fail: ["bad", "✕"], bad: ["bad", "✕"], warn: ["warn", "!"], info: ["info", "i"] };
 const Check = ({ state, children }) => { const k = MARK[state] || MARK.info; return <div className="check"><span className={"mark " + k[0]}>{k[1]}</span><div>{children}</div></div>; };
@@ -10,18 +11,18 @@ const srv = () => encodeURIComponent(L.state().SERVER || "");
 
 /* ---------------- server health report */
 function HealthReport({ tick }) {
-  const [st, setSt] = useState({ h: null, reps: null, err: "" });
+  const [st, setSt] = useState(() => ({ h: cacheGet("/api/health") ?? null, reps: cacheGet("/api/health/reports") ?? null, err: "" }));
   const [deep, setDeep] = useState(false);
   const load = async d => {
     setDeep(!!d);
-    try { const [h, reps] = await Promise.all([L.api("/api/health" + (d ? "?deep=1" : "")), L.api("/api/health/reports")]); setSt({ h, reps, err: "" }); }
+    try { const [h, reps] = await Promise.all([d ? L.api("/api/health?deep=1") : cachedApi("/api/health"), cachedApi("/api/health/reports")]); setSt({ h, reps, err: "" }); }
     catch (e) { setSt(s => ({ ...s, err: e.message })); }
     setDeep(false);
   };
   useEffect(() => { load(false); }, [tick]);
   const { h, reps, err } = st;
   if (err && !h) return <div className="card"><Msg text={err} /></div>;
-  if (!h) return <div className="card"><p className="muted">Checking…</p></div>;
+  if (!h) return <SkelCard lines={7} />;
   const pill = h.overall === "fail" ? <span className="badge bad">{h.failed > 1 ? `${h.failed} problems` : `${h.failed} problem`}</span>
     : h.overall === "warn" ? <span className="badge warn">{h.warned > 1 ? `${h.warned} warnings` : `${h.warned} warning`}</span> : <span className="badge good">All good</span>;
   const word = s => s === "pass" ? "Passed" : s === "fail" ? "Failed" : s === "warn" ? "Warning" : "";
@@ -70,7 +71,7 @@ function PortForward({ onChange }) {
   };
   useEffect(() => { load(false); }, []);
   if (err && !d) return <div className="card" style={{ marginTop: 16 }}><Msg text={err} /></div>;
-  if (!d) return <div className="card" style={{ marginTop: 16 }}><p className="muted small">Looking for your router…</p></div>;
+  if (!d) return <SkelCard lines={2} style={{ marginTop: 16 }} />;
   const ports = [...new Set(d.ports.map(x => x.port))].join(", ");
   const relayTxt = "\"Hide my IP\" is on: players join through the relay, so nothing has to be opened on your router.";
   const send = async (body, key) => {
@@ -124,14 +125,14 @@ function PortForward({ onChange }) {
 
 /* ---------------- network check */
 function NetworkCheck({ tick }) {
-  const [d, setD] = useState(null), [err, setErr] = useState(""), [deep, setDeep] = useState(false);
+  const [d, setD] = useState(() => cacheGet("/api/network") ?? null), [err, setErr] = useState(""), [deep, setDeep] = useState(false);
   const load = async dp => {
     setDeep(!!dp);
-    try { setD(await L.api("/api/network" + (dp ? "?deep=1" : ""))); setErr(""); } catch (e) { setErr(e.message); }
+    try { setD(await (dp ? L.api("/api/network?deep=1") : cachedApi("/api/network"))); setErr(""); } catch (e) { setErr(e.message); }
     setDeep(false);
   };
   useEffect(() => { load(false); }, [tick]);
-  if (!d) return <div style={{ marginTop: 24 }}>{err ? <div className="banner bad">{err}</div> : <p className="muted">Checking the network…</p>}</div>;
+  if (!d) return <div style={{ marginTop: 24 }}>{err ? <div className="banner bad">{err}</div> : <><Skel w={180} h={20} /><Skel w="45%" style={{ margin: "10px 0 16px" }} /><div className="grid g3">{[0, 1, 2].map(i => <SkelCard key={i} lines={2} />)}</div></>}</div>;
   const Stat = ({ label, v, note, mono = true }) => <div className="card stat"><div className="label">{label}</div><div className={"value" + (mono ? " mono" : "")}>{v}</div><div className="note">{note}</div></div>;
   return (<div style={{ marginTop: 24 }}>
     <div className="row"><div><h2 style={{ fontSize: 20 }}>Network check</h2><p className="sub">{`Finds out whether players can reach your server on port ${d.port}.`}</p></div><span className="spacer" />
