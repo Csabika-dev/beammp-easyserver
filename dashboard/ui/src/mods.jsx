@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import * as L from "./legacy.js";
-import { cacheGet, cachedApi, SkelCard, SkelPage } from "./ui.jsx";
+import { cacheGet, cachedApi, Empty, Oops, PageWait, SkelCard } from "./ui.jsx";
 
 const S = () => L.state();
 const NEW_TAB = { target: "_blank", rel: "noopener noreferrer" };
@@ -50,7 +50,7 @@ function Uploads({ roomLeft, onDone }) {
     <div className={"drop" + (over ? " over" : "")} onClick={() => file.current.click()} onDragEnter={drag(true)} onDragOver={drag(true)} onDragLeave={drag(false)}
       onDrop={e => { e.preventDefault(); setOver(false); upload([...e.dataTransfer.files]); }}>
       <b>Drag &amp; drop mods here</b><br /><span className="muted">or click to choose files</span>
-      <input ref={file} type="file" accept=".zip" multiple hidden onChange={e => { upload([...e.target.files]); e.target.value = ""; }} /></div>
+      <input ref={file} id="mod_files" type="file" accept=".zip" multiple hidden onChange={e => { upload([...e.target.files]); e.target.value = ""; }} /></div>
     <div>{items.map(u => <div key={u.id} className="card" style={{ marginTop: 10 }}><b>{u.name}</b><div className="bar"><i style={{ width: u.pct + "%" }} /></div>
       <div className="small muted">{u.msg ? u.msg
         : u.bad ? <span style={{ color: "var(--crit-ink)" }}>{u.bad}</span>
@@ -83,10 +83,11 @@ function PluginReview({ j, onClose }) {
 /* ---------------- server plugins */
 function Plugins() {
   const [d, setD] = useState(() => cacheGet("/api/plugins") ?? null), [busy, setBusy] = useState({}), [review, setReview] = useState(null);
+  const [gone, setGone] = useState(() => new Set()), [err, setErr] = useState("");
   const file = useRef(null);
-  const load = async () => { try { setD(await cachedApi("/api/plugins")); } catch (e) { setD(null); } };
+  const load = async () => { try { setD(await cachedApi("/api/plugins")); setErr(""); } catch (e) { if (e.message !== "Please log in") setErr(e.message); } };
   useEffect(() => { load(); }, []);
-  if (!d) return <SkelCard lines={5} style={{ marginTop: 16 }} />;
+  if (!d) return err ? <Oops err={err} retry={load} style={{ marginTop: 16 }} /> : <SkelCard lines={5} style={{ marginTop: 16 }} />;
   const inst = Object.fromEntries(d.installed.filter(p => !p.id.startsWith("file-") && !p.id.startsWith("manual-")).map(p => [p.id, p]));
   const Errs = ({ p }) => p.errors ? <div className="small" style={{ color: "var(--crit-ink)" }}>{`${p.errors} Lua error${p.errors === 1 ? "" : "s"} in the log: `}<span className="mono">{p.last_error}</span></div> : null;
   const call = async (path, body) => { try { const r = await L.api(path, { json: body }); if (r.note) L.toast(r.note, 7000); load(); } catch (e) { L.toast(e.message, 7000); } };
@@ -112,11 +113,17 @@ function Plugins() {
     if (!r.ok) return L.toast(j.error || "Upload failed", 9000);
     if (await ask(j)) load();
   };
-  const remove = p => { if (confirm(`Remove ${p.name}? Its files are deleted from the server (its saved data too, if it keeps any in its folder).`)) call("/api/plugins/remove", { id: p.id }); };
+  // Removed with Undo: its files (and any data it keeps in its folder) are deleted after a few seconds.
+  const remove = p => {
+    const hide = on => setGone(g => { const n = new Set(g); on ? n.add(p.id) : n.delete(p.id); return n; });
+    hide(true);
+    L.undoable(`${p.name} removed.`, "/api/plugins/remove", { id: p.id }, { onUndo: () => hide(false), after: r => { if (r && r.note) L.toast(r.note, 7000); load(); } });
+  };
+  const installed = d.installed.filter(p => !gone.has(p.id));
   return (<div className="card" style={{ marginTop: 16 }}><h2>Server plugins</h2>
     <p className="small muted">Plugins add game modes and tools that run on the server (Lua scripts in Resources/Server). EasyServer downloads each one from its author's own GitHub page, shows you what goes where, and installs it only when you say so. <b>A plugin can do anything the server can</b> - only install ones you trust. Restart the server after a change.</p>
     {!d.writable && <div className="banner warn">EasyServer can't write to Resources/Server yet. Run the installer once more - it updates the folder permissions.</div>}
-    {d.installed.length > 0 && <><h3>Installed</h3><table><tbody>{d.installed.map(p => <tr key={p.id}><td><b className={p.on ? "" : "muted"}>{p.name}</b> {!p.on && <span className="badge">off</span>}{!p.catalog && <span className="badge warn">not from the list</span>}
+    {installed.length > 0 && <><h3>Installed</h3><table><tbody>{installed.map(p => <tr key={p.id}><td><b className={p.on ? "" : "muted"}>{p.name}</b> {!p.on && <span className="badge">off</span>}{!p.catalog && <span className="badge warn">not from the list</span>}
       <div className="small muted">{(p.author ? `By ${p.author} · ` : "") + (p.version || "") + (p.client.length ? ` · players download: ${p.client.join(", ")}` : "")}{p.page && <>{" · "}<a href={p.page} {...NEW_TAB}>page</a></>}</div><Errs p={p} /></td>
       <td className="num">{d.owner && <div className="row" style={{ justifyContent: "flex-end", gap: 6 }}><button className="btn sm" onClick={() => call("/api/plugins/toggle", { id: p.id, on: !p.on })}>{p.on ? "Turn off" : "Turn on"}</button>
         <button className="btn sm danger" onClick={() => remove(p)}>Remove</button></div>}</td></tr>)}</tbody></table></>}
@@ -162,6 +169,7 @@ export function Mods({ reload }) {
   const [data, setData] = useState(() => cacheGet("/api/mods") && cacheGet("/api/mods/updates") ? { d: cacheGet("/api/mods"), mu: cacheGet("/api/mods/updates") } : null);
   const [sort, setSort] = useState(() => L.store.get("es-modsort", "name"));
   const [scan, setScan] = useState(false), [mpres, setMpres] = useState(""), [updBusy, setUpdBusy] = useState(false);
+  const [gone, setGone] = useState(() => new Set());   // deleted, waiting for the Undo time to pass
   const mpfile = useRef(null);
   const again = () => setTick(t => t + 1);
   useEffect(() => {
@@ -170,10 +178,13 @@ export function Mods({ reload }) {
       .then(([d, mu]) => { if (live) { setData({ d, mu }); setErr(""); } }, e => { if (live && e.message !== "Please log in") setErr(e.message); });
     return () => { live = false; };
   }, [reload, tick]);
-  if (!data) return err ? <div className="banner bad">{err}</div> : <SkelPage />;
-  const { d, mu } = data, U = mu.mods || {}, ST = d.storage || {}, SETS = d.sets || [];
+  if (!data) return <PageWait err={err} retry={async () => again()} />;
+  const { d, mu } = data, U = mu.mods || {}, ST = d.storage || {}, SETS = (d.sets || []).filter(x => !gone.has("set:" + x.name));
   const roomLeft = ST.free == null ? null : Math.max(0, ST.free - (ST.spare || 0));
-  const mods = sort === "size" ? [...d.mods].sort((a, b) => b.size - a.size) : d.mods;
+  const mods = (sort === "size" ? [...d.mods].sort((a, b) => b.size - a.size) : d.mods).filter(x => !gone.has(x.name));
+  const hide = (k, on) => setGone(g => { const n = new Set(g); on ? n.add(k) : n.delete(k); return n; });
+  // Delete with Undo: it disappears now and is really deleted a few seconds later.
+  const later = (k, msg, path, json) => { hide(k, true); L.undoable(msg, path, json, { onUndo: () => hide(k, false), after: r => { if (r && r.note) L.toast(r.note); again(); } }); };
   const { SESSION } = S();
 
   const toggleSetting = (path, on, ms = 8000, refresh = true) => async e => {
@@ -188,13 +199,13 @@ export function Mods({ reload }) {
     setAct("save", n);
   };
   const setBtn = (a, n) => {
-    if (a === "delete" && !confirm("Delete the mod set " + n + "? The mods themselves stay.")) return;
+    if (a === "delete") return later("set:" + n, `Mod set ${n} deleted.`, "/api/mods/sets", { action: "delete", name: n });
     if (a === "save" && !confirm("Replace " + n + " with the mods that are on now?")) return;
     if (a === "apply" && !confirm("Switch to " + n + "? Mods that aren't in this set are turned off (not deleted).")) return;
     setAct(a, n);
   };
   const act = async (action, name) => {
-    if (action.includes("delete") && !confirm("Delete " + name + "?")) return;
+    if (action.includes("delete")) return later(name, `${name} deleted.`, "/api/mods/action", { action, name });
     try { const r = await L.api("/api/mods/action", { json: { action, name } }); L.toast(r.note || "Done"); again(); } catch (e) { L.toast(e.message); }
   };
   const useMap = async map => {
@@ -259,13 +270,16 @@ export function Mods({ reload }) {
         <td className="num"><div className="row" style={{ justifyContent: "flex-end" }}>{!x.active && <button className="btn sm primary" onClick={() => setBtn("apply", x.name)}>Switch to this set</button>}
           <button className="btn sm" title="Replace this set with the mods that are on now" onClick={() => setBtn("save", x.name)}>Update</button>
           <button className="btn sm danger" onClick={() => setBtn("delete", x.name)}>Delete</button></div></td></tr>)}</tbody></table>
-        : <p className="small muted" style={{ margin: "10px 0 0" }}>No sets yet.</p>}
+        : <p className="small muted" style={{ margin: "10px 0 0" }}>{d.mods.some(x => x.enabled) ? "No sets yet. Turn on the mods for one kind of night, then press Save as a set." : "No sets yet. Add some mods first, then save them as a set."}</p>}
     </div>
     <div className="row" style={{ marginBottom: 6 }}><span className="spacer" /><label className="small muted" htmlFor="modsort">Sort</label>
       <select id="modsort" style={{ width: "auto" }} value={sort} onChange={e => { setSort(e.target.value); L.store.set("es-modsort", e.target.value); }}><option value="name">By name</option><option value="size">Biggest first</option></select></div>
-    <div className="card tight"><table><thead><tr><th>Mod</th><th className="num">Size</th><th></th></tr></thead><tbody>
-      {mods.length ? mods.map(x => <ModRow key={x.name} x={x} u={U[x.name]} act={act} useMap={useMap} update={update} />) : <tr><td colSpan={3} className="muted">No mods yet.</td></tr>}
+    {mods.length ? <div className="card tight"><table><thead><tr><th>Mod</th><th className="num">Size</th><th></th></tr></thead><tbody>
+      {mods.map(x => <ModRow key={x.name} x={x} u={U[x.name]} act={act} useMap={useMap} update={update} />)}
     </tbody></table></div>
+      : <div className="card"><Empty title="No mods yet" actions={<><button className="btn primary" onClick={() => L.modBrowser()}>Browse mods</button>
+          <button className="btn" onClick={() => document.getElementById("mod_files")?.click()}>Upload a .zip</button></>}>
+          Drag a mod .zip onto this page, or pick one from the BeamNG repository. Each one is virus-checked before players can download it.</Empty></div>}
     <div className="card" style={{ marginTop: 16 }}><h2>Modpack</h2><p className="small muted">One .zip with every mod that's turned on, plus a list with checksums. Share it with another server owner, move mods to another server, or give it to players with slow internet so they can copy the mods before joining.</p>
       <div className="row" style={{ flexWrap: "wrap" }}>
         <a className="btn sm" href={"/api/modpack?srv=" + encodeURIComponent(S().SERVER)} download {...(anyOn ? {} : { "aria-disabled": "true", style: { pointerEvents: "none", opacity: .5 } })}>Download modpack</a>
