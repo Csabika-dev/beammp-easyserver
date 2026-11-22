@@ -1,17 +1,8 @@
-import { Children, isValidElement, useEffect, useId, useRef, useState } from "react";
+import { Fragment, useEffect, useId, useRef, useState } from "react";
+import { LANGS, Md, pageHref, useSite } from "./i18n.jsx";
+import { GH } from "./links.js";
 
-export const GH = "https://github.com/Csabika-dev/beammp-easyserver";
-export const LATEST = GH + "/releases/latest";
-export const ASK = GH + "/discussions/new?category=q-a";
-
-// Plain text of a piece of JSX, for search. Works the same on the server and in the browser.
-export function textOf(node) {
-  if (node == null || typeof node === "boolean") return "";
-  if (typeof node === "string" || typeof node === "number") return String(node);
-  if (Array.isArray(node)) return node.map(textOf).join(" ");
-  if (isValidElement(node)) return textOf(node.props.children);
-  return "";
-}
+export { GH, LATEST, ASK } from "./links.js";
 
 export function useReducedMotion() {
   const [reduce, setReduce] = useState(false);
@@ -43,7 +34,43 @@ export function useScrollSpy(ids) {
   return active;
 }
 
+// The words of a headline, each in its own box so they can hop when you point at them.
+export function Words({ text }) {
+  return text.split(" ").map((w, i) => (
+    <Fragment key={i}>{i > 0 && " "}<span className="w" style={{ "--i": i }}>{w}</span></Fragment>
+  ));
+}
+
+function LangPicker() {
+  const { lang, file, t, root } = useSite();
+  const here = LANGS.find(l => l.code === lang);
+  const ref = useRef(null);
+  useEffect(() => {   // close when clicking elsewhere
+    const off = e => { if (ref.current && !ref.current.contains(e.target)) ref.current.open = false; };
+    document.addEventListener("click", off);
+    return () => document.removeEventListener("click", off);
+  }, []);
+  const remember = code => { try { localStorage.setItem("es-site-lang", code); } catch {} };
+  return (
+    <details className="langpick" ref={ref}>
+      <summary aria-label={t.nav.language}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3c2.5 3 2.5 15 0 18M12 3c-2.5 3-2.5 15 0 18" /></svg>
+        {here.code.toUpperCase()}
+      </summary>
+      <ul>
+        {LANGS.map(l => (
+          <li key={l.code}>
+            <a href={pageHref(root, l.code, file)} hrefLang={l.code} lang={l.code}
+              aria-current={l.code === lang ? "true" : undefined} onClick={() => remember(l.code)}>{l.name}</a>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
 export function Nav({ page, spy = [] }) {
+  const { t, root } = useSite();
   const active = useScrollSpy(spy.map(s => s.id));
   const [scrolled, setScrolled] = useState(false);
   const bar = useRef(null);
@@ -56,39 +83,41 @@ export function Nav({ page, spy = [] }) {
     on(); addEventListener("scroll", on, { passive: true });
     return () => removeEventListener("scroll", on);
   }, []);
-  const home = page === "home" ? "" : "./";
   const link = (href, label, here, opt) => (
     <a key={href} className={opt ? "opt" : undefined} href={href} aria-current={here ? (page === "home" ? "location" : "page") : undefined}>{label}</a>
   );
   return (
     <nav className={"top" + (scrolled ? " scrolled" : "")}>
       <div className="wrap">
-        <a className="logo" href="./"><img src="img/logo.svg" alt="" width="28" height="28" /><span><span className="long">BeamMP </span>EasyServer</span></a>
+        <a className="logo" href="./"><img src={root + "img/logo.svg"} alt="" width="28" height="28" /><span><span className="long">BeamMP </span>EasyServer</span></a>
         <div className="links">
           {page === "home"
-            ? spy.map(s => link("#" + s.id, s.label, active === s.id, s.opt))
-            : link(home + "#start", "Get started", false, true)}
-          {link("features.html", "Features", page === "features")}
-          {link("help.html", "Help", page === "help")}
-          <a href={GH} data-goatcounter-click="github">GitHub</a>
+            ? spy.map(s => link("#" + s.id, t.nav[s.key], active === s.id, true))
+            : link("./#start", t.nav.start, false, true)}
+          {link("features.html", t.nav.features, page === "features")}
+          {link("help.html", t.nav.help, page === "help")}
+          <a className="opt" href={GH} data-goatcounter-click="github">GitHub</a>
         </div>
+        <LangPicker />
       </div>
       <span className="progress" ref={bar} aria-hidden="true" />
     </nav>
   );
 }
 
-export function Footer({ children }) {
+export function Footer({ note }) {
+  const { t } = useSite();
   return (
     <footer><div className="wrap">
-      {children}
-      <p>MIT license. Not made by or affiliated with the BeamMP team or BeamNG GmbH. EasyServer builds on their work and on many mod and plugin authors: <a href={GH + "#-credits"}>see the credits</a>.</p>
+      {note && <p>{note}</p>}
+      <p><Md s={t.common.license} /></p>
     </div></footer>
   );
 }
 
 // A command with a copy button next to it.
 export function Command({ children }) {
+  const { t } = useSite();
   const [state, setState] = useState("idle");
   const pre = useRef(null);
   const copy = async () => {
@@ -101,9 +130,9 @@ export function Command({ children }) {
   };
   return (
     <div className="cmd">
-      <pre ref={pre}>{children}</pre>
+      <pre ref={pre} translate="no">{children}</pre>
       <button type="button" className={"copy js-only" + (state === "done" ? " done" : "")} onClick={copy} aria-live="polite">
-        {state === "done" ? "Copied" : state === "select" ? "Press Ctrl+C" : "Copy"}
+        {state === "done" ? t.common.copied : state === "select" ? t.common.pressCtrlC : t.common.copy}
       </button>
     </div>
   );
@@ -132,6 +161,3 @@ export function useOpenSet() {
   const toggle = k => setOpen(s => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
   return [open, toggle, setOpen];
 }
-
-export const count = (arr, f) => arr.filter(f).length;
-export const kids = c => Children.toArray(c);
