@@ -7,6 +7,7 @@ import { Logs, Notifications, Servers, Updates } from "./pages.jsx";
 import { Health } from "./health.jsx";
 import { Players } from "./players.jsx";
 import { Mods } from "./mods.jsx";
+import { Config } from "./config.jsx";
 
 const S = () => L.state();
 const Icon = ({ n }) => <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" dangerouslySetInnerHTML={{ __html: L.I[n] }} />;
@@ -343,7 +344,7 @@ function Overview({ reload }) {
 }
 
 // Pages drawn by React; the rest are still in legacy.js
-const PAGES = { overview: Overview, servers: Servers, updates: Updates, logs: Logs, notifications: Notifications, network: Health, players: Players, mods: Mods };
+const PAGES = { overview: Overview, servers: Servers, updates: Updates, logs: Logs, notifications: Notifications, network: Health, players: Players, mods: Mods, config: Config };
 
 /* ------------------------------------------------------------------ the app */
 export function App() {
