@@ -1,11 +1,13 @@
 import { Md, useSite } from "./i18n.jsx";
 import { Footer, LATEST, Nav, Words, useScrollSpy } from "./shared.jsx";
 import { Tour } from "./Home.jsx";
+import { useNews } from "./news.jsx";
 
 function Jump() {
   const { t } = useSite();
   const f = t.features;
-  const parts = [["online", f.online], ["running", f.running], ["new", f.newTitle]];
+  const news = useNews();
+  const parts = [["online", f.online], ["running", f.running], ...(news ? [["new", news.title]] : [])];
   const active = useScrollSpy(parts.map(p => p[0]));
   return (
     <div className="jump" aria-label={f.onPage}>
@@ -26,6 +28,7 @@ const Head = ({ title, sub }) => <h2><span className="sweep">{title}</span><smal
 export function Features() {
   const { t, root } = useSite();
   const f = t.features;
+  const news = useNews();
   return (
     <>
       <Nav page="features" />
@@ -60,10 +63,10 @@ export function Features() {
           </Rows>
         </section>
 
-        <section className="new" id="new" data-reveal="">
-          <Head title={f.newTitle} sub={f.newSub} />
-          <Rows rows={f.newRows} />
-        </section>
+        {news && <section className="new" id="new" data-reveal="">
+          <Head title={news.title} sub={news.sub} />
+          <Rows rows={news.items.map(([h, p]) => [h, [p]])} />
+        </section>}
 
         <div className="closing" data-reveal="">
           <h2 className="hop"><Words text={t.common.tryTitle} /></h2>
