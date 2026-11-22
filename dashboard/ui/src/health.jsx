@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import * as L from "./legacy.js";
 import { Blur, Ip } from "./pages.jsx";
 import { cacheGet, cachedApi, Oops, Skel, SkelCard } from "./ui.jsx";
+import { Performance } from "./extras.jsx";
 
 const MARK = { pass: ["ok", "✓"], ok: ["ok", "✓"], fail: ["bad", "✕"], bad: ["bad", "✕"], warn: ["warn", "!"], info: ["info", "i"] };
 const Check = ({ state, children }) => { const k = MARK[state] || MARK.info; return <div className="check"><span className={"mark " + k[0]}>{k[1]}</span><div>{children}</div></div>; };
@@ -158,5 +159,6 @@ export function Health({ reload }) {
     <PortForward key={reload} onChange={() => setNet(n => n + 1)} />
     <JoinDoctor />
     <NetworkCheck tick={reload + ":" + net} />
+    <Performance key={"p" + reload} />
   </>);
 }
