@@ -206,12 +206,17 @@ function Shell({ tab, reload, unread, onLang, logout }) {
   const ses = S().SESSION, role = L.myRole();
   useEffect(() => { const t = setTimeout(() => prefetch(PREFETCH), 900); return () => clearTimeout(t); }, []);
   const dark = document.documentElement.dataset.theme === "dark";
+  const glass = L.store.get("es-look", "glass") !== "classic";
+  const flipLook = () => { L.store.set("es-look", glass ? "classic" : "glass"); L.applyTheme(); redraw(x => x + 1); };
   const flip = () => { L.store.set("es-theme", dark ? "light" : "dark"); L.applyTheme(); redraw(x => x + 1); if (tab === "players") L.bridge.show("players"); };
   const navs = L.myTabs().map(([k, label]) => (
     <button key={k} className={"nav" + (k === tab ? " active" : "")} onClick={() => L.bridge.show(k)}>
       <Icon n={k} /><span>{label}</span>{k === "notifications" && <span className={"count" + (unread ? "" : " hidden")}>{unread}</span>}
     </button>
   ));
+  // A page slides in once when you open it. After that, parts that finish loading or refresh
+  // appear in place, so nothing slides around under your finger.
+  const settle = useCallback(el => { if (el) setTimeout(() => el.classList.remove("enter"), 900); }, []);
   return (
     <div className="app">
       <aside className="side">
@@ -219,15 +224,16 @@ function Shell({ tab, reload, unread, onLang, logout }) {
         <ServerPick />{navs}<div className="grow" />
         <div className="foot">
           <button className="iconbtn" title="Light / dark mode" onClick={flip}><Icon n={dark ? "sun" : "moon"} /></button>
+          <button className="iconbtn" title={glass ? "Classic look" : "Glass look"} aria-pressed={glass} onClick={flipLook}><Icon n="glass" /></button>
           <button className="small muted" title="My account" style={{ background: "none", border: 0, cursor: "pointer", padding: 0, color: "inherit" }} onClick={() => L.openMyAccount()}>{ses.user || "owner"}{role ? " · " + role.name : ""}</button>
           <span className="spacer" /><LangSelect onChange={onLang} />
           <button className="iconbtn" title="Log out" onClick={logout}><Icon n="logout" /></button>
         </div>
       </aside>
       <div>
-        <nav className="mobilebar"><ServerPick />{navs}<button className="nav" onClick={flip}>Theme</button></nav>
+        <nav className="mobilebar"><ServerPick />{navs}<button className="nav" onClick={flip}>Theme</button><button className="nav" onClick={flipLook}>{glass ? "Classic look" : "Glass look"}</button></nav>
         <SecurityBar />
-        <main id="main" className="enter" key={tab}>{(P => <P reload={reload} />)(PAGES[tab] || Overview)}</main>
+        <main id="main" className="enter" key={tab} ref={settle}>{(P => <P reload={reload} />)(PAGES[tab] || Overview)}</main>
       </div>
     </div>
   );
@@ -354,8 +360,8 @@ export function App() {
   const open = useCallback(t => { history.replaceState(null, "", "#" + t); L.setTab(t); tabRef.current = t; setTabState(t); }, []);
   const show = useCallback(t => {
     L.clearTimer();
-    if (t === tabRef.current) { history.replaceState(null, "", "#" + t); setReload(r => r + 1); } else open(t);
-    window.scrollTo(0, 0);
+    // Drawing the open page again (after saving something) keeps your place; only a new page starts at the top.
+    if (t === tabRef.current) { history.replaceState(null, "", "#" + t); setReload(r => r + 1); } else { open(t); window.scrollTo(0, 0); }
   }, [open]);
 
   const finishDiscord = useCallback(async (note, code) => {
