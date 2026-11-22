@@ -1506,6 +1506,12 @@
   "up to date": "aktuell",
   "up to date ({})": "aktuell ({})",
   "By {} ·": "Von {} ·",
-  "By {} · {}": "Von {} · {}"
+  "By {} · {}": "Von {} · {}",
+  "At the scheduled restart, if a new BeamMP server version is out. All servers use the same BeamMP program, so the others restart too.": "Beim geplanten Neustart, falls eine neue BeamMP-Serverversion erschienen ist. Alle Server nutzen dasselbe BeamMP-Programm, daher starten die anderen auch neu.",
+  "One click sets who can join, guests, anti-bot checks, the chat filter and flood protection together.": "Ein Klick setzt zusammen fest, wer beitreten darf, Gäste, Anti-Bot-Prüfungen, den Chatfilter und den Flood-Schutz.",
+  "{} planned": "{} geplant",
+  "Every {} hours": "Alle {} Stunden",
+  "Every {} hour": "Alle {} Stunde",
+  "Every {} minutes": "Alle {} Minuten"
  }
 }
