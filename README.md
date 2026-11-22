@@ -342,6 +342,8 @@ The helper only moves or repairs the player's own car, and only when the server 
 
 - **Players → Online now & moderation**: **Mute 10 min**, **Kick** or **Ban…** (1 hour to forever, with a reason the player sees). Unban under **Banned players**. Send a message to everyone in the game chat.
 - **In-game admins:** **Config → Moderation & anti-bot → Admins**: their BeamMP names. They can then type `/kick name`, `/ban name 1d reason`, `/mute name 10`, `/unmute name`, `/unban name` in the game chat. Their bans are saved in the dashboard.
+- **Reports:** players type `/report name what happened`; it shows up under **Players → Reports** with the chat before it, and as an alert. **Vote kick** (`/votekick name reason`, then `/yes`) can be turned on for when no admin is online.
+- **Chat history:** **Players → Chat history** - search by word or player, click a message to see the conversation around it.
 - **Chat filter, anti-spam and anti-bot** are on the same card - see the [feature reference](#moderation--anti-bot-config-and-players-pages).
 - Every ban, kick and mute (from the dashboard, Discord or the game) is in **Logs → Activity log**.
 </details>
@@ -537,6 +539,9 @@ All of this runs in the small EasyServerStats plugin on the server, so players d
 
 - **Kick, mute and ban** from the Players page: bans can be for an hour, a day, 7 or 30 days, or forever, with a reason players see. Send a message to everyone in the game chat.
 - **Admins** you name can use `/kick`, `/ban name 1d reason`, `/mute name 10`, `/unmute` and `/unban` in the game chat. Their bans are saved in the dashboard too.
+- **Player reports** (on by default): players type `/report name what happened`. You get an alert wherever your notifications go (dashboard, Discord, email, phone) with the chat just before it, admins in the game see it at once, and it waits under **Players → Reports** until someone marks it handled. One report a minute per player.
+- **Vote kick** (off by default): when no admin is online, `/votekick name reason` starts a vote. If more than half of the other players type `/yes` within 90 seconds, that player is out for 10 minutes. It needs a minimum number of players online (4 by default), admins can't be voted out, players who joined in the last 2 minutes can't vote, and each player can start one vote every 5 minutes.
+- **Chat history** (Players page, on by default): search the game chat by word or player, click a message to see what was said around it. Messages players didn't see (muted, caught by the filter) are marked *hidden*. It stays on this computer (up to 10 MB); admins can delete it. Moderators can read it, viewers can't.
 - **Chat filter** (off by default): hides blocked words, @everyone and Discord invite links, and refuses player names with links. Repeat offenders are muted for 5 minutes.
 - **Anti-spam** (off by default): too many messages in 10 seconds = a 2 minute mute.
 - **Anti-bot** (off by default) stops bots from filling your server. Cloudflare can only protect websites, not a game server, so this works inside the game:
