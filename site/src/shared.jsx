@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useId, useRef, useState } from "react";
 import { LANGS, Md, pageHref, useSite } from "./i18n.jsx";
-import { GH } from "./links.js";
+import { GH, LATEST } from "./links.js";
 
 export { GH, LATEST, ASK } from "./links.js";
 
@@ -39,6 +39,88 @@ export function Words({ text }) {
   return text.split(" ").map((w, i) => (
     <Fragment key={i}>{i > 0 && " "}<span className="w" style={{ "--i": i }}>{w}</span></Fragment>
   ));
+}
+
+// Light/dark switch. The page starts in the computer's setting; a click picks the other one and
+// remembers it. The boot script in build.mjs applies the saved choice before anything is drawn.
+function ThemeButton() {
+  const { t } = useSite();
+  const [dark, setDark] = useState(false);
+  useEffect(() => {
+    const d = document.documentElement.dataset.theme;
+    setDark(d ? d === "dark" : matchMedia("(prefers-color-scheme: dark)").matches);
+  }, []);
+  const flip = () => {
+    const next = dark ? "light" : "dark";
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem("es-site-theme", next); } catch {}
+    setDark(!dark);
+  };
+  const label = dark ? t.common.themeLight : t.common.themeDark;
+  return (
+    <button type="button" className="themebtn js-only" onClick={flip} aria-label={label} title={label}>
+      <svg className="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></svg>
+      <svg className="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z" /></svg>
+    </button>
+  );
+}
+
+// Which computer this is: "win", "mac", "linux" or "phone"; null until the page is running.
+export function useOs() {
+  const [os, setOs] = useState(null);
+  useEffect(() => {
+    const ua = navigator.userAgent, p = navigator.userAgentData?.platform || navigator.platform || "";
+    if (/Android|iPhone|iPad|iPod/.test(ua) || (/Mac/.test(p) && navigator.maxTouchPoints > 1)) setOs("phone");
+    else if (/Win/.test(p)) setOs("win");
+    else if (/Mac/.test(p)) setOs("mac");
+    else if (/Linux|X11|CrOS/.test(p)) setOs("linux");
+    else setOs("win");
+  }, []);
+  return os;
+}
+
+// The newest Stable version from GitHub ("v1.14.0"), remembered for an hour. null if GitHub can't be reached.
+const RELEASE_API = "https://api.github.com/repos/Csabika-dev/beammp-easyserver/releases/latest";
+export function useLatestVersion() {
+  const [v, setV] = useState(null);
+  useEffect(() => {
+    try {
+      const c = JSON.parse(sessionStorage.getItem("es-latest") || "null");
+      if (c && Date.now() - c.t < 3600e3) { setV(c.v); return; }
+    } catch {}
+    let live = true;
+    fetch(RELEASE_API).then(r => (r.ok ? r.json() : null)).then(d => {
+      if (!live || !d?.tag_name) return;
+      setV(d.tag_name);
+      try { sessionStorage.setItem("es-latest", JSON.stringify({ v: d.tag_name, t: Date.now() })); } catch {}
+    }).catch(() => {});
+    return () => { live = false; };
+  }, []);
+  return v;
+}
+
+export const WIN_ZIP = GH + "/releases/latest/download/BeamMP-EasyServer-Windows.zip";
+
+// The main download button. Windows gets the ZIP straight away (with the version on the button),
+// Linux goes to the one-line install, Mac to the Rolling version (it's experimental, never Stable),
+// and a phone is told it's for a PC. Before the page knows the computer it's a plain "Download".
+export function DownloadButton({ home = "" }) {
+  const versions = home + "#versions", start = home + "#start";
+  const { t } = useSite();
+  const os = useOs(), v = useLatestVersion();
+  const c = t.common, fill = (s, o) => s.replace("{os}", o).replace("{v}", v || "");
+  const pick = {
+    win: [WIN_ZIP, v ? fill(c.downloadVFor, "Windows") : fill(c.downloadFor, "Windows")],
+    linux: [start, fill(c.setupFor, "Linux")],
+    mac: [versions, c.macRolling],
+    phone: [start, c.onPhone],
+  }[os] || [LATEST, c.download];
+  return (
+    <span className="dlbox">
+      <a className="btn go" href={pick[0]} data-goatcounter-click={"download-" + (os || "stable")}>{pick[1]}</a>
+      <small><a href={versions}>{c.otherSystems}</a></small>
+    </span>
+  );
 }
 
 function LangPicker() {
@@ -98,6 +180,7 @@ export function Nav({ page, spy = [] }) {
           {link("help.html", t.nav.help, page === "help")}
           <a className="opt" href={GH} data-goatcounter-click="github">GitHub</a>
         </div>
+        <ThemeButton />
         <LangPicker />
       </div>
       <span className="progress" ref={bar} aria-hidden="true" />
