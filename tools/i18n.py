@@ -98,7 +98,7 @@ def add(t, where):
     if not re.search(r"[A-Za-z]{2}", letters): return
     if re.fullmatch(r"[\w\-./:#{}]+", t) and not re.search(r"[A-Z][a-z]", t) and " " not in t: return   # ids, classes, urls
     if re.fullmatch(r"\{\}[\w\-]+|[\w\-]+\{\}", t): return
-    if t.startswith(("http", "/api/", "#", ".")) or re.search(r"[;{}]\s*$", t.replace("{}", "")) : return
+    if t.startswith(("http", "/api/", "#", ".", "&", "M{}")) or re.search(r"[;{}]\s*$", t.replace("{}", "")) : return
     if re.search(r"^(var\(|rgba?\(|\d+px|[a-z-]+:)", t): return
     keys.setdefault(t, where)
 
