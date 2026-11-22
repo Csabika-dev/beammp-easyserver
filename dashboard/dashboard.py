@@ -3288,7 +3288,7 @@ def list_backups(iid=None):
     except OSError:
         return out
     for n in names:
-        m = re.fullmatch(r"([a-z0-9]{1,12})-(\d{8}-\d{4})(-mods)?\.zip", n)
+        m = re.fullmatch(r"([a-z0-9]{1,12})-(\d{8}-\d{4}(?:\d{2})?)(-mods)?\.zip", n)
         if not m or (iid and m.group(1) != iid):
             continue
         try:
@@ -3305,6 +3305,8 @@ def make_backup(inst, include_mods):
     if not IS_WIN:
         os.chmod(BACKUP_DIR, 0o700)
     name = "%s-%s%s.zip" % (inst.id, time.strftime("%Y%m%d-%H%M"), "-mods" if include_mods else "")
+    if os.path.exists(os.path.join(BACKUP_DIR, name)):    # two in the same minute (a restore right after a backup)
+        name = "%s-%s%s.zip" % (inst.id, time.strftime("%Y%m%d-%H%M%S"), "-mods" if include_mods else "")
     tmp = os.path.join(BACKUP_DIR, name + ".tmp")
     build_export(tmp, include_mods)
     os.replace(tmp, os.path.join(BACKUP_DIR, name))
@@ -5637,6 +5639,96 @@ def set_mod_enabled(name, on):
     return True
 
 
+# ----------------------------------------------------------------------------- mod storage + mod sets
+UPLOAD_SPARE = 512 * 1024 ** 2     # room left over after an upload (logs, backups, the game server itself)
+MODSET_MAX = 30
+
+
+def mods_storage(inst, mods):
+    """How much room the mods take and how much is left on their drive (None when unknown)."""
+    free = total = None
+    for p in (inst.CLIENT_DIR, inst.RES, inst.SERVER_DIR):
+        try:
+            u = shutil.disk_usage(p)
+            free, total = u.free, u.total
+            break
+        except OSError:
+            continue
+    return {"free": free, "total": total, "mods": sum(m["size"] for m in mods),
+            "low": free is not None and free < 2 * 1024 ** 3, "spare": UPLOAD_SPARE}
+
+
+def upload_room_error(size):
+    """A message when an upload of size bytes won't fit (both the upload folder and the mods folder need it)."""
+    for p in {UPLOAD_TMP, I().CLIENT_DIR}:
+        try:
+            free = shutil.disk_usage(p).free
+        except OSError:
+            continue
+        if size + UPLOAD_SPARE > free:
+            return ("Not enough space on this computer: the mod needs %s and only %s is free. Delete or turn off "
+                    "mods you don't play, or use a bigger drive." % (fmt_bytes(size), fmt_bytes(max(0, free - UPLOAD_SPARE))))
+    return None
+
+
+def clean_set_name(n):
+    n = re.sub(r"\s+", " ", str(n or "")).strip()
+    if not n or len(n) > 40 or not re.fullmatch(r"[\w .,'!&()+#\-]+", n):
+        raise ValueError("Give the mod set a short name (up to 40 letters, numbers and spaces)")
+    return n
+
+
+def mod_sets(inst):
+    v = inst.meta.get("mod_sets")
+    out = []
+    for x in v if isinstance(v, list) else []:
+        if isinstance(x, dict) and isinstance(x.get("name"), str) and isinstance(x.get("mods"), list):
+            out.append({"name": x["name"], "mods": [n for n in x["mods"] if isinstance(n, str) and safe_zip_name(n) == n]})
+    return out
+
+
+def mods_in_use(mods, inst):
+    """The mods that are part of the server right now: on, or parked by light mode (they come back with their map)."""
+    parked = set(parked_maps(inst))
+    return sorted((m["name"] for m in mods if (m["enabled"] or m["name"] in parked) and m["name"] != TOOLS_MOD), key=str.lower)
+
+
+def mod_sets_view(inst, mods):
+    have = {m["name"]: m for m in mods}
+    now_on = set(mods_in_use(mods, inst))
+    out = []
+    for x in mod_sets(inst):
+        present = [n for n in x["mods"] if n in have]
+        out.append({"name": x["name"], "mods": x["mods"], "missing": [n for n in x["mods"] if n not in have],
+                    "size": sum(have[n]["size"] for n in present), "active": set(present) == now_on})
+    return out
+
+
+def apply_mod_set(inst, names):
+    """Turn on exactly the mods in names (the tools mod is left alone). Returns (turned on, turned off, missing)."""
+    want = set(names)
+    mods = list_mods()
+    have = {m["name"]: m for m in mods}
+    parked = set(parked_maps(inst))
+    on, off = [], []
+    for n, m in have.items():
+        if n == TOOLS_MOD:
+            continue
+        if n in want and not m["enabled"]:
+            if set_mod_enabled(n, True):
+                on.append(n)
+        elif n not in want and m["enabled"]:
+            if set_mod_enabled(n, False):
+                off.append(n)
+    if inst.meta.get("light_maps"):
+        set_server_meta(inst.id, parked_maps=[])
+        light_sync(inst)        # map mods of other maps go back to waiting for their map
+    elif parked:
+        set_server_meta(inst.id, parked_maps=None)
+    on = [n for n in on if n not in parked]
+    return on, off, sorted(want - set(have), key=str.lower)
+
+
 # ----------------------------------------------------------------------------- scheduled events
 EVENT_DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
@@ -6255,7 +6347,7 @@ VIEWER_WRITE = {"/api/logout", "/api/notifications/read", "/api/logs/explain", "
                 "/api/me/password", "/api/me/2fa/begin", "/api/me/2fa/confirm", "/api/me/2fa/disable",
                 "/api/me/discord/link", "/api/me/discord/unlink"}
 OWNER_WRITE = {"/api/roles", "/api/teaminvite", "/api/discordlogin", "/api/plugins/fetch", "/api/plugins/upload", "/api/plugins/install", "/api/plugins/toggle", "/api/plugins/remove", "/api/plugins/adopt", "/api/users", "/api/password", "/api/2fa/begin", "/api/2fa/confirm", "/api/2fa/disable", "/api/remote",
-               "/api/authkey", "/api/import", "/api/power/helper", "/api/servers/delete", "/api/statuspage", "/api/supporter"}
+               "/api/authkey", "/api/import", "/api/backups/restore", "/api/power/helper", "/api/servers/delete", "/api/statuspage", "/api/supporter"}
 ADMIN_GET = {"/api/export", "/api/backups/download", "/api/phoneapp", "/api/ntfy", "/api/power/offline",
              "/api/health/report", "/api/health/saved", "/api/users", "/api/activity", "/api/modpack", "/api/integrations", "/api/statuspage"}
 
@@ -6827,7 +6919,7 @@ ACTION_LABELS = {
     "/api/mods/rescan": "Re-checked mods", "/api/bans/add": "Banned {name}", "/api/bans/remove": "Unbanned {name}",
     "/api/players/act": "Player {action}: {name}", "/api/allowlist": "Changed the allow-list", "/api/settings": "Changed settings",
     "/api/password": "Changed the password", "/api/devices": "Forgot remembered devices", "/api/remote": "Changed internet access / HTTPS", "/api/authkey": "Changed the AuthKey",
-    "/api/import": "Imported a backup", "/api/upnp": "Automatic port forwarding: {on}", "/api/modbrowser/install": "Installed a mod from the mod browser", "/api/supporter": "Changed the supporter licence", "/api/guard": "Unblocked an address in the BeamMP-only guard", "/api/invite": "Changed the invite message", "/api/map": "Switched the map to {map}", "/api/restarts": "Changed scheduled restarts",
+    "/api/import": "Imported a backup", "/api/backups/restore": "Restored a nightly backup", "/api/mods/sets": "Mod set {action}: {name}", "/api/upnp": "Automatic port forwarding: {on}", "/api/modbrowser/install": "Installed a mod from the mod browser", "/api/supporter": "Changed the supporter licence", "/api/guard": "Unblocked an address in the BeamMP-only guard", "/api/invite": "Changed the invite message", "/api/map": "Switched the map to {map}", "/api/restarts": "Changed scheduled restarts",
     "/api/moderation": "Changed moderation settings", "/api/extras": "Changed cars & chat settings",
     "/api/messages": "Changed chat messages", "/api/rotation": "Changed map rotation", "/api/template": "Applied a template",
     "/api/backups/now": "Made a backup", "/api/events": "Changed events", "/api/events/stop": "Ended an event early",
@@ -8527,6 +8619,7 @@ class Handler(BaseHTTPRequestHandler):
         self._body_done = False
         self._json = None
         self._code = 200
+        self._restore_undo = None
         try:
             if not self.gate():
                 return
@@ -9387,7 +9480,47 @@ class Handler(BaseHTTPRequestHandler):
                         "maps_size": sum(m["size"] for m in mods if m["enabled"] and m["maps"]),
                         "desc_modsize": bool(I().meta.get("desc_modsize")),
                         "light": bool(I().meta.get("light_maps")), "current_map": current_map(),
-                        "all_maps_size": sum(m["size"] for m in mods if (m["enabled"] or m.get("parked")) and m["maps"])})
+                        "all_maps_size": sum(m["size"] for m in mods if (m["enabled"] or m.get("parked")) and m["maps"]),
+                        "storage": mods_storage(I(), mods), "sets": mod_sets_view(I(), mods)})
+
+    def post_mods_sets(self, q):
+        """Mod sets: save the mods in use now under a name, switch to a saved set, or delete one."""
+        b = self.body_json()
+        act = b.get("action")
+        name = clean_set_name(b.get("name"))
+        inst = I()
+        sets = mod_sets(inst)
+        cur = next((x for x in sets if x["name"].lower() == name.lower()), None)
+        if act == "save":
+            mods = mods_in_use(list_mods(), inst)
+            if not mods:
+                return self.fail(400, "Turn some mods on first - a set saves the mods that are on now")
+            if cur:
+                cur["mods"] = mods
+                cur["name"] = name
+            elif len(sets) >= MODSET_MAX:
+                return self.fail(400, "You have %d mod sets - delete one first" % MODSET_MAX)
+            else:
+                sets.append({"name": name, "mods": mods})
+            set_server_meta(inst.id, mod_sets=sets)
+            return self.send(200, {"ok": True, "note": "Saved the mod set %s (%d mod%s)." % (name, len(mods), "" if len(mods) == 1 else "s")})
+        if not cur:
+            return self.fail(404, "There's no mod set called %s" % name)
+        if act == "delete":
+            set_server_meta(inst.id, mod_sets=[x for x in sets if x is not cur] or None)
+            return self.send(200, {"ok": True, "note": "Deleted the mod set %s. The mods themselves are still there." % cur["name"]})
+        if act != "apply":
+            return self.fail(400, "bad action")
+        on, off, missing = apply_mod_set(inst, cur["mods"])
+        note = "Switched to %s: %d mod%s turned on, %d turned off." % (cur["name"], len(on), "" if len(on) == 1 else "s", len(off))
+        if missing:
+            note += " %d mod%s in this set %s no longer on the server: %s." % (
+                len(missing), "" if len(missing) == 1 else "s", "is" if len(missing) == 1 else "are", ", ".join(missing[:5]) + (" ..." if len(missing) > 5 else ""))
+        if on or off:
+            refresh_mod_desc()
+            APP.config_changed()
+            note += " " + APP.applied_note()
+        self.send(200, {"ok": True, "note": note, "on": on, "off": off, "missing": missing})
 
     def post_mods_light(self, q):
         on = bool(self.body_json().get("on"))
@@ -9411,6 +9544,9 @@ class Handler(BaseHTTPRequestHandler):
         name = safe_zip_name(q.get("name"))
         if not name:
             return self.fail(400, "Only .zip files can be uploaded")
+        room = upload_room_error(self.content_length())
+        if room:
+            return self.fail(507, room)
         tdir = tempfile.mkdtemp(dir=UPLOAD_TMP, prefix=".up-")   # own folder: parallel uploads can't mix
         try:
             return self._mods_upload(name, os.path.join(tdir, name))
@@ -11773,131 +11909,162 @@ class Handler(BaseHTTPRequestHandler):
             os.remove(tmp)
 
     def put_import(self, q):
-        app = APP
         fd, tmp = tempfile.mkstemp(suffix=".zip", dir=DATA_DIR)
         os.close(fd)
-        report = {"config": False, "settings": False, "mods_added": [], "mods_blocked": [], "skipped": []}
         try:
             self.body_to_file(tmp, 20 * 1024 ** 3)
-            try:
-                z = zipfile.ZipFile(tmp)
-            except zipfile.BadZipFile:
-                return self.fail(400, "That isn't an export file (.zip)")
-            with z:
-                names = z.namelist()
-                only_mods = "ServerConfig.toml" not in names and "modpack.json" in names
-                if not only_mods:
-                    if "ServerConfig.toml" not in names:
-                        return self.fail(400, "No ServerConfig.toml or modpack.json in this file")
-                    info = z.getinfo("ServerConfig.toml")
-                    if info.file_size > 200000:
-                        return self.fail(400, "ServerConfig.toml is too large")
-                    text = z.read(info).decode("utf-8", "replace")
-                    _, issues = validate_config(text, app.settings.get("port"), I().has_authkey())
-                    if any(i["level"] == "error" for i in issues):
-                        return self.send(400, {"ok": False, "error": "The imported config has errors", "issues": issues})
-                if q.get("settings", "1") == "1" and "easyserver-export.json" in names:
-                    if z.getinfo("easyserver-export.json").file_size > 1024 * 1024:
-                        return self.fail(400, "easyserver-export.json is too large")
-                    try:
-                        meta = json.loads(z.read("easyserver-export.json") or b"{}")
-                    except ValueError:
-                        meta = None
-                    s = meta.get("settings") if isinstance(meta, dict) else None
-                    if isinstance(s, dict):
-                        try:
-                            allowed = clean_settings(s)
-                        except ValueError as e:
-                            return self.fail(400, "Imported settings: %s" % e)
-                        if smtp_target_changed(allowed) and app.secrets.has("SMTP_PASSWORD"):
-                            # never send the saved email password to a mail server from a file
-                            for k in ("smtp_host", "smtp_user", "smtp_port", "smtp_security"):
-                                allowed.pop(k, None)
-                            report["skipped"].append("email server settings (keeps your current mail server)")
-                        app.settings.update(allowed)
-                        report["settings"] = True
-                if "allowlist.txt" in names and z.getinfo("allowlist.txt").file_size < 256 * 1024:
-                    lines = z.read("allowlist.txt").decode("utf-8", "replace").splitlines()
-                    on = any(re.fullmatch(r"mode\s*=\s*on", l.strip(), re.I) for l in lines)
-                    try:
-                        listed = clean_allow_names([l for l in lines if l.strip() and not l.strip().startswith("#")
-                                                    and not re.fullmatch(r"mode\s*=\s*\w+", l.strip())])
-                        write_allowlist(on and bool(listed), listed)
-                        report["allowlist"] = len(listed)
-                    except ValueError:
-                        report["skipped"].append("allowlist.txt")
-                for extra, rd, wr in (("extras.txt", read_extras, write_extras), ("moderation.txt", read_mod, write_mod),
-                                      ("messages.txt", read_messages, write_messages)):
-                    if extra in names and z.getinfo(extra).file_size < 256 * 1024:
-                        shared_write(os.path.join(I().STATS_DIR, extra), z.read(extra).decode("utf-8", "replace"))
-                        wr(rd())                     # re-written through the checks
-                        report.setdefault("restored", []).append(extra)
-                if "bans.txt" in names and z.getinfo("bans.txt").file_size < 256 * 1024:
-                    shared_write(I().BANS_FILE, z.read("bans.txt").decode("utf-8", "replace"))
-                    write_bans(read_bans())
-                    report.setdefault("restored", []).append("bans.txt")
-                if q.get("mods", "1") == "1":
-                    total = 0
-                    for n in names:
-                        m = re.fullmatch(r"(mods|mods-disabled)/([^/]+)", n)
-                        if not m:
-                            if n not in ("ServerConfig.toml", "easyserver-export.json", "modpack.json", "README.txt") + STATS_EXPORT and not n.endswith("/"):
-                                report["skipped"].append(n[:120])
-                            continue
-                        name = safe_zip_name(m.group(2))
-                        if not name:
-                            report["skipped"].append(n[:120])
-                            continue
-                        zi = z.getinfo(n)
-                        # zip bombs: a tiny entry that unpacks to many GB fills the disk
-                        total += zi.file_size
-                        if (zi.file_size > 4 * 1024 ** 3 or total > 40 * 1024 ** 3 or
-                                (zi.file_size > 50 * 1024 ** 2 and zi.file_size > 200 * max(zi.compress_size, 1)) or
-                                shutil.disk_usage(UPLOAD_TMP).free < zi.file_size + 1024 ** 3):
-                            report["skipped"].append(n[:120] + " (too large)")
-                            if zi.file_size > 200 * max(zi.compress_size, 1):
-                                app.alerts.raise_("import-bomb", "An imported backup contained a zip bomb",
-                                                  "%s unpacks to %d MB from %d KB. It was skipped. Only import backups "
-                                                  "you made yourself." % (n[:80], zi.file_size // 2 ** 20, zi.compress_size // 1024))
-                            continue
-                        tdir = tempfile.mkdtemp(dir=UPLOAD_TMP, prefix=".imp-")
-                        try:
-                            dest_tmp = os.path.join(tdir, name)
-                            with z.open(zi) as src, open(dest_tmp, "wb") as dst:
-                                shutil.copyfileobj(src, dst)   # stops at the size listed above
-                            r = modscan.scan(dest_tmp)
-                            if r["verdict"] == "blocked":
-                                report["mods_blocked"].append({"name": name, "reasons": r["reasons"]})
-                                continue
-                            if not IS_WIN:
-                                os.chmod(dest_tmp, 0o664)
-                            final = os.path.join(I().CLIENT_DIR if m.group(1) == "mods" else I().DISABLED_DIR, name)
-                            shutil.move(dest_tmp, final)
-                            modscan.remember(final, r.get("sha256"))
-                            report["mods_added"].append(name)
-                        finally:
-                            shutil.rmtree(tdir, ignore_errors=True)
-            if only_mods:
-                report["modpack"] = True
-                if report["mods_added"]:
-                    app.config_changed()
-                return self.send(200, {"ok": True, "report": report, "note": "Added %d mod%s from the modpack." % (
-                    len(report["mods_added"]), "" if len(report["mods_added"]) == 1 else "s") + (" " + app.applied_note() if report["mods_added"] else "")})
-            old_port = (toml_parse(app.read_config_text())[0].get("General") or {}).get("Port")
-            text = app.move_plaintext_authkey(text)
-            app.write_config_text(text)
-            report["config"] = True
-            new_port = (toml_parse(text)[0].get("General") or {}).get("Port")
-            if isinstance(new_port, int) and new_port != old_port and not IS_WIN:
-                control("firewall-game", old=old_port if isinstance(old_port, int) else None, new=new_port, timeout=30)
-                app.notifier.add("network", "Server port changed", "Import changed the port %s -> %d. "
-                                 "Remember to forward the new port on your router." % (old_port, new_port))
-            self.send(200, {"ok": True, "report": report, "note": app.applied_note()})
+            return self._import_zip(tmp, q)
         finally:
             try:
                 os.remove(tmp)
             except OSError:
                 pass
+
+    def post_backups_restore(self, q):
+        """Put a nightly backup back with one click - no download and upload. A backup of how things are right
+        now is made first, so a restore can be undone. Mods in the backup only come back when asked for."""
+        b = self.body_json()
+        name = str(b.get("file") or "")
+        if not any(x["file"] == name for x in list_backups(I().id)):
+            return self.fail(404, "No such backup")
+        fd, tmp = tempfile.mkstemp(suffix=".zip", dir=DATA_DIR)
+        os.close(fd)
+        try:
+            shutil.copyfile(os.path.join(BACKUP_DIR, name), tmp)   # copied first: the backup below can't replace it
+            try:
+                undo = make_backup(I(), False)
+            except Exception as e:
+                return self.fail(500, "Couldn't save the current settings first, so nothing was restored (%s)" % short_err(e))
+            self._restore_undo = undo
+            return self._import_zip(tmp, {"settings": "1", "mods": "1" if b.get("mods") is True else "0"})
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+    def _import_zip(self, tmp, q):
+        """Apply an export / backup zip (the file at tmp) to the current server."""
+        app = APP
+        report = {"config": False, "settings": False, "mods_added": [], "mods_blocked": [], "skipped": []}
+        try:
+            z = zipfile.ZipFile(tmp)
+        except zipfile.BadZipFile:
+            return self.fail(400, "That isn't an export file (.zip)")
+        with z:
+            names = z.namelist()
+            only_mods = "ServerConfig.toml" not in names and "modpack.json" in names
+            if not only_mods:
+                if "ServerConfig.toml" not in names:
+                    return self.fail(400, "No ServerConfig.toml or modpack.json in this file")
+                info = z.getinfo("ServerConfig.toml")
+                if info.file_size > 200000:
+                    return self.fail(400, "ServerConfig.toml is too large")
+                text = z.read(info).decode("utf-8", "replace")
+                _, issues = validate_config(text, app.settings.get("port"), I().has_authkey())
+                if any(i["level"] == "error" for i in issues):
+                    return self.send(400, {"ok": False, "error": "The imported config has errors", "issues": issues})
+            if q.get("settings", "1") == "1" and "easyserver-export.json" in names:
+                if z.getinfo("easyserver-export.json").file_size > 1024 * 1024:
+                    return self.fail(400, "easyserver-export.json is too large")
+                try:
+                    meta = json.loads(z.read("easyserver-export.json") or b"{}")
+                except ValueError:
+                    meta = None
+                s = meta.get("settings") if isinstance(meta, dict) else None
+                if isinstance(s, dict):
+                    try:
+                        allowed = clean_settings(s)
+                    except ValueError as e:
+                        return self.fail(400, "Imported settings: %s" % e)
+                    if smtp_target_changed(allowed) and app.secrets.has("SMTP_PASSWORD"):
+                        # never send the saved email password to a mail server from a file
+                        for k in ("smtp_host", "smtp_user", "smtp_port", "smtp_security"):
+                            allowed.pop(k, None)
+                        report["skipped"].append("email server settings (keeps your current mail server)")
+                    app.settings.update(allowed)
+                    report["settings"] = True
+            if "allowlist.txt" in names and z.getinfo("allowlist.txt").file_size < 256 * 1024:
+                lines = z.read("allowlist.txt").decode("utf-8", "replace").splitlines()
+                on = any(re.fullmatch(r"mode\s*=\s*on", l.strip(), re.I) for l in lines)
+                try:
+                    listed = clean_allow_names([l for l in lines if l.strip() and not l.strip().startswith("#")
+                                                and not re.fullmatch(r"mode\s*=\s*\w+", l.strip())])
+                    write_allowlist(on and bool(listed), listed)
+                    report["allowlist"] = len(listed)
+                except ValueError:
+                    report["skipped"].append("allowlist.txt")
+            for extra, rd, wr in (("extras.txt", read_extras, write_extras), ("moderation.txt", read_mod, write_mod),
+                                  ("messages.txt", read_messages, write_messages)):
+                if extra in names and z.getinfo(extra).file_size < 256 * 1024:
+                    shared_write(os.path.join(I().STATS_DIR, extra), z.read(extra).decode("utf-8", "replace"))
+                    wr(rd())                     # re-written through the checks
+                    report.setdefault("restored", []).append(extra)
+            if "bans.txt" in names and z.getinfo("bans.txt").file_size < 256 * 1024:
+                shared_write(I().BANS_FILE, z.read("bans.txt").decode("utf-8", "replace"))
+                write_bans(read_bans())
+                report.setdefault("restored", []).append("bans.txt")
+            if q.get("mods", "1") == "1":
+                total = 0
+                for n in names:
+                    m = re.fullmatch(r"(mods|mods-disabled)/([^/]+)", n)
+                    if not m:
+                        if n not in ("ServerConfig.toml", "easyserver-export.json", "modpack.json", "README.txt") + STATS_EXPORT and not n.endswith("/"):
+                            report["skipped"].append(n[:120])
+                        continue
+                    name = safe_zip_name(m.group(2))
+                    if not name:
+                        report["skipped"].append(n[:120])
+                        continue
+                    zi = z.getinfo(n)
+                    # zip bombs: a tiny entry that unpacks to many GB fills the disk
+                    total += zi.file_size
+                    if (zi.file_size > 4 * 1024 ** 3 or total > 40 * 1024 ** 3 or
+                            (zi.file_size > 50 * 1024 ** 2 and zi.file_size > 200 * max(zi.compress_size, 1)) or
+                            shutil.disk_usage(UPLOAD_TMP).free < zi.file_size + 1024 ** 3):
+                        report["skipped"].append(n[:120] + " (too large)")
+                        if zi.file_size > 200 * max(zi.compress_size, 1):
+                            app.alerts.raise_("import-bomb", "An imported backup contained a zip bomb",
+                                              "%s unpacks to %d MB from %d KB. It was skipped. Only import backups "
+                                              "you made yourself." % (n[:80], zi.file_size // 2 ** 20, zi.compress_size // 1024))
+                        continue
+                    tdir = tempfile.mkdtemp(dir=UPLOAD_TMP, prefix=".imp-")
+                    try:
+                        dest_tmp = os.path.join(tdir, name)
+                        with z.open(zi) as src, open(dest_tmp, "wb") as dst:
+                            shutil.copyfileobj(src, dst)   # stops at the size listed above
+                        r = modscan.scan(dest_tmp)
+                        if r["verdict"] == "blocked":
+                            report["mods_blocked"].append({"name": name, "reasons": r["reasons"]})
+                            continue
+                        if not IS_WIN:
+                            os.chmod(dest_tmp, 0o664)
+                        final = os.path.join(I().CLIENT_DIR if m.group(1) == "mods" else I().DISABLED_DIR, name)
+                        shutil.move(dest_tmp, final)
+                        modscan.remember(final, r.get("sha256"))
+                        report["mods_added"].append(name)
+                    finally:
+                        shutil.rmtree(tdir, ignore_errors=True)
+        if only_mods:
+            report["modpack"] = True
+            if report["mods_added"]:
+                app.config_changed()
+            return self.send(200, {"ok": True, "report": report, "note": "Added %d mod%s from the modpack." % (
+                len(report["mods_added"]), "" if len(report["mods_added"]) == 1 else "s") + (" " + app.applied_note() if report["mods_added"] else "")})
+        old_port = (toml_parse(app.read_config_text())[0].get("General") or {}).get("Port")
+        text = app.move_plaintext_authkey(text)
+        app.write_config_text(text)
+        report["config"] = True
+        new_port = (toml_parse(text)[0].get("General") or {}).get("Port")
+        if isinstance(new_port, int) and new_port != old_port and not IS_WIN:
+            control("firewall-game", old=old_port if isinstance(old_port, int) else None, new=new_port, timeout=30)
+            app.notifier.add("network", "Server port changed", "Import changed the port %s -> %d. "
+                             "Remember to forward the new port on your router." % (old_port, new_port))
+        undo = getattr(self, "_restore_undo", None)
+        note = app.applied_note()
+        if undo:
+            note = "Backup restored. How things were just before is saved as a backup too, if you want it back. " + note
+        self.send(200, {"ok": True, "report": report, "note": note, "undo": undo})
 
 
 def clean_settings(b):
