@@ -239,5 +239,86 @@ test("suggestions can be switched off", function()
   eq(esOnChat(1, "Alice", "/tpacept"), 1, "typos still answered")
 end)
 
+-- ------------------------------------------------------------------ reports, vote kick, chat history
+local realTime, shift = os.time, 0
+os.time = function(...) if select("#", ...) > 0 then return realTime(...) end return realTime() + shift end
+local function read(name) local f = io.open(DIR .. name, "r") if not f then return "" end local t = f:read("a") f:close() return t end
+write("moderation.txt", "admins=Boss\nfilter=on\nwords=badword\nspam=off\nantibot=off\nreport=on\nvotekick=on\nvotekick_min=3\nchatlog=on\n")
+shift = shift + 300                       -- past the 10-second cache and the 2-minute "just joined" wait
+esOnAuth("Boss", "", false, { ip = "1.2.3.4" })    -- the real admin account (an earlier test logged in a guest "Boss")
+
+test("/report tells the admins and the dashboard", function()
+  eq(esOnChat(1, "Alice", "/report Bob ramming at spawn"), 1)
+  assert(read("events.log"):find('"ev":"report","name":"Alice","target":"Bob","reason":"ramming at spawn"', 1, true), "not logged")
+  assert(to(3)[1] and to(3)[1]:find("Alice reported Bob"), "admin not told")
+  assert(to(1)[1]:find("Thanks"), "reporter not answered")
+  chats = {}
+  esOnChat(1, "Alice", "/report Bob again")
+  assert(to(1)[1]:find("wait a minute"), "no spam limit")
+  esOnChat(2, "Bob", "/report Bob x")
+  assert(to(2)[1]:find("yourself"), "self report")
+  esOnChat(2, "Bob", "/report Nobody x")
+  assert(to(2)[2]:find("No player"), "unknown player")
+end)
+
+test("chat history keeps messages and marks hidden ones", function()
+  esOnChat(2, "Bob", "hello there")
+  esOnChat(2, "Bob", "you badword")
+  local c = read("chat.log")
+  assert(c:find('"name":"Bob","msg":"hello there"}', 1, true), "message not kept")
+  assert(c:find('"msg":"you badword","hid":1', 1, true), "blocked message not marked")
+end)
+
+test("vote kick needs no admin online and a majority", function()
+  esOnChat(1, "Alice", "/votekick Bob trolling")
+  assert(to(1)[1]:find("admin is online"), "vote allowed with an admin online")
+  players[3] = nil
+  players[4], players[5] = "Carol", "Dave"
+  chats = {}
+  esOnChat(1, "Alice", "/votekick Boss x")
+  esOnChat(1, "Alice", "/votekick Bob trolling")
+  assert(to(-1)[1]:find("started a vote to kick Bob"), "vote not started: " .. tostring(to(-1)[1]))
+  eq(#dropped, 0, "kicked too early")
+  esOnChat(2, "Bob", "/yes")
+  assert(to(2)[1]:find("about you"), "target voted")
+  esOnJoined(5)                                 -- Dave just (re)joined: can't vote yet
+  esOnChat(5, "Dave", "/yes")
+  assert(to(5)[#to(5)]:find("2 minutes"), "new arrival voted")
+  eq(#dropped, 0, "kicked without a majority")
+  esOnChat(4, "Carol", "/yes")
+  eq(dropped[#dropped], 2, "Bob not kicked")
+  assert(read("events.log"):find('"ev":"ban","name":"Bob","by":"vote kick"', 1, true), "ban not sent to the dashboard")
+  local why = esOnAuth("Bob", "", false, { ip = "5.6.7.8" })
+  assert(why and why:find("banned"), "kicked player can rejoin: " .. tostring(why))
+  players[3], players[4], players[5] = "Boss", nil, nil
+end)
+
+test("a failed vote kick ends after 90 seconds", function()
+  players[4], players[5], players[6] = "Carol", "Dave", "Eve"
+  players[3] = nil
+  chats = {}
+  esOnChat(4, "Carol", "/votekick Dave camping")
+  shift = shift + 100
+  esModTick()
+  assert(to(-1)[#to(-1)]:find("failed"), "vote didn't end")
+  chats = {}
+  esOnChat(6, "Eve", "/votekick Dave again")
+  assert(to(6)[1]:find("failed just now"), "same player voted on again right away")
+  players[3], players[4], players[5], players[6] = "Boss", nil, nil, nil
+end)
+
+test("reports and vote kick can be switched off", function()
+  write("moderation.txt", "admins=Boss\nreport=off\nvotekick=off\nchatlog=off\n")
+  shift = shift + 20
+  local before = read("chat.log")
+  esOnChat(1, "Alice", "/report Bob x")
+  assert(to(1)[1]:find("turned off"), "report not off")
+  esOnChat(1, "Alice", "/votekick Bob x")
+  assert(to(1)[2]:find("turned off"), "vote kick not off")
+  esOnChat(1, "Alice", "secret")
+  eq(read("chat.log"), before, "chat kept while off")
+end)
+os.time = realTime
+
 _print(string.format("%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)
