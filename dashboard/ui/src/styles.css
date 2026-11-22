@@ -227,3 +227,90 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 .oops h2{margin:0}
 .oops p{margin:6px 0 12px;overflow-wrap:anywhere}
 .oops.page{margin-top:24px;max-width:560px}
+
+/* ================= Glass look (default; "Classic" switches it off) =================
+   Frosted, see-through panels over a soft night-track glow: blue from the logo and the warm
+   orange of its power line. The panels blur what's behind them, catch a light edge on top and
+   sit a little above the page. People who ask their system for less transparency get solid
+   panels with the same shapes. */
+html[data-look=glass]{
+  --r:18px;
+  --glass:rgba(255,255,255,.44);--glass-2:rgba(255,255,255,.34);--glass-edge:rgba(255,255,255,.75);
+  --sheen:linear-gradient(160deg,rgba(255,255,255,.55),rgba(255,255,255,0) 42%);
+  --surface:var(--glass);--surface-2:rgba(255,255,255,.42);
+  --line:rgba(20,30,60,.09);--line-strong:rgba(20,30,60,.16);
+  --accent-soft:rgba(42,120,214,.16);
+  --shadow:0 10px 34px rgba(30,50,90,.10),0 1px 2px rgba(30,50,90,.06);
+  --blur:blur(22px) saturate(170%);
+}
+html[data-look=glass][data-theme=dark]{
+  --glass:rgba(30,34,46,.52);--glass-2:rgba(40,46,62,.42);--glass-edge:rgba(255,255,255,.14);
+  --sheen:linear-gradient(160deg,rgba(255,255,255,.10),rgba(255,255,255,0) 40%);
+  --surface-2:rgba(255,255,255,.07);
+  --line:rgba(255,255,255,.08);--line-strong:rgba(255,255,255,.16);
+  --accent-soft:rgba(57,135,229,.22);
+  --shadow:0 14px 40px rgba(0,0,0,.38);
+}
+html[data-look=glass] body{
+  background:
+    radial-gradient(60vmax 50vmax at 8% -10%,rgba(47,140,255,.55),transparent 62%),
+    radial-gradient(55vmax 45vmax at 105% 18%,rgba(255,138,60,.42),transparent 60%),
+    radial-gradient(70vmax 50vmax at 50% 115%,rgba(23,71,184,.38),transparent 65%),
+    linear-gradient(180deg,#e6eefb,#f5ebe3);
+  background-attachment:fixed;
+}
+html[data-look=glass][data-theme=dark] body{
+  background:
+    radial-gradient(60vmax 50vmax at 6% -12%,rgba(47,140,255,.36),transparent 62%),
+    radial-gradient(55vmax 45vmax at 108% 22%,rgba(255,101,22,.22),transparent 60%),
+    radial-gradient(70vmax 55vmax at 45% 118%,rgba(64,40,160,.32),transparent 66%),
+    linear-gradient(180deg,#0b0f1c,#120f17);
+  background-attachment:fixed;
+}
+/* the panels */
+html[data-look=glass] :is(.card,.side,.mobilebar,.banner,.modalbg .card,.rv,.authcard){
+  background:var(--sheen),var(--glass);
+  -webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);
+  border:1px solid var(--glass-edge);
+  box-shadow:inset 0 1px 0 var(--glass-edge),var(--shadow);
+}
+html[data-look=glass] .card .card{background:var(--glass-2);box-shadow:inset 0 1px 0 var(--glass-edge);-webkit-backdrop-filter:none;backdrop-filter:none}
+html[data-look=glass] .side{border-width:0 1px 0 0;border-radius:0;box-shadow:inset -1px 0 0 var(--glass-edge)}
+html[data-look=glass] .mobilebar{border-width:0 0 1px;border-radius:0}
+html[data-look=glass] .card.tight{border-radius:var(--r)}
+html[data-look=glass] th{background:rgba(127,140,170,.08)}
+/* buttons and fields: rounder, glassy, with a light top edge */
+html[data-look=glass] .btn{border-radius:999px;padding:7px 15px;background:var(--glass-2);border-color:var(--glass-edge);box-shadow:inset 0 1px 0 var(--glass-edge);transition:transform .12s,background-color .15s,box-shadow .15s}
+html[data-look=glass] .btn.sm{padding:4px 12px}
+html[data-look=glass] .btn:hover{border-color:var(--glass-edge);background:var(--glass)}
+html[data-look=glass] .btn:active:not(:disabled){transform:scale(.97)}
+html[data-look=glass] .btn.primary{background:linear-gradient(180deg,#4a92ec,#2a78d6);border-color:rgba(255,255,255,.35);color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.45),0 6px 18px rgba(42,120,214,.35)}
+html[data-look=glass] .btn.ghost{background:transparent;box-shadow:none;border-color:transparent}
+html[data-look=glass] :is(input[type=text],input[type=password],input[type=number],input[type=email],input[type=time],select,textarea){background:var(--glass-2);border-color:var(--line-strong);border-radius:12px}
+html[data-look=glass] .nav{border-radius:12px}
+html[data-look=glass] .nav.active{background:var(--glass);box-shadow:inset 0 1px 0 var(--glass-edge),0 4px 14px rgba(30,50,90,.10)}
+html[data-look=glass] .iconbtn{border-radius:12px}
+html[data-look=glass] .pill,html[data-look=glass] .badge{background:var(--glass-2);border-color:var(--glass-edge)}
+html[data-look=glass] .issue{border-radius:12px}
+html[data-look=glass] .seg{border-radius:999px;border-color:var(--glass-edge);background:var(--glass-2)}
+html[data-look=glass] .seg button.on{background:var(--glass);box-shadow:inset 0 1px 0 var(--glass-edge)}
+html[data-look=glass] .toggle input{background:rgba(120,130,150,.35)}
+html[data-look=glass] .toggle input:checked{background:#34c759}
+html[data-look=glass] #toast{background:rgba(20,24,34,.72);color:#fff;-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);border:1px solid rgba(255,255,255,.18);border-radius:999px;padding:10px 18px}
+html[data-look=glass] .modalbg,html[data-look=glass] .rv-back{background:rgba(10,14,24,.32);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
+html[data-look=glass] .skel{background:rgba(127,140,170,.16)}
+/* less see-through when the system asks for it, or when the browser can't blur */
+@media (prefers-reduced-transparency:reduce){
+  html[data-look=glass]{--glass:var(--solid,#fbfbfd);--glass-2:#f1f2f6}
+  html[data-look=glass][data-theme=dark]{--glass:#1b1e27;--glass-2:#232734}
+  html[data-look=glass] :is(.card,.side,.mobilebar,.banner,.modalbg .card,.rv,.authcard,#toast){-webkit-backdrop-filter:none;backdrop-filter:none}
+}
+@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){
+  html[data-look=glass]{--glass:rgba(252,252,253,.94);--glass-2:rgba(240,241,246,.94)}
+  html[data-look=glass][data-theme=dark]{--glass:rgba(27,30,39,.96);--glass-2:rgba(35,39,52,.96)}
+}
+@media (max-width:860px){
+  html[data-look=glass] .mobilebar{margin:8px 8px 0;top:8px;border-radius:999px;border-width:1px;padding:5px}
+  html[data-look=glass] .mobilebar .nav{border-radius:999px}
+}
+@media (max-width:520px){.banner{flex-wrap:wrap}}
