@@ -220,6 +220,7 @@ async function openInvite() {
   $("#inv_credit", bg).onchange = () => { fill(); api("/api/invite", { json: { credit: $("#inv_credit", bg).checked } }).catch(() => {}); };
   bg.querySelector("[data-x]").onclick = () => bg.remove();
   $("#inv_copy", bg).onclick = async () => {
+    api("/api/checklist", { json: { invited: true } }).catch(() => {});   // ticks "Invite your friends" off
     if (view === "net") api("/api/upnp", { json: { open_for: 7200 } }).catch(() => {});   // "only when needed": friends are about to join
     if (await copyText($("#inv_t", bg).value)) { toast("Invite copied - paste it in Discord"); } else { $("#inv_t", bg).removeAttribute("readonly"); $("#inv_t", bg).select(); toast("Press Ctrl+C to copy"); } };
 }
@@ -240,6 +241,7 @@ applyTheme();
 
 /* ------------------------------------------------------------------ icons */
 const I = {
+  search: '<path d="M10 4a6 6 0 1 0 3.7 10.7l4.8 4.8 1.4-1.4-4.8-4.8A6 6 0 0 0 10 4zm0 2a4 4 0 1 1 0 8 4 4 0 0 1 0-8z"/>',
   glass: '<path d="M12 3c-5 0-9 3.6-9 8.5 0 4 2.8 7.4 6.7 8.3.8.2 1.3-.5 1.1-1.2l-.4-1.4c-.2-.8.4-1.5 1.2-1.5h2.7c3.1 0 5.7-2.4 5.7-5.5C20 6.2 16.4 3 12 3zm-5 9a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm3-4a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm4 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm3 4a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/>',
   overview: '<path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/>',
   config: '<path d="M19.4 13a7.6 7.6 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.4 7.4 0 0 0-1.7-1L15 3h-4l-.3 2.9a7.4 7.4 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.6 7.6 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.4 7.4 0 0 0 1.7 1L11 21h4l.3-2.9a7.4 7.4 0 0 0 1.7-1l2.5 1 2-3.5L19.4 13zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z"/>',
