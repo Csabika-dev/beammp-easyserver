@@ -1481,6 +1481,25 @@
   "✕ Higher latency (more lag)": "✕ Większe opóźnienie (więcej lagu)",
   "💤 Going to sleep in a few seconds": "💤 Zasypia za kilka sekund",
   "💤 Going to sleep in a few seconds…": "💤 Zasypia za kilka sekund…",
-  "🛡 Active checks: {}. {}": "🛡 Aktywne sprawdzenia: {}. {}"
+  "🛡 Active checks: {}. {}": "🛡 Aktywne sprawdzenia: {}. {}",
+  "Forward port {} TCP + UDP to": "Przekieruj port {} TCP + UDP na",
+  "Friends outside your home can only join when your router forwards port {} (TCP + UDP) to this computer. Most routers let the dashboard do that itself (UPnP) - one click, no router settings page. It's checked every 20 minutes and put back after a router restart.": "Znajomi spoza domu mogą dołączyć tylko wtedy, gdy router przekierowuje port {} (TCP + UDP) na ten komputer. Większość routerów pozwala, by panel zrobił to sam (UPnP) – jedno kliknięcie, bez strony ustawień routera. Jest to sprawdzane co 20 minut i przywracane po restarcie routera.",
+  "No luck? Forward port {} TCP + UDP to": "Nie działa? Przekieruj ręcznie port {} TCP + UDP na",
+  "Server health report": "Raport stanu serwera",
+  "The dashboard re-checks every 30 minutes and saves a report by itself when something breaks.": "Panel sprawdza ponownie co 30 minut i sam zapisuje raport, gdy coś się zepsuje.",
+  "Your Mac asked the router to open port {} but it said no ({}). Forward port {} TCP + UDP to": "Twój Mac poprosił router o otwarcie portu {}, ale odmówił ({}). Przekieruj port {} TCP + UDP na",
+  "Your Mac asked the router to open port {} but it said no. Forward port {} TCP + UDP to": "Twój Mac poprosił router o otwarcie portu {}, ale odmówił. Przekieruj port {} TCP + UDP na",
+  "Your Mac asks the router to keep port {} (TCP + UDP) open to": "Twój Mac prosi router, by trzymał port {} (TCP + UDP) otwarty na",
+  "by hand in your router's settings page (search \"": "ręcznie na stronie ustawień routera (wyszukaj „",
+  "by hand in your router's settings page, or turn on \"Hide my IP\" (Settings).": "ręcznie na stronie ustawień routera albo włącz „Ukryj moje IP” (Ustawienia).",
+  "in your router's settings page (search \"": "na stronie ustawień routera (wyszukaj „",
+  "while the Mac is on, and checks it every 20 minutes (last time {}).": "póki Mac jest włączony, i sprawdza to co 20 minut (ostatnio {}).",
+  "while the Mac is on, and checks it every 20 minutes.": "póki Mac jest włączony, i sprawdza to co 20 minut.",
+  "{} problem": "{} problem",
+  "{} problems": "{} problemy",
+  "{} warning": "{} ostrzeżenie",
+  "{} warnings": "{} ostrzeżenia",
+  "· internet address": "· adres internetowy",
+  "· this computer": "· ten komputer"
  }
 }
