@@ -34,6 +34,14 @@ export default {
     license: "Licencja MIT. Nie jest tworzony przez zespół BeamMP ani BeamNG GmbH i nie jest z nimi powiązany. EasyServer opiera się na ich pracy oraz pracy wielu autorów modów i pluginów: [zobacz podziękowania]({GH}#-credits).",
     tryTitle: "Wypróbuj na swoim PC",
     viewOnGithub: "Zobacz na GitHubie",
+    downloadFor: "Pobierz na {os}",
+    downloadVFor: "Pobierz {v} na {os}",
+    setupFor: "Zainstaluj na {os}",
+    macRolling: "Mac: wersja Rolling (eksperymentalna)",
+    onPhone: "Pobierz na komputer",
+    otherSystems: "Inne systemy i wersje",
+    themeDark: "Włącz tryb ciemny",
+    themeLight: "Włącz tryb jasny",
   },
 
   tour: {
@@ -329,5 +337,17 @@ export default {
       ["Pluginy serwera", "Instaluj tryby gry od społeczności, jak CareerMP, freeRoamMP i BeamJoy, prosto ze strony każdego autora."],
       ["Prowadźcie go zespołem", "Zaproś znajomych linkiem, który działa raz i wygasa po godzinie, i wybierz, co każdy może robić na każdym serwerze. Mogą logować się przez Discorda."],
     ],
+  },
+  notFound: {
+    title: "Nie znaleziono strony - BeamMP EasyServer",
+    h1: "404: zły zakręt",
+    joke: "Ta strona rozbiła się mocniej niż auto w BeamNG przy pełnej prędkości i nie ma dla niej przycisku resetu.",
+    text: "Skoro już tu jesteś, sprawdź, jak daleko dojedziesz.",
+    start: "Naciśnij spację albo dotknij drogi, żeby ruszyć",
+    again: "Rozbity! Naciśnij spację albo dotknij, żeby spróbować jeszcze raz",
+    best: "Rekord",
+    gameLabel: "Minigra: samochód przeskakuje pachołki i opony",
+    home: "Wróć na stronę główną",
+    help: "Pomoc i FAQ",
   },
 };
