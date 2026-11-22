@@ -100,6 +100,7 @@ def add(t, where):
     if re.fullmatch(r"\{\}[\w\-]+|[\w\-]+\{\}", t): return
     if t.startswith(("http", "/api/", "#", ".", "&", "M{}")) or re.search(r"[;{}]\s*$", t.replace("{}", "")) : return
     if re.search(r"^(var\(|rgba?\(|\d+px|[a-z-]+:)", t) or t == "noopener noreferrer": return
+    if t.startswith(("?", "[", "(prefers", "{}&")) or t in ("btn sm", "light dark", "Content-Type", "no language file", "Current") or "px," in t: return
     keys.setdefault(t, where)
 
 ATTR_RE = re.compile(r'\b(placeholder|title|aria-label|alt)="([^"]*)"')
@@ -146,8 +147,14 @@ for m in re.finditer(r'(\b' + CODE_ATTR + r'=)?"((?:[^"\\\n]|\\.)*)"', jsx):
     lit = unesc(m.group(2))
     if re.search(r"(className|cls)=\{[^}]*$", jsx[max(0, m.start() - 60):m.start()]): continue   # class names
     b4, af = jsx[:m.start()].rstrip()[-1:], jsx[m.end():].lstrip()[:2]
-    if lit and b4 == "+": lit = "{}" + lit
-    if lit and af[:1] == "+" and af != "++": lit = lit + "{}"
+    pb, pa = bool(lit) and b4 == "+", bool(lit) and af[:1] == "+" and af != "++"
+    if "\n" in lit:   # a pop-up: each line is translated on its own
+        pieces = lit.split("\n")
+        for k, piece in enumerate(pieces):
+            add(("{}" if pb and k == 0 else "") + piece + ("{}" if pa and k == len(pieces) - 1 else ""), "jsx")
+        continue
+    if pb: lit = "{}" + lit
+    if pa: lit = lit + "{}"
     if re.fullmatch(r"[#.\[\w\-=\]\s:>\"*,()/]+", lit) and not re.search(r"^[A-Z][a-z]", lit) and not re.search(r"[a-z] [a-z]", lit):
         continue
     add(lit, "jsx")
