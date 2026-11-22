@@ -27,6 +27,8 @@ export default {
   },
 
   common: {
+    // "What's new": {v} is the version from CHANGELOG.md.
+    newTitle: "Neu in {v}", newRolling: "Jetzt in Rolling. Sie kommen nach Stable, sobald sie getestet sind.", newStable: "Jetzt in der Stable-Version.",
     download: "Herunterladen",
     copy: "Kopieren", copied: "Kopiert", pressCtrlC: "Strg+C drücken",
     license: "MIT-Lizenz. Nicht vom BeamMP-Team oder der BeamNG GmbH erstellt oder mit ihnen verbunden. EasyServer baut auf ihrer Arbeit und der vieler Mod- und Plugin-Autoren auf: [zu den Credits]({GH}#-credits).",
@@ -105,14 +107,6 @@ export default {
         text: "Ein Link zeigt, ob der Server läuft, wer online ist, welche Mods man braucht und das nächste Event. Ohne Anmeldung, und ohne Adressen oder Einstellungen preiszugeben." },
     ],
 
-    newTitle: "Neu in 1.15",
-    newSub: "Jetzt in Rolling. Sie kommen nach Stable, sobald sie getestet sind.",
-    news: [
-      ["Fahrzeugregeln", "Requisiten, Anhänger oder beliebige Autos sperren und Spawn-Spam stoppen. Mod-Autos, die so schwer sind, dass alle ruckeln, werden automatisch erkannt."],
-      ["Server-Plugins", "Community-Spielmodi wie CareerMP, freeRoamMP und BeamJoy direkt von der Seite des jeweiligen Autors installieren."],
-      ["Als Team betreiben", "Lade Freunde mit einem Link ein, der einmal funktioniert und nach einer Stunde abläuft, und bestimme pro Server, was jeder darf. Anmeldung auch mit Discord."],
-    ],
-
     alsoTitle: "Auch dabei",
     alsoSub: "Alles optional. Schalte ein, was du brauchst.",
     also: [
@@ -189,12 +183,6 @@ export default {
       ["Spieler und Banns", ["Kicken, stummschalten und bannen im Dashboard, in Discord oder per Chatbefehl. Dazu gibt es eine Einladungsliste und den Wartungsmodus."]],
       ["Mods", ["Zieh ein Zip auf die Seite oder wähle eins aus dem BeamNG-Repository. Jede Mod wird auf Viren geprüft, bevor Spieler sie herunterladen.", "Teile deine ganze Mod-Liste mit einem kurzen Code, und der Server eines Freundes installiert dieselben Mods."]],
       ["Backups und Benachrichtigungen", ["Sichere deine Konfiguration und stelle sie wieder her. Bekomme eine Nachricht in Discord, per E-Mail, Telegram oder aufs Handy, wenn der Server abstürzt."]],
-    ],
-    newTitle: "Neu in 1.15", newSub: "Jetzt in der Rolling-Version. Sie kommen nach Stable, sobald sie getestet sind.",
-    newRows: [
-      ["Fahrzeugregeln", ["Requisiten, die riesigen Physik-Requisiten, Anhänger oder jedes Auto deiner Wahl sperren. Mod-Autos, die so schwer sind, dass alle ruckeln, werden automatisch erkannt.", "Dazu gibt es eine Spawn-Wartezeit und Presets für Renn- und Roleplay-Server."]],
-      ["Server-Plugins", ["Community-Spielmodi wie CareerMP, freeRoamMP und BeamJoy installieren. Sie werden von der Seite des jeweiligen Autors geladen, und du siehst vorher, welche Dateien wohin kommen."]],
-      ["Als Team betreiben", ["Schick einem Freund einen Einladungslink, der einmal funktioniert und nach einer Stunde abläuft. Gib ihm pro Server eine Rolle, etwa Zuschauer oder Moderator.", "Statt mit Passwort kann man sich mit Discord anmelden. Wer sich von außerhalb deines Heimnetzes anmeldet, braucht einen Code für die Zwei-Schritt-Anmeldung."]],
     ],
     closing: "Herunterladen, starten und den Schritten folgen. Die meisten sind nach etwa fünf Minuten online. Wenn du hängen bleibst, helfen die Hilfe-Seite und die Community.",
     footnote: "Die Mac-Version ist experimentell und nur in Rolling.",
@@ -331,6 +319,15 @@ export default {
         { ol: ["**Zustand → Diagnosebericht herunterladen**. Schlüssel, Passwörter und Adressen werden daraus entfernt.",
           "[Frag im Community-Forum]({ASK}) und hänge den Bericht an. Fehler gehören in die [Issues]({GH}/issues/new/choose)."] },
         "Ein Sicherheitsproblem gefunden? Bitte nutze die [private Meldung]({GH}/security/advisories/new), statt es öffentlich zu posten."]],
+    ],
+  },
+  // Translations of the "What's new" cards, by version. The cards themselves come from the
+  // <!-- website --> block in CHANGELOG.md; when a new version has no translation here yet, it shows in English.
+  whatsNew: {
+    "1.15": [
+      ["Fahrzeugregeln", "Requisiten, Anhänger oder beliebige Autos sperren und Spawn-Spam stoppen. Mod-Autos, die so schwer sind, dass alle ruckeln, werden automatisch erkannt."],
+      ["Server-Plugins", "Community-Spielmodi wie CareerMP, freeRoamMP und BeamJoy direkt von der Seite des jeweiligen Autors installieren."],
+      ["Als Team betreiben", "Lade Freunde mit einem Link ein, der einmal funktioniert und nach einer Stunde abläuft, und bestimme pro Server, was jeder darf. Anmeldung auch mit Discord."],
     ],
   },
 };
