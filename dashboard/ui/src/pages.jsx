@@ -1,7 +1,7 @@
 // Dashboard pages written in React. Each gets `reload` (bumped when the page should load again).
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import * as L from "./legacy.js";
-import { cacheGet, cachedApi, Skel, SkelPage } from "./ui.jsx";
+import { cacheGet, cachedApi, Empty, PageWait, Skel } from "./ui.jsx";
 
 const S = () => L.state();
 export const Ip = ({ children }) => <span className="ipb" title="Hidden - click to show">{children}</span>;
@@ -26,15 +26,15 @@ export function useApi(path, reload, deps = []) {
   useEffect(() => { load(); }, [load, reload, ...deps]);
   return [state.d, state.err, load];
 }
-const Wait = ({ err }) => err ? <div className="banner bad">{err}</div> : <SkelPage />;
+const Wait = ({ err, retry }) => <PageWait err={err} retry={retry} />;
 const Pill = ({ ok, yes, no }) => <span className={"pill " + (ok ? "good" : "warn")}><span className="dot" />{ok ? yes : no}</span>;
 
 /* ------------------------------------------------------------------ Updates */
 const isNew = (a, b) => { if (!a || !b) return false; const x = a.split(".").map(Number), y = b.split(".").map(Number); for (let i = 0; i < 3; i++) { if (x[i] !== y[i]) return x[i] > y[i]; } return false; };
 export function Updates({ reload }) {
-  const [d, err] = useApi("/api/updates", reload);
+  const [d, err, retry] = useApi("/api/updates", reload);
   const [busy, setBusy] = useState("");
-  if (!d) return <Wait err={err} />;
+  if (!d) return <Wait err={err} retry={retry} />;
   const srvNew = isNew(d.latest, d.installed), esNew = isNew(d.easy_latest, d.easy_installed), exp = d.channel === "experimental";
   const chan = c => async () => { try { await L.api("/api/updates/check", { json: { channel: c } }); L.toast(c === "stable" ? "Stable versions only" : "You'll hear about newer versions too"); } catch (e) { L.toast(e.message); } L.bridge.show("updates"); };
   const check = async () => { setBusy("check"); try { await L.api("/api/updates/check", { method: "POST" }); } catch (e) { L.toast(e.message); } setBusy(""); L.bridge.show("updates"); };
@@ -79,20 +79,26 @@ export function Updates({ reload }) {
 
 /* ------------------------------------------------------------------ Notifications */
 export function Notifications({ reload }) {
-  const [d, err] = useApi("/api/notifications", reload);
+  const [d, err, retry] = useApi("/api/notifications", reload);
+  const [cleared, setCleared] = useState(false);   // cleared, waiting for the Undo time to pass
   useEffect(() => { if (d && d.items.some(n => !n.read)) L.api("/api/notifications/read", { method: "POST" }).then(() => L.bridge.setUnread(0)).catch(() => {}); }, [d]);
-  if (!d) return <Wait err={err} />;
+  if (!d) return <Wait err={err} retry={retry} />;
+  const items = cleared ? [] : d.items;
   const read = async () => { await L.api("/api/notifications/read", { method: "POST" }); L.bridge.setUnread(0); L.bridge.show("notifications"); };
-  const clear = async () => { if (!confirm("Delete all notifications?")) return; await L.api("/api/notifications/clear", { method: "POST" }); L.bridge.setUnread(0); L.bridge.show("notifications"); };
+  const clear = () => {
+    setCleared(true); L.bridge.setUnread(0);
+    L.undoable("Notifications cleared.", "/api/notifications/clear", {}, { onUndo: () => setCleared(false), after: () => L.bridge.show("notifications") });
+  };
   return (<>
     <div className="row"><div><h1>Notifications</h1><p className="sub">Crashes, updates, blocked mods and security events. Choose where they're sent under Settings.</p></div><span className="spacer" />
-      <button className="btn" onClick={read}>Mark all read</button><button className="btn danger" onClick={clear}>Clear</button></div>
+      <button className="btn" onClick={read}>Mark all read</button><button className="btn danger" onClick={clear} disabled={!items.length}>Clear</button></div>
     <div className="card tight">
-      {d.items.length ? d.items.map((n, i) => (
+      {items.length ? items.map((n, i) => (
         <div key={i} className={"notif" + (n.read ? "" : " unread")}><span className={"lv " + n.level} /><div><b>{n.title}</b>
           <div className="small" style={{ whiteSpace: "pre-wrap" }}><Blur text={n.message} /></div>
           <div className="small muted">{L.fmtTime(n.t) + (n.delivery && n.delivery.length ? " · sent: " + n.delivery.join(", ") : "")}</div></div></div>
-      )) : <div className="notif"><span className="muted">Nothing yet.</span></div>}
+      )) : <Empty title="No notifications" actions={<button className="btn" onClick={() => L.bridge.show("settings")}>Choose where they're sent</button>}>
+        Crashes, updates, blocked mods and security events show up here, and on your phone or Discord if you turn that on.</Empty>}
     </div>
   </>);
 }
@@ -188,7 +194,7 @@ export function Logs({ reload }) {
             {i in open && <div className="xpl" style={{ whiteSpace: "normal", fontFamily: "inherit", margin: "4px 0 8px" }}>
               {open[i] === null ? <p className="small muted">…</p> : open[i] ? <Issue x={open[i]} /> : <div className="issue info"><span className="ic">i</span><span>Nothing known about this line.</span></div>}</div>}
           </Fragment>;
-        }) : <span className="muted">The log is empty.</span>}
+        }) : <span className="muted">The log is empty. It fills up once the server has started.</span>}
       </div>
     </>}
   </>);
@@ -299,7 +305,7 @@ export function Servers({ reload }) {
     const t = setInterval(() => { const m = document.getElementById("main"); if (m && !m.querySelector("[data-limopen]")) load(); }, 15000);
     return () => clearInterval(t);
   }, [load]);
-  if (!d) return <Wait err={err} />;
+  if (!d) return <Wait err={err} retry={load} />;
   return (<div ref={main}>
     <div className="row"><div><h1>Servers</h1><p className="sub">Run several BeamMP servers on this computer. Each has its own port, mods, config, allow-list and limits. The other pages show the server picked in the Server menu.</p></div></div>
     {d.servers.map(x => <ServerCard key={x.id + ":" + reload} x={x} sys={d.system} win={d.platform === "windows"} />)}
