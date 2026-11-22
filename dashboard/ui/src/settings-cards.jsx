@@ -167,14 +167,15 @@ export function StatusPage() {
   const P = d.preview;
   const save = () => {
     if (chk("sp_on") && !d.on && !confirm("Turn on the public status page? Anyone who can reach your dashboard address can see it without logging in.")) return;
-    post("/api/statuspage", { on: chk("sp_on"), players: chk("sp_players"), mods: chk("sp_mods"), credit: chk("sp_credit"), title: val("sp_title") }, 6000, again);
+    post("/api/statuspage", { on: chk("sp_on"), players: chk("sp_players"), mods: chk("sp_mods"), address: chk("sp_addr"), credit: chk("sp_credit"), title: val("sp_title") }, 6000, again);
   };
   return (<div className="card" style={{ margin: "0 0 16px" }} key={v}>
     <div className="row"><h2 style={{ margin: 0 }}>Public status page</h2><span className="spacer" /><Pill on={d.on}>{d.on ? "On" : "Off"}</Pill></div>
-    <p className="small muted">A simple page anyone can open without logging in: is the server up, how many players, the map, the next event and the uptime of the last 30 days. No addresses, settings or admin buttons. Also as JSON for bots and websites (<Mono>/status.json</Mono>).</p>
+    <p className="small muted">A simple page anyone can open without logging in: is the server up, how many players, the map, how to join, the next event, lap times and the uptime of the last 30 days. No settings or admin buttons, and no address unless you turn it on below. Also as JSON for bots and websites (<Mono>/status.json</Mono>).</p>
     <label className="toggle"><input type="checkbox" id="sp_on" defaultChecked={!!d.on} /><span><b>Turn on the status page</b></span></label>
     <Toggle id="sp_players" on={d.players} title="Show the names of online players">Off = only the number</Toggle>
     <Toggle id="sp_mods" on={d.mods} title="Show the mods and the download size">So players know what they'll download before they launch the game</Toggle>
+    <Toggle id="sp_addr" on={d.address} title="Show the address to join with">{d.relay ? "Your relay's address - your home IP stays hidden" : "BeamMP has no join links, so players copy the address into Direct Connect. This shows your home IP to anyone with the link - turn on Hide my IP first if that matters to you"}</Toggle>
     <Toggle id="sp_credit" on={d.credit} title={"\"Hosted with BeamMP EasyServer\" at the bottom"}>A small link, so players who want their own server can find it</Toggle>
     <label className="f"><span>Page title</span><input type="text" id="sp_title" maxLength={80} defaultValue={d.title} placeholder={P.title} /></label>
     {d.on && <p className="small">On your network: <a href={d.lan_url} target="_blank" rel="noopener">{d.lan_url}</a>{d.remote ? <><br />On the internet: <a href={d.url} target="_blank" rel="noopener">{d.url}</a></>
