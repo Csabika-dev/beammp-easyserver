@@ -192,3 +192,116 @@ export function Logs({ reload }) {
     </>}
   </>);
 }
+
+/* ------------------------------------------------------------------ Servers */
+const STATE = { running: ["good", "Running"], stopped: ["", "Stopped"], failed: ["bad", "Crashed"], starting: ["warn", "Starting"], restarting: ["warn", "Restarting"], stopping: ["warn", "Stopping"] };
+export function StatePill({ state }) {
+  const [cls, label] = STATE[state] || ["", state || "Unknown"];
+  return <span className={"pill " + cls}><span className="dot" />{label}</span>;
+}
+const MAPS = ["gridmap_v2", "west_coast_usa", "east_coast_usa", "utah", "italy", "jungle_rock_island", "industrial", "small_island", "automation_test_track", "hirochi_raceway", "johnson_valley", "derby", "driver_training"];
+const fmtCpu = c => c == null ? "-" : c < 0.01 ? "0" : c.toFixed(2);
+async function refreshServers() { L.setServers((await L.api("/api/servers")).servers); L.bridge.refreshShell(); }
+
+function ServerCard({ x, sys, win }) {
+  const { SERVER } = S(), lim0 = x.limits || {}, u = x.usage || {};
+  const [open, setOpen] = useState(false), [busy, setBusy] = useState(false);
+  const [lim, setLim] = useState({ cpu: lim0.cpu_cores || 0, ram: lim0.ram_mb || 0, up: lim0.upload_kbps || 0 });
+  const limText = [lim0.cpu_cores ? lim0.cpu_cores + (lim0.cpu_cores == 1 ? " core" : " cores") : "",
+    lim0.ram_mb ? (lim0.ram_mb >= 1024 ? (lim0.ram_mb / 1024).toFixed(1) + " GB" : lim0.ram_mb + " MB") + " RAM" : "",
+    lim0.upload_kbps ? (lim0.upload_kbps >= 1000 ? (lim0.upload_kbps / 1000).toFixed(1) + " Mbit/s" : lim0.upload_kbps + " kbit/s") + " mods" : ""].filter(Boolean).join(" · ") || "No limits";
+  const act = a => async () => {
+    if (a !== "start" && !confirm((a === "stop" ? "Stop " : "Restart ") + x.name + "? Players on it are disconnected.")) return;
+    if (a === "start" && !(await L.reviewGate(x.id))) return;
+    setBusy(true);
+    try { await L.api("/api/server/action", { json: { action: a }, headers: { "X-ES-Server": x.id } }); L.toast(a === "stop" ? x.name + " stopped" : x.name + " starting…"); } catch (e) { L.toast(e.message); }
+    setTimeout(() => L.bridge.show("servers"), 1500);
+  };
+  const saveLim = async () => { try { const r = await L.api("/api/servers/limits", { json: { id: x.id, cpu_cores: lim.cpu, ram_mb: lim.ram, upload_kbps: lim.up } }); L.toast(r.note, 8000); L.bridge.show("servers"); } catch (e) { L.toast(e.message); } };
+  const rename = async () => {
+    const n = prompt("New name for " + x.name + " (shown in this dashboard)", x.name);
+    if (!n) return;
+    try { await L.api("/api/servers/settings", { json: { id: x.id, name: n } }); await refreshServers(); L.bridge.show("servers"); } catch (e) { L.toast(e.message); }
+  };
+  const del = async () => {
+    const c = prompt("Delete " + x.name + " for good?\n\nIts config, mods, allow-list and player statistics are removed. This can't be undone.\n\nType the server's name to confirm:");
+    if (c === null) return;
+    try { const r = await L.api("/api/servers/delete", { json: { id: x.id, confirm: c } }); L.toast(r.note); if (S().SERVER === x.id) L.setServer("main"); await refreshServers(); L.bridge.show("servers"); } catch (e) { L.toast(e.message); }
+  };
+  return (
+    <div className="card" style={{ marginTop: 12 }} data-limopen={open ? "1" : undefined}>
+      <div className="row"><div><h2 style={{ margin: 0 }}>{x.name}{x.id === SERVER && <> <span className="badge">selected</span></>}</h2>
+        <p className="small muted" style={{ margin: "4px 0 0" }}>{"Port " + (x.port ?? "?") + " · " + (x.map || "?") + " · " + x.online + "/" + (x.max_players ?? "?") + " players" + (x.has_authkey ? "" : " · no AuthKey")}</p></div>
+        <span className="spacer" /><StatePill state={x.status.state} /></div>
+      <div className="grid g3" style={{ marginTop: 12 }}>
+        <div className="stat"><div className="label">CPU now</div><div className="value" style={{ fontSize: 20 }}>{fmtCpu(u.cpu_cores)}<span className="muted small"> cores</span></div></div>
+        <div className="stat"><div className="label">RAM now</div><div className="value" style={{ fontSize: 20 }}>{u.mem_mb == null ? "-" : u.mem_mb}<span className="muted small"> MB</span></div></div>
+        <div className="stat"><div className="label">Limits</div><div className="note" style={{ marginTop: 6 }}>{limText}</div></div>
+      </div>
+      <div className="row" style={{ marginTop: 12, flexWrap: "wrap" }}>
+        {x.id !== SERVER && <button className="btn sm primary" onClick={() => L.bridge.switchServer(x.id)}>Manage this server</button>}
+        {x.status.state === "running" ? <><button className="btn sm" disabled={busy} onClick={act("restart")}>Restart</button><button className="btn sm danger" disabled={busy} onClick={act("stop")}>Stop</button></>
+          : <button className="btn sm" disabled={busy} onClick={act("start")}>Start</button>}
+        <button className="btn sm" onClick={() => setOpen(!open)}>Limits…</button>
+        <button className="btn sm" onClick={rename}>Rename</button>
+        {x.id !== "main" && <button className="btn sm danger" onClick={del}>Delete</button>}
+      </div>
+      {open && <div style={{ marginTop: 12, borderTop: "1px solid var(--line)", paddingTop: 12 }}>
+        <p className="small muted">{"0 = no limit. This computer has " + sys.cpu_cores + " CPU cores" + (sys.ram_mb ? " and " + (sys.ram_mb / 1024).toFixed(1) + " GB RAM" : "") + ". " + (win ? "On Windows the CPU and RAM limits apply while the dashboard is running; the mod download limit needs a one-time Yes on the server PC." : "Applied right away, and again after every restart.")}</p>
+        <div className="lim">
+          <label className="f"><span>CPU (cores)</span><input type="number" step="0.25" min="0" max={sys.cpu_cores} value={lim.cpu} onChange={e => setLim({ ...lim, cpu: e.target.value })} /><small>e.g. 1.5 = one and a half cores</small></label>
+          <label className="f"><span>RAM (MB)</span><input type="number" step="256" min="0" value={lim.ram} onChange={e => setLim({ ...lim, ram: e.target.value })} /><small>The server restarts if it uses more</small></label>
+          <label className="f"><span>Mod downloads (kbit/s)</span><input type="number" step="1000" min="0" value={lim.up} onChange={e => setLim({ ...lim, up: e.target.value })} /><small>Upload speed for players downloading mods. 10000 = 10 Mbit/s</small></label>
+        </div>
+        <div className="row"><button className="btn primary sm" onClick={saveLim}>Apply limits</button></div>
+      </div>}
+    </div>
+  );
+}
+
+function AddServer({ servers }) {
+  const used = servers.map(x => x.port).filter(Boolean);
+  let next = 30814; while (used.includes(next) || next === 30815) next += 10;
+  const [f, setF] = useState({ clone_from: "", name: "", port: next, max_players: 8, map: "gridmap_v2", authkey: "", private: false, start: true });
+  const [busy, setBusy] = useState(false);
+  const set = k => e => setF({ ...f, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value });
+  const go = async () => {
+    if (!confirm("Create \"" + f.name + "\" on port " + f.port + "?\n\nThis changes your network settings:\n• This computer's firewall opens port " + f.port + " (TCP + UDP)\n• Your router is NOT changed - forward port " + f.port + " there yourself for internet play")) return;
+    setBusy(true);
+    try { const r = await L.api("/api/servers/create", { json: f }); L.toast(r.note, 9000); await refreshServers(); L.bridge.show("servers"); }
+    catch (e) { L.toast(e.message); setBusy(false); }
+  };
+  return (
+    <div className="card" style={{ marginTop: 16 }}><h2>Add a server</h2>
+      <p className="small muted">The new server starts with your main server's settings and its own empty mods folder. Each server that should be public needs its own AuthKey from <span className="mono">keymaster.beammp.com</span>.</p>
+      <div className="grid g2">
+        <label className="f"><span>Start from</span><select value={f.clone_from} onChange={set("clone_from")}><option value="">A fresh server (main server's basics)</option>{servers.map(x => <option key={x.id} value={x.id}>{"A copy of " + x.name}</option>)}</select><small>A copy takes over the config, who can join, moderation, bans, chat messages, events and restart times. Mods aren't copied - use Mods → Modpack</small></label>
+        <label className="f"><span>Name</span><input type="text" maxLength={60} placeholder="e.g. Racing server" value={f.name} onChange={set("name")} /></label>
+        <label className="f"><span>Port</span><input type="number" min="1024" max="65535" value={f.port} onChange={set("port")} /><small>Forward it (TCP + UDP) on your router for internet play</small></label>
+        <label className="f"><span>Max players</span><input type="number" min="1" max="100" value={f.max_players} onChange={set("max_players")} /></label>
+        <label className="f"><span>Map</span><select value={f.map} onChange={set("map")}>{MAPS.map(x => <option key={x}>{x}</option>)}</select></label>
+        <label className="f"><span>AuthKey (optional)</span><input type="password" autoComplete="off" placeholder="Paste a new key for this server" value={f.authkey} onChange={set("authkey")} /><small>Without one the server is only reachable directly by IP</small></label>
+        <div><label className="toggle"><input type="checkbox" checked={f.private} onChange={set("private")} /><span><b>Private</b><small>Hide it from the public list</small></span></label>
+          <label className="toggle"><input type="checkbox" checked={f.start} onChange={set("start")} /><span><b>Start it now</b><small>And whenever the computer starts</small></span></label></div>
+      </div>
+      <div className="row"><button className="btn primary" disabled={busy} onClick={go}>Create server</button></div>
+    </div>
+  );
+}
+
+export function Servers({ reload }) {
+  const [d, err, load] = useApi("/api/servers", reload);
+  const main = useRef(null);
+  useEffect(() => { if (d) L.setServers(d.servers); }, [d]);
+  // refresh every 15 s, but not while a Limits box is open
+  useEffect(() => {
+    const t = setInterval(() => { const m = document.getElementById("main"); if (m && !m.querySelector("[data-limopen]")) load(); }, 15000);
+    return () => clearInterval(t);
+  }, [load]);
+  if (!d) return <Wait err={err} />;
+  return (<div ref={main}>
+    <div className="row"><div><h1>Servers</h1><p className="sub">Run several BeamMP servers on this computer. Each has its own port, mods, config, allow-list and limits. The other pages show the server picked in the Server menu.</p></div></div>
+    {d.servers.map(x => <ServerCard key={x.id + ":" + reload} x={x} sys={d.system} win={d.platform === "windows"} />)}
+    <AddServer key={"add" + reload} servers={d.servers} />
+  </div>);
+}
