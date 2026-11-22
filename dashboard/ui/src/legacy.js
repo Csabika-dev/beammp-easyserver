@@ -106,6 +106,28 @@ new MutationObserver(ms => {
 }
 
 function toast(msg, ms = 3500) { const t = $("#toast"); t.textContent = msg; t.classList.remove("hidden"); clearTimeout(t._t); t._t = setTimeout(() => t.classList.add("hidden"), ms); }
+// Deleting something: it disappears at once and the toast offers "Undo" for a few seconds; only
+// then is it really deleted. Closing the page sends it straight away (keepalive), so nothing is
+// left half done. The request goes to the server that was open when you clicked.
+const PENDING = new Set();
+function undoable(msg, path, json, { onUndo, after, ms = 6000 } = {}) {
+  const srv = SERVER, t = $("#toast");
+  const job = { done: false };
+  const finish = () => { job.done = true; PENDING.delete(job); clearTimeout(job.timer); };
+  job.go = () => {
+    if (job.done) return; finish();
+    api(path, { json, keepalive: true, headers: { "X-ES-Server": srv } })
+      .then(r => after && after(r), e => { toast(e.message, 7000); onUndo && onUndo(); });
+  };
+  t.textContent = msg + " ";
+  const b = document.createElement("button");
+  b.type = "button"; b.className = "undo"; b.textContent = "Undo";
+  b.onclick = () => { if (job.done) return; finish(); t.classList.add("hidden"); onUndo && onUndo(); };
+  t.appendChild(b); t.classList.remove("hidden"); clearTimeout(t._t); t._t = setTimeout(() => t.classList.add("hidden"), ms);
+  job.timer = setTimeout(job.go, ms); PENDING.add(job);
+  return job;
+}
+addEventListener("pagehide", () => PENDING.forEach(j => j.go()));
 let SERVER = new URLSearchParams(location.search).get("srv") || store.get("es-server", "main"), SERVERS = [];
 async function api(path, opts = {}) {
   const o = Object.assign({ headers: {} }, opts);
@@ -404,7 +426,7 @@ export function setServer(id) { SERVER = id; store.set("es-server", id); }
 export function setServers(xs) { SERVERS = xs; }
 export function clearTimer() { clearInterval(TIMER); TIMER = null; }
 export {
-  $, esc, ipb, store, IN_APP, api, toast, copyText, modal, fmtSize, fmtDur, fmtTime, ago, applyTheme, I, LOGO_SVG, TABS,
+  $, esc, ipb, store, IN_APP, api, toast, undoable, copyText, modal, fmtSize, fmtDur, fmtTime, ago, applyTheme, I, LOGO_SVG, TABS,
   loadLangList, loadLang, pickLang, tr, approveFromLink, stopAlerts, sleepComputer, myRole, myTabs, reviewGate, serverAction,
   openInvite, openMyAccount, modBrowser, modpackCode,
 };
