@@ -27,6 +27,8 @@ export default {
   },
 
   common: {
+    // "What's new": {v} is the version from CHANGELOG.md.
+    newTitle: "Az {v} újdonságai", newRolling: "Már a Rollingban. Tesztelés után kerülnek a Stable-be.", newStable: "Már a Stable verzióban.",
     download: "Letöltés",
     copy: "Másolás", copied: "Másolva", pressCtrlC: "Nyomd meg: Ctrl+C",
     license: "MIT licenc. Nem a BeamMP csapat vagy a BeamNG GmbH készítette, és nem kapcsolódik hozzájuk. Az EasyServer az ő munkájukra és sok mod- és pluginszerző munkájára épül: [a közreműködők]({GH}#-credits).",
@@ -105,14 +107,6 @@ export default {
         text: "Egy link megmutatja, fut-e a szerver, ki van fent, milyen modokat kell letölteni és mi a következő esemény. Bejelentkezés nélkül, címek és beállítások nélkül." },
     ],
 
-    newTitle: "Újdonságok az 1.15-ben",
-    newSub: "Már a Rollingban. Tesztelés után kerülnek a Stable-be.",
-    news: [
-      ["Járműszabályok", "Tilts le kellékeket, utánfutókat vagy bármilyen autót, és állítsd le a spawnspamet. A mindenkit lagoltató nehéz mod autókat magától kiszúrja."],
-      ["Szerverpluginek", "Telepíts közösségi játékmódokat, például CareerMP-t, freeRoamMP-t és BeamJoyt, egyenesen a szerzőjük oldaláról."],
-      ["Csapatban üzemeltetve", "Hívd meg a barátaidat egy linkkel, ami egyszer működik és egy óra múlva lejár, és döntsd el, ki mit csinálhat az egyes szervereken. Discorddal is beléphetnek."],
-    ],
-
     alsoTitle: "Ez is benne van",
     alsoSub: "Mind opcionális. Kapcsold be, amire szükséged van.",
     also: [
@@ -189,12 +183,6 @@ export default {
       ["Játékosok és kitiltások", ["Kirúgás, némítás és kitiltás a vezérlőpultból, Discordból vagy chatparanccsal. Van meghívólista és karbantartási mód is."]],
       ["Modok", ["Húzz egy zipet az oldalra, vagy válassz egyet a BeamNG tárolóból. Mindegyiket átnézi a vírusellenőrző, mielőtt a játékosok letöltenék.", "Oszd meg az egész modlistádat egy rövid kóddal, és egy barátod szervere ugyanazokat telepítheti."]],
       ["Mentések és értesítések", ["Mentsd és állítsd vissza a konfigurációt. Kapj üzenetet Discordon, e-mailben, Telegramon vagy telefonon, ha a szerver összeomlik."]],
-    ],
-    newTitle: "Újdonságok az 1.15-ben", newSub: "Már a Rolling verzióban. Tesztelés után kerülnek a Stable-be.",
-    newRows: [
-      ["Járműszabályok", ["Tilts le kellékeket, a hatalmas fizikás kellékeket, utánfutókat vagy bármilyen kiválasztott autót. A mindenkit lagoltató nehéz mod autókat magától kiszúrja.", "Van spawn-várakozási idő is, és előbeállítások verseny- és szerepjátékszerverekhez."]],
-      ["Szerverpluginek", ["Telepíts közösségi játékmódokat, például CareerMP-t, freeRoamMP-t és BeamJoyt. A szerzőjük oldaláról töltődnek le, és telepítés előtt látod, melyik fájl hová kerül."]],
-      ["Csapatban üzemeltetve", ["Küldj egy barátodnak meghívólinket, ami egyszer működik, és egy óra múlva lejár. Adj neki szerepet, például néző vagy moderátor, minden szerveren külön.", "Jelszó helyett Discorddal is beléphetnek. Aki az otthoni hálózatodon kívülről lép be, annak kétlépcsős bejelentkezési kód kell."]],
     ],
     closing: "Töltsd le, indítsd el, és kövesd a lépéseket. A legtöbben kb. öt perc alatt online vannak. Ha elakadsz, a Súgó oldal és a közösség segít.",
     footnote: "A Mac verzió kísérleti, és csak a Rollingban érhető el.",
@@ -331,6 +319,15 @@ export default {
         { ol: ["**Állapot → Diagnosztikai jelentés letöltése**. A kulcsok, jelszavak és címek kikerülnek belőle.",
           "[Kérdezz a közösségi fórumon]({ASK}), és csatold a jelentést. A hibák az [issue-k]({GH}/issues/new/choose) közé valók."] },
         "Biztonsági problémát találtál? Kérlek, a [privát bejelentést]({GH}/security/advisories/new) használd, ne tedd közzé nyilvánosan."]],
+    ],
+  },
+  // Translations of the "What's new" cards, by version. The cards themselves come from the
+  // <!-- website --> block in CHANGELOG.md; when a new version has no translation here yet, it shows in English.
+  whatsNew: {
+    "1.15": [
+      ["Járműszabályok", "Tilts le kellékeket, utánfutókat vagy bármilyen autót, és állítsd le a spawnspamet. A mindenkit lagoltató nehéz mod autókat magától kiszúrja."],
+      ["Szerverpluginek", "Telepíts közösségi játékmódokat, például CareerMP-t, freeRoamMP-t és BeamJoyt, egyenesen a szerzőjük oldaláról."],
+      ["Csapatban üzemeltetve", "Hívd meg a barátaidat egy linkkel, ami egyszer működik és egy óra múlva lejár, és döntsd el, ki mit csinálhat az egyes szervereken. Discorddal is beléphetnek."],
     ],
   },
 };
