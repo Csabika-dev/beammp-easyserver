@@ -9,7 +9,7 @@ import os
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 UI = os.path.join(ROOT, "dashboard", "ui")
 code = open(os.path.join(UI, "src", "legacy.js"), encoding="utf-8").read()     # pages still drawn as HTML text
-jsx = open(os.path.join(UI, "src", "app.jsx"), encoding="utf-8").read()         # the React part
+jsx = "\n".join(open(os.path.join(UI, "src", f), encoding="utf-8").read() for f in sorted(os.listdir(os.path.join(UI, "src"))) if f.endswith(".jsx"))   # the React part
 html_head = open(os.path.join(UI, "head.html"), encoding="utf-8").read()
 M = "\x00"
 templates, strings = [], []   # (text with M for ${}) ; (literal, plus_before, plus_after)
