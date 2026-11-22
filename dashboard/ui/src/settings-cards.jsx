@@ -3,12 +3,12 @@
 import { useEffect, useState } from "react";
 import * as L from "./legacy.js";
 import { Blur, Ip } from "./pages.jsx";
-import { $, S, val, chk, TIME, Pill, Mono, Toggle, Warn, useLoad, post } from "./ui.jsx";
+import { $, S, val, chk, TIME, Pill, Mono, Toggle, Warn, useLoad, post, SkelCard } from "./ui.jsx";
 import { Modal } from "./mods.jsx";
 
 const NEW_TAB = { target: "_blank", rel: "noopener noreferrer" };
 const isOwner = () => { const r = S().SESSION.role; return r === "owner" || !r; };
-const Loading = ({ title }) => <><h2>{title}</h2><p className="muted small">Loading…</p></>;
+
 const Failed = ({ title, err }) => <><h2>{title}</h2><p className="small muted">{err}</p></>;
 const QR = ({ q, px }) => q ? <svg viewBox={`-4 -4 ${q[0] + 8} ${q[0] + 8}`} width={px} height={px} style={{ background: "#fff", borderRadius: 8, display: "block" }} role="img" aria-label="QR code"><path d={q[1]} fill="#000" /></svg> : null;
 // A QR code drawn from a path the server sent (only path letters and numbers are allowed through)
@@ -20,10 +20,10 @@ export const KeyQR = ({ r, px, label }) => {
 
 /* ---------------- supporter */
 export function Supporter() {
-  const [d, again, v, err] = useLoad(() => L.api("/api/supporter"));
+  const [d, again, v, err] = useLoad("/api/supporter");
   const [busy, setBusy] = useState(false);
   if (err || (d && d.off)) return null;
-  if (!d) return <div className="card" style={{ marginBottom: 16 }} />;
+  if (!d) return <SkelCard lines={2} style={{ marginBottom: 16 }} />;
   const owner = (S().SESSION.role || "owner") === "owner";
   const activate = async () => { setBusy(true); try { const r = await L.api("/api/supporter", { json: { key: val("sup_key").trim() } }); L.toast(r.note, 7000); L.bridge.refreshShell(); L.bridge.show("settings"); } catch (e) { L.toast(e.message, 8000); setBusy(false); } };
   const remove = async () => { if (!confirm("Remove the supporter licence from this computer? You can activate it again here or on another computer.")) return; try { const r = await L.api("/api/supporter", { json: { action: "remove" } }); L.toast(r.note, 6000); L.bridge.show("settings"); } catch (e) { L.toast(e.message); } };
@@ -43,9 +43,9 @@ export function Supporter() {
 
 /* ---------------- phone app + push notifications */
 export function Phone() {
-  const [d, again, v, err] = useLoad(() => Promise.all([L.api("/api/phoneapp"), L.api("/api/ntfy")]));
+  const [d, again, v, err] = useLoad(["/api/phoneapp", "/api/ntfy"]);
   if (err && !d) return <div className="card" style={{ margin: "0 0 16px" }}><Failed title="Phone app" err={err} /></div>;
-  if (!d) return <div className="card" style={{ margin: "0 0 16px" }}><Loading title="Phone app" /></div>;
+  if (!d) return <SkelCard style={{ margin: "0 0 16px" }} />;
   const [pa, nt] = d;
   const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
   const topic = nt.subscribe ? nt.subscribe.split("/").pop() : "";
@@ -86,9 +86,9 @@ export function Phone() {
 /* ---------------- Discord bot */
 export function DiscordBot() {
   const [keepOpen, setKeepOpen] = useState(false);
-  const [b, again, v, err] = useLoad(() => L.api("/api/discordbot"));
+  const [b, again, v, err] = useLoad("/api/discordbot");
   if (err && !b) return <div className="card" style={{ margin: "0 0 16px" }}><Failed title="Discord bot" err={err} /></div>;
-  if (!b) return <div className="card" style={{ margin: "0 0 16px" }}><Loading title="Discord bot" /></div>;
+  if (!b) return <SkelCard style={{ margin: "0 0 16px" }} />;
   const pill = !b.enabled ? <span className="badge">Off</span> : !b.has_token ? <span className="badge warn">No token yet</span> : b.state === "online" ? <span className="badge good">{"Online" + (b.bot_name ? " as " + b.bot_name : "")}</span>
     : b.state === "error" ? <span className="badge bad">Problem</span> : <span className="badge warn">Connecting…</span>;
   const g = b.guilds.find(x => x.id === b.guild);
@@ -128,10 +128,10 @@ export function DiscordBot() {
 
 /* ---------------- Telegram, Slack & other apps */
 export function Integrations() {
-  const [d, again, v, err] = useLoad(() => L.api("/api/integrations"));
+  const [d, again, v, err] = useLoad("/api/integrations");
   const T_ = "Telegram, Slack & other apps";
   if (err && !d) return <div className="card" style={{ margin: "0 0 16px" }}><Failed title={T_} err={err} /></div>;
-  if (!d) return <div className="card" style={{ margin: "0 0 16px" }}><Loading title={T_} /></div>;
+  if (!d) return <SkelCard style={{ margin: "0 0 16px" }} />;
   const T = d.telegram, W = d.webhook;
   const send = async (body, re = true) => { try { const r = await L.api("/api/integrations", { json: body }); L.toast(r.note, 6000); if (re) again(); } catch (e) { L.toast(e.message, 8000); } };
   const tgSave = () => { const b = { telegram_enabled: chk("tg_on"), telegram_chat: val("tg_chat") }; if (val("tg_token").trim()) b.telegram_token = val("tg_token").trim(); send(b); };
@@ -160,9 +160,9 @@ export function Integrations() {
 
 /* ---------------- public status page */
 export function StatusPage() {
-  const [d, again, v, err] = useLoad(() => L.api("/api/statuspage"));
+  const [d, again, v, err] = useLoad("/api/statuspage");
   if (err && !d) return <div className="card" style={{ margin: "0 0 16px" }}><Failed title="Public status page" err={err} /></div>;
-  if (!d) return <div className="card" style={{ margin: "0 0 16px" }}><Loading title="Public status page" /></div>;
+  if (!d) return <SkelCard style={{ margin: "0 0 16px" }} />;
   const P = d.preview;
   const save = () => {
     if (chk("sp_on") && !d.on && !confirm("Turn on the public status page? Anyone who can reach your dashboard address can see it without logging in.")) return;
@@ -185,9 +185,9 @@ export function StatusPage() {
 
 /* ---------------- remembered devices */
 export function Devices({ tick }) {
-  const [d, again, v, err] = useLoad(() => L.api("/api/devices"), [tick]);
+  const [d, again, v, err] = useLoad("/api/devices", [tick]);
   if (err && !d) return <div className="card" style={{ marginTop: 16 }}><Failed title="Remembered devices" err={err} /></div>;
-  if (!d) return <div className="card" style={{ marginTop: 16 }}><Loading title="Remembered devices" /></div>;
+  if (!d) return <SkelCard style={{ marginTop: 16 }} />;
   const owner = S().SESSION.role === "owner";
   const call = async body => { try { await L.api("/api/devices", { json: body }); L.toast("Forgotten"); again(); } catch (e) { L.toast(e.message); } };
   return (<div className="card" style={{ marginTop: 16 }} key={v}><h2>Remembered devices</h2>
@@ -218,10 +218,10 @@ function UserServers({ u, d, allRoles, rname, onSave, onClose }) {
   </Modal>);
 }
 export function Users() {
-  const [d, again, v, err] = useLoad(() => L.api("/api/users"));
+  const [d, again, v, err] = useLoad("/api/users");
   const [srvFor, setSrvFor] = useState(null), [invite, setInvite] = useState(null);
   if (err && !d) return <div className="card" style={{ margin: "0 0 16px" }}><Failed title="Users & roles" err={err} /></div>;
-  if (!d) return <div className="card" style={{ margin: "0 0 16px" }}><Loading title="Users & roles" /></div>;
+  if (!d) return <SkelCard style={{ margin: "0 0 16px" }} />;
   const allRoles = [...d.roles.map(r => ({ id: r, name: r })), ...d.custom_roles.map(r => ({ id: r.id, name: r.name }))];
   const rname = id => (allRoles.find(r => r.id === id) || { name: "deleted role" }).name;
   const RoleSel = props => <select style={{ width: "auto" }} {...props}>{allRoles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select>;
@@ -312,10 +312,10 @@ function LoadGraphs({ upMbit }) {
     <Chart title="Players online" k="players" max={1} fmt={v => String(v)} /></div></div>);
 }
 export function Backups() {
-  const [d, again, v, err] = useLoad(() => Promise.all([L.api("/api/backups"), L.api("/api/settings"), L.api("/api/resources")]));
+  const [d, again, v, err] = useLoad(["/api/backups", "/api/settings", "/api/resources"]);
   const [busy, setBusy] = useState("");
   if (err && !d) return <p className="small muted">{err}</p>;
-  if (!d) return null;
+  if (!d) return <div className="grid g2" style={{ marginTop: 16 }}><SkelCard lines={5} /><SkelCard lines={5} /></div>;
   const [bk, st, rs] = d, n = rs.now || {}, owner = isOwner();
   const fmtUp = k => k == null ? "-" : k >= 1000 ? (k / 1000).toFixed(1) + " Mbit/s" : Math.round(k) + " kbit/s";
   const restore = async b => {
