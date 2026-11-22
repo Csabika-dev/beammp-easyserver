@@ -136,6 +136,9 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 /* drop zone */
 .drop{border:2px dashed var(--line-strong);border-radius:var(--r);padding:34px 16px;text-align:center;cursor:pointer;background:var(--surface);transition:.15s}
 .drop.over{border-color:var(--accent);background:var(--accent-soft)}
+.chatbox{max-height:340px;overflow:auto;background:var(--surface-2);border-radius:8px;padding:8px 10px;font-size:13.5px;line-height:1.55}
+.chatline{cursor:pointer;border-radius:4px;padding:0 4px;overflow-wrap:anywhere}.chatline:hover{background:var(--surface)}.chatline.hid{opacity:.65}
+.report{border-top:1px solid var(--line);padding:10px 0}.report:first-of-type{border-top:0}.report.done{opacity:.6}
 .bar{height:6px;background:var(--surface-2);border-radius:3px;overflow:hidden;margin-top:6px}.bar i{display:block;height:100%;width:0;background:var(--accent)}
 /* logs */
 .log{font-family:var(--mono);font-size:12.5px;line-height:1.55;background:var(--surface-2);border-radius:10px;padding:12px 14px;height:520px;overflow:auto;white-space:pre-wrap;word-break:break-word}
@@ -790,6 +793,11 @@ VIEWS.config = async m => {
       <label class="f"><span>Blocked words (comma-separated)</span><input type="text" id="md_words" value="${esc(md.words.join(", "))}" placeholder="words you don't want in chat"></label>
       <label class="toggle"><input type="checkbox" id="md_spam" ${md.spam ? "checked" : ""}><span><b>Anti-spam</b><small>More than the number below of messages in 10 seconds = 2 minute mute. Admins are never muted. Off by default</small></span></label>
       <label class="f" style="max-width:220px"><span>Messages per 10 seconds</span><input type="number" id="md_spamlimit" min="2" max="30" value="${esc(md.spam_limit)}"></label>
+      <h2 style="margin-top:16px">Reports, vote kick &amp; chat history</h2>
+      <label class="toggle"><input type="checkbox" id="md_report" ${md.report ? "checked" : ""}><span><b>Player reports</b><small>Players type <span class="mono">/report name what happened</span>. You get an alert (dashboard, Discord, phone - whatever is set up under Notifications) with the chat just before it, and admins in the game see it too. A player can send one report a minute. On by default</small></span></label>
+      <label class="toggle"><input type="checkbox" id="md_votekick" ${md.votekick ? "checked" : ""}><span><b>Vote kick</b><small>When no admin is online, players can type <span class="mono">/votekick name reason</span>. If more than half of the others type <span class="mono">/yes</span> within 90 seconds, that player is kicked and can't rejoin for 10 minutes. Admins can't be voted out, players who just joined can't vote, and nobody can start more than one vote every 5 minutes. Off by default</small></span></label>
+      <label class="f" style="max-width:260px"><span>Players needed online for a vote kick</span><input type="number" id="md_vkmin" min="3" max="20" value="${esc(md.votekick_min)}"><small>So two friends can't kick the third</small></label>
+      <label class="toggle"><input type="checkbox" id="md_chatlog" ${md.chatlog ? "checked" : ""}><span><b>Keep a chat history</b><small>Saves the game chat on this computer so you can search it on the Players page (about the last few weeks, up to 10 MB). It never leaves this computer. On by default</small></span></label>
       <h2 style="margin-top:16px">Anti-bot</h2>
       <p class="small muted">Stops bots from filling your server. Cloudflare can't protect a game server, so this works inside the game instead. Players who passed the check: ${esc(md.verified)}.</p>
       <label class="toggle"><input type="checkbox" id="md_antibot" ${md.antibot ? "checked" : ""}><span><b>Turn on anti-bot</b><small>Off by default. Turns on the checks below</small></span></label>
@@ -887,7 +895,8 @@ VIEWS.config = async m => {
     const list = id => $(id).value.split(",").map(x => x.trim()).filter(Boolean);
     const body = { admins: list("#md_admins"), words: list("#md_words"), filter: $("#md_filter").checked, spam: $("#md_spam").checked,
                    spam_limit: Number($("#md_spamlimit").value), antibot: $("#md_antibot").checked, verify: $("#md_verify").checked,
-                   guests: !$("#md_guests").checked, per_ip: Number($("#md_perip").value), join_flood: Number($("#md_flood").value) };
+                   guests: !$("#md_guests").checked, per_ip: Number($("#md_perip").value), join_flood: Number($("#md_flood").value),
+                   report: $("#md_report").checked, votekick: $("#md_votekick").checked, votekick_min: Number($("#md_vkmin").value), chatlog: $("#md_chatlog").checked };
     try { const r = await api("/api/moderation", { json: body }); toast(r.note, 5000); show("config"); } catch (e) { toast(e.message); }
   };
   $("#ex_every").onchange = () => { $("#ex_at_label").textContent = $("#ex_every").value === "24" ? "At" : "Starting at"; };
@@ -1105,6 +1114,7 @@ VIEWS.players = async m => {
     <div class="row"><div><h1>Players</h1><p class="sub">Activity over the last 30 days. Recorded by the EasyServerStats plugin on your server.</p></div><span class="spacer"></span><button class="btn sm" id="clear">Clear statistics</button></div>
     ${d.has_data ? "" : `<div class="banner info">No player data yet. Statistics start once the server runs with the stats plugin and someone plays.</div>`}
     <div id="maintcard"></div>
+    <div id="reportcard"></div>
     <div class="card" style="margin-bottom:16px" id="modcard"><div class="row"><h2 style="margin:0">Online now &amp; moderation</h2><span class="spacer"></span><span class="small muted">Takes a second to reach the game</span></div>
       ${bn.online.length ? `<table style="margin-top:8px"><tbody>${bn.online.map(n => `<tr><td><b>${esc(n)}</b></td><td class="num"><div class="row" style="justify-content:flex-end;gap:6px">
           <button class="btn sm" data-act="mute" data-n="${esc(n)}">Mute 10 min</button><button class="btn sm" data-act="unmute" data-n="${esc(n)}">Unmute</button>
@@ -1120,6 +1130,7 @@ VIEWS.players = async m => {
       ${bn.bans.length ? `<table><thead><tr><th>Player</th><th>Until</th><th>Reason</th><th>By</th><th></th></tr></thead><tbody>${bn.bans.map(b => `<tr><td><b>${esc(b.name)}</b></td><td class="muted">${b.until ? esc(fmtTime(b.until)) : "Forever"}</td><td>${esc(b.reason || "-")}</td><td class="muted">${esc(b.by || "-")}</td><td class="num"><button class="btn sm" data-unban="${esc(b.name)}">Unban</button></td></tr>`).join("")}</tbody></table>`
         : `<p class="small muted">Nobody is banned. Admins you set under Config → Moderation can also ban from the game chat.</p>`}
     </div>
+    <div id="chatcard"></div>
     <div class="grid g4">
       <div class="card stat"><div class="label">Online now</div><div class="value">${d.online.players.length}</div><div class="note">${d.online.fresh ? esc(d.online.players.slice(0, 3).join(", ") || "Nobody") : "Server not reporting"}</div></div>
       <div class="card stat"><div class="label">Players (30 days)</div><div class="value">${esc(s.unique_30d)}</div><div class="note">${esc(s.unique_7d)} in the last 7 days</div></div>
@@ -1158,6 +1169,7 @@ VIEWS.players = async m => {
   const act = async (body) => { try { const r = await api("/api/players/act", { json: body }); toast(r.note); } catch (e) { toast(e.message); } };
   m.querySelectorAll("[data-act]").forEach(b => b.onclick = () => act({ action: b.dataset.act, name: b.dataset.n, minutes: 10 }));
   loadMaint();
+  if (canModerate()) { loadReports(); loadChat(); }
   loadMapStats();
   m.querySelectorAll("[data-banopen]").forEach(b => b.onclick = () => { $("#ban_name").value = b.dataset.banopen; $("#ban_reason").focus(); });
   $("#ban_go").onclick = async () => {
@@ -1397,6 +1409,62 @@ async function loadMapStats(days = 30) {
 }
 
 /* ---------------- 1.11: maintenance mode (Players) */
+/* ---------------- player reports + chat history (Players page) */
+function canModerate() {
+  const r = myRole();
+  if (r && r.perms) return r.perms.includes("players");
+  return (r ? r.role : SESSION.role) !== "viewer";
+}
+const fmtClock = t => new Date(t * 1000).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" });
+const chatRows = lines => lines.map(c => `<div class="chatline${c.hid ? " hid" : ""}" data-around="${c.t}"><span class="muted">${esc(fmtClock(c.t))}</span> <b>${esc(c.name)}</b> ${esc(c.msg)}${c.hid ? ' <span class="badge" title="Players didn\'t see this: the sender was muted or the chat filter caught it">hidden</span>' : ""}</div>`).join("");
+let SHOW_CLOSED = false;
+async function loadReports() {
+  const el = $("#reportcard"); if (!el) return;
+  let d;
+  try { d = await api("/api/reports"); } catch (e) { el.innerHTML = ""; return; }
+  const list = d.items.filter(x => SHOW_CLOSED || x.open);
+  if (!d.items.length) { el.innerHTML = ""; return; }
+  el.innerHTML = `<div class="card" style="margin-bottom:16px"><div class="row"><h2 style="margin:0">Reports</h2>${d.open ? `<span class="badge warn">${d.open} open</span>` : ""}<span class="spacer"></span>
+      <label class="small muted" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="rp_all" ${SHOW_CLOSED ? "checked" : ""}> Show handled</label>${d.open > 1 ? '<button class="btn sm" id="rp_closeall">Mark all handled</button>' : ""}</div>
+    ${d.on ? "" : `<p class="small muted">Reports are turned off (Config → Moderation).</p>`}
+    ${list.length ? list.map(r => `<div class="report${r.open ? "" : " done"}"><div class="row"><div><b>${esc(r.by)}</b> reported <b>${esc(r.target)}</b> <span class="muted small">· ${esc(fmtClock(r.t))}</span><div>${esc(r.reason)}</div></div><span class="spacer"></span>
+        ${r.open ? `<button class="btn sm" data-rpban="${esc(r.target)}">Ban…</button><button class="btn sm" data-rpclose="${esc(r.id)}">Handled</button>` : `<span class="small muted">Handled by ${esc(r.closed_by || "?")}</span>`}</div>
+        ${r.chat && r.chat.length ? `<details style="margin-top:6px"><summary class="small">Chat before the report (${r.chat.length})</summary><div class="chatbox">${chatRows(r.chat)}</div></details>` : ""}</div>`).join("")
+      : `<p class="small muted" style="margin:8px 0 0">No open reports.</p>`}</div>`;
+  $("#rp_all").onchange = e => { SHOW_CLOSED = e.target.checked; loadReports(); };
+  if ($("#rp_closeall")) $("#rp_closeall").onclick = async () => { try { await api("/api/reports/close", { json: { id: "all" } }); loadReports(); } catch (e) { toast(e.message); } };
+  el.querySelectorAll("[data-rpclose]").forEach(b => b.onclick = async () => { try { await api("/api/reports/close", { json: { id: b.dataset.rpclose } }); loadReports(); } catch (e) { toast(e.message); } });
+  el.querySelectorAll("[data-rpban]").forEach(b => b.onclick = () => { const i = $("#ban_name"); if (i) { i.value = b.dataset.rpban; i.scrollIntoView({ block: "center" }); i.focus(); } });
+}
+async function loadChat(opts = {}) {
+  const el = $("#chatcard"); if (!el) return;
+  const qs = new URLSearchParams();
+  if (opts.q) qs.set("q", opts.q);
+  if (opts.player) qs.set("player", opts.player);
+  if (opts.around) qs.set("around", opts.around);
+  let d;
+  try { d = await api("/api/chat?" + qs); } catch (e) { el.innerHTML = ""; return; }
+  el.innerHTML = `<div class="card" style="margin-bottom:16px"><div class="row"><h2 style="margin:0">Chat history</h2><span class="spacer"></span>
+      ${SESSION.role === "owner" || SESSION.role === "admin" || !SESSION.role ? '<button class="btn sm ghost" id="ch_clear">Delete history</button>' : ""}</div>
+    ${d.on ? "" : `<p class="small muted">The chat history is turned off (Config → Moderation). ${d.total ? "Older messages are still here." : ""}</p>`}
+    <div class="row" style="gap:8px;margin:10px 0;flex-wrap:wrap"><input type="text" id="ch_q" placeholder="Search words or names" value="${esc(opts.q || "")}" style="max-width:260px">
+      <select id="ch_p" style="max-width:200px"><option value="">Everyone</option>${(opts.player ? [opts.player] : d.players).map(n => `<option ${n === opts.player ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>
+      <button class="btn sm" id="ch_go">Search</button>${opts.q || opts.player || opts.around ? '<button class="btn sm ghost" id="ch_reset">Show all</button>' : ""}</div>
+    ${opts.around ? `<p class="small muted">The 10 minutes around ${esc(fmtClock(opts.around))}.</p>` : ""}
+    ${d.lines.length ? `<div class="chatbox" id="ch_box">${chatRows(d.lines)}</div><p class="small muted" style="margin:6px 0 0">${d.total > d.lines.length ? "Newest " + d.lines.length + " of " + d.total + " messages. " : ""}Click a message to see what was said around it.</p>`
+      : `<p class="small muted">${opts.q || opts.player ? "Nothing found." : "No chat yet."}</p>`}</div>`;
+  const box = $("#ch_box"); if (box) box.scrollTop = box.scrollHeight;
+  const go = () => loadChat({ q: $("#ch_q").value.trim(), player: $("#ch_p").value });
+  $("#ch_go").onclick = go;
+  $("#ch_q").onkeydown = e => { if (e.key === "Enter") go(); };
+  if ($("#ch_reset")) $("#ch_reset").onclick = () => loadChat();
+  el.querySelectorAll("[data-around]").forEach(r => r.onclick = () => loadChat({ around: r.dataset.around }));
+  if ($("#ch_clear")) $("#ch_clear").onclick = async () => {
+    if (!confirm("Delete the whole chat history of this server? This can't be undone.")) return;
+    try { const r = await api("/api/chat/clear", { json: {} }); toast(r.note); loadChat(); } catch (e) { toast(e.message); }
+  };
+}
+
 async function loadMaint() {
   const el = $("#maintcard"); if (!el) return;
   let mt; try { mt = await api("/api/maintenance"); } catch (e) { return; }
@@ -2233,6 +2301,7 @@ VIEWS.settings = async m => {
       ${tg("n_player_join", "Player joins", "Every time someone joins (can be a lot)", N.player_join)}
       ${tg("n_player_denied", "Refused players", "Someone not on the allow-list tried to join", N.player_denied)}
       ${tg("n_moderation", "Moderation", "Bans, kicks and mutes made in game by your admins", N.moderation)}
+      ${tg("n_report", "Player reports", "A player used /report in the game - with the chat just before it", N.report !== false)}
       ${tg("n_network", "Address changes", "This computer's home address or your public IP changed", N.network)}
       ${tg("n_restart", "Scheduled restarts", "A scheduled restart or update ran", N.restart)}
       ${tg("n_rotation", "Map rotation", "The map was changed by the rotation", N.rotation)}
@@ -2332,7 +2401,7 @@ VIEWS.settings = async m => {
   m.querySelectorAll("[data-test]").forEach(b => b.onclick = async () => { b.disabled = true; try { await saveNotif(true); await api("/api/notifications/test", { json: { channel: b.dataset.test } }); toast("Test sent"); } catch (e) { toast(e.message); } b.disabled = false; });
   async function saveNotif(quiet) {
     const body = { notify: {} };
-    ["crash", "stopped", "update", "mod_blocked", "player_join", "player_denied", "moderation", "network", "restart", "rotation", "resources", "backup", "mod_update", "sleep"].forEach(k => body.notify[k] = $("#n_" + k).checked);
+    ["crash", "stopped", "update", "mod_blocked", "player_join", "player_denied", "moderation", "network", "restart", "rotation", "resources", "backup", "mod_update", "sleep", "report"].forEach(k => body.notify[k] = $("#n_" + k).checked);
     ["discord_enabled", "email_enabled", "update_check", "security_alerts", "security_reminders"].forEach(k => body[k] = $("#" + k).checked);
     if ($("#auto_restart")) body.auto_restart = $("#auto_restart").checked;
     ["smtp_host", "smtp_port", "smtp_user", "smtp_to", "smtp_security"].forEach(k => body[k] = $("#" + k).value);
