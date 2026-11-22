@@ -268,6 +268,19 @@ fetch_file() { # fetch_file REPO/PATH DEST - from the downloaded ZIP, or from Gi
   install -m 0644 "$t" "$2"; rm -f "$t"
 }
 
+fetch_optional() { # like fetch_file, but a missing file is skipped instead of stopping the install
+  local rel="$1" c t
+  if [[ -n "$SCRIPT_DIR" ]]; then
+    for c in "$SCRIPT_DIR/$rel" "$SCRIPT_DIR/../$rel"; do
+      if [[ -f "$c" ]]; then install -m 0644 "$c" "$2"; return 0; fi
+    done
+  fi
+  t=$(mktemp)
+  if curl -fsSL --retry 2 -o "$t" "$REPO_RAW/$rel"; then install -m 0644 "$t" "$2"; fi
+  rm -f "$t"
+  return 0
+}
+
 drop_links() { # paths root writes to inside the server folder must be real files/folders
   local p
   for p in "$INSTALL_DIR/ServerConfig.toml" "$INSTALL_DIR/BeamMP-Server" "$INSTALL_DIR/servers" \
@@ -982,6 +995,11 @@ PY
   local f
   for f in dashboard.py webui.html modscan.py tlsgen.py upnp.py guard.py; do
     fetch_file "dashboard/$f" "$es/dashboard/$f"
+  done
+  # dashboard translations (a missing one just means that language shows English)
+  mkdir -p "$es/dashboard/lang"
+  for f in de es hu pl; do
+    fetch_optional "dashboard/lang/$f.json" "$es/dashboard/lang/$f.json"
   done
   fetch_file "linux/control.py" "$es/control.py"
   rm -f "$es/modmanager.py" "$es/modscan.py"
