@@ -48,10 +48,20 @@ const SITE = "https://csabika-dev.github.io/beammp-easyserver/";
 const esc = s => String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 const addr = (code, file) => (code === "en" ? "" : code + "/") + (file === "index.html" ? "" : file);
 const codes = LANGS.map(l => l.code);
+const OG_LOCALE = { en: "en_US", de: "de_DE", es: "es_ES", hu: "hu_HU", pl: "pl_PL" };
+
+// Lets phones add the site to the home screen with the real icon (link-preview cards and icons:
+// site/images/make.py).
+writeFileSync(join(docs, "site.webmanifest"), JSON.stringify({
+  name: "BeamMP EasyServer", short_name: "EasyServer", start_url: "./", display: "browser",
+  background_color: "#202328", theme_color: "#202328",
+  icons: [{ src: "img/icon-192.png", sizes: "192x192", type: "image/png" }, { src: "img/icon-512.png", sizes: "512x512", type: "image/png" }],
+}, null, 1) + "\n");
 
 // Runs before anything is drawn. Turns on the scroll-in effects (with a safety net in case the
 // script never arrives) and, on an English page, sends a first-time visitor to their language.
-const boot = (code, file) => `<script>(function(){var d=document.documentElement;d.classList.add("js");setTimeout(function(){if(!window.esReady)d.classList.add("reveal-all")},4000);` +
+const THEME = `try{var th=localStorage.getItem("es-site-theme");if(th==="dark"||th==="light")document.documentElement.dataset.theme=th}catch(e){}`;
+const boot = (code, file) => `<script>(function(){var d=document.documentElement;d.classList.add("js");${THEME}setTimeout(function(){if(!window.esReady)d.classList.add("reveal-all")},4000);` +
   (code === "en" ? `try{var L=${JSON.stringify(codes)},s=localStorage.getItem("es-site-lang");if(!s){var n=(navigator.languages||[navigator.language||""]);for(var i=0;i<n.length&&!s;i++){var c=String(n[i]).slice(0,2).toLowerCase();if(L.indexOf(c)>=0)s=c}}if(s&&s!=="en"&&L.indexOf(s)>=0)location.replace(s+"/${file === "index.html" ? "" : file}"+location.hash)}catch(e){}` : "") +
   `})()</script>`;
 
@@ -87,11 +97,24 @@ for (const { code } of LANGS) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="icon" href="${root}img/logo.svg" type="image/svg+xml">
+<link rel="icon" href="${root}img/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="${root}img/apple-touch-icon.png">
+<link rel="manifest" href="${root}site.webmanifest">
 <title>${esc(m.title)}</title>
 <meta name="description" content="${esc(m.description)}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="BeamMP EasyServer">
+<meta property="og:locale" content="${OG_LOCALE[code]}">
+<meta property="og:url" content="${SITE + addr(code, p.file)}">
 <meta property="og:title" content="${esc(m.ogTitle)}">
 <meta property="og:description" content="${esc(m.ogDescription)}">
-<meta property="og:image" content="${SITE}img/overview-dark.webp">
+<meta property="og:image" content="${SITE}img/card-${code}.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="${esc(m.ogTitle)}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#e9ebee" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#202328" media="(prefers-color-scheme: dark)">
 <meta name="color-scheme" content="light dark">
 <link rel="canonical" href="${SITE + addr(code, p.file)}">
 ${alternates}
@@ -110,5 +133,50 @@ ${boot(code, p.file)}
     writeFileSync(join(dir, p.file), html);
     console.log(addr(code, p.file) || "index.html", Math.round(html.length / 1024) + " KB");
   }
+}
+// GitHub Pages shows docs/404.html for any address that doesn't exist, at any depth, so it
+// uses full paths and picks its language in the browser (from the address, the saved choice
+// or the browser's language). The little driving game is site/notfound-game.js.
+{
+  const BASE = "/beammp-easyserver/";
+  const nf = Object.fromEntries(LANGS.map(({ code }) => [code, textFor(code).notFound]));
+  const en = nf.en;
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<link rel="icon" href="${BASE}img/logo.svg" type="image/svg+xml">
+<title>${esc(en.title)}</title>
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="${BASE}assets/site.css?v=${cssV}">
+<script>${THEME}</script>
+</head>
+<body class="nf-page">
+<nav class="top"><div class="wrap"><a class="logo" href="${BASE}" data-nf="home-logo"><img src="${BASE}img/logo.svg" alt="" width="28" height="28"><span>BeamMP EasyServer</span></a></div></nav>
+<main class="wrap nf">
+<h1 data-nf="h1">${esc(en.h1)}</h1>
+<p class="joke" data-nf="joke">${esc(en.joke)}</p>
+<p data-nf="text">${esc(en.text)}</p>
+<div class="game">
+<canvas id="game" width="600" height="190" role="img" aria-label="${esc(en.gameLabel)}" data-nf="gameLabel"></canvas>
+<div class="game-bar"><span id="game-say" aria-live="polite"></span><span id="game-score"></span></div>
+</div>
+<div class="btns"><a class="btn go" href="${BASE}" data-nf="home">${esc(en.home)}</a><a class="btn" href="${BASE}help.html" data-nf="help">${esc(en.help)}</a></div>
+</main>
+<script>(function(){var T=${JSON.stringify(nf)},L=Object.keys(T),c="en";
+var seg=location.pathname.slice(${BASE.length}).split("/")[0];
+if(L.indexOf(seg)>=0)c=seg;else{try{var s=localStorage.getItem("es-site-lang");if(s&&L.indexOf(s)>=0)c=s}catch(e){}
+if(c==="en"){var n=navigator.languages||[navigator.language||""];for(var i=0;i<n.length;i++){var k=String(n[i]).slice(0,2).toLowerCase();if(L.indexOf(k)>=0){c=k;break}}}}
+var t=window.NF=T[c];if(c==="en")return;var pre="${BASE}"+c+"/";document.documentElement.lang=c;document.title=t.title;
+document.querySelectorAll("[data-nf]").forEach(function(e){var k=e.getAttribute("data-nf");
+if(k==="gameLabel")e.setAttribute("aria-label",t.gameLabel);else if(k==="home-logo")e.href=pre;else{e.textContent=t[k];if(k==="home")e.href=pre;if(k==="help")e.href=pre+"help.html"}})})()</script>
+<script>${readFileSync(join(here, "notfound-game.js"), "utf8")}</script>
+</body>
+</html>
+`;
+  writeFileSync(join(docs, "404.html"), html);
+  console.log("404.html", Math.round(html.length / 1024) + " KB");
 }
 console.log("site.js", Math.round(readFileSync(join(assets, "site.js")).length / 1024) + " KB");
