@@ -125,6 +125,96 @@ class Live(unittest.TestCase):
             if os.path.exists(path):
                 os.remove(path)
 
+    def _mkmod(self, folder, name):
+        import io
+        import zipfile
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr("vehicles/%s/info.json" % name[:-4], '{"Name": "%s %f"}' % (name, time.time()))
+        path = os.path.join(harness.SRV, "Resources", folder, name)
+        with open(path, "wb") as f:
+            f.write(buf.getvalue())
+        return path
+
+    def _where(self, name):
+        for folder, on in (("Client", True), ("Client-disabled", False)):
+            if os.path.exists(os.path.join(harness.SRV, "Resources", folder, name)):
+                return on
+        return None
+
+    def test_mod_sets(self):
+        names = ["zz_set_a.zip", "zz_set_b.zip", "zz_set_c.zip"]
+        made = [self._mkmod("Client", names[0]), self._mkmod("Client", names[1]), self._mkmod("Client-disabled", names[2])]
+        c = self.owner
+        try:
+            self.assertEqual(c.call("/api/mods/sets", {"action": "save", "name": "<b>bad</b>"})[0], 400)
+            self.assertEqual(c.call("/api/mods/sets", {"action": "apply", "name": "Nope"})[0], 404)
+            st, r = c.call("/api/mods/sets", {"action": "save", "name": "Drift night"})[:2]
+            self.assertEqual(st, 200, r)
+            d = c.call("/api/mods")[1]
+            mine = next(x for x in d["sets"] if x["name"] == "Drift night")
+            self.assertTrue(mine["active"])
+            self.assertIn(names[0], mine["mods"])
+            self.assertNotIn(names[2], mine["mods"])
+            # change what's on, then switch back to the set
+            c.call("/api/mods/action", {"action": "toggle", "name": names[0]})
+            c.call("/api/mods/action", {"action": "toggle", "name": names[2]})
+            self.assertFalse(next(x for x in c.call("/api/mods")[1]["sets"] if x["name"] == "Drift night")["active"])
+            st, r = c.call("/api/mods/sets", {"action": "apply", "name": "drift NIGHT"})[:2]   # names ignore case
+            self.assertEqual(st, 200, r)
+            self.assertEqual([self._where(n) for n in names], [True, True, False])
+            self.assertIn(names[0], r["on"])
+            self.assertIn(names[2], r["off"])
+            # a mod that was deleted is reported, not an error
+            os.remove(made[1])
+            r = c.call("/api/mods/sets", {"action": "apply", "name": "Drift night"})[1]
+            self.assertEqual(r["missing"], [names[1]])
+            self.assertEqual(c.call("/api/mods/sets", {"action": "delete", "name": "Drift night"})[0], 200)
+            self.assertFalse(any(x["name"] == "Drift night" for x in c.call("/api/mods")[1]["sets"]))
+            self.assertEqual(self._where(names[0]), True)            # deleting a set keeps the mods
+        finally:
+            c.call("/api/mods/sets", {"action": "delete", "name": "Drift night"})
+            for n in names:
+                for folder in ("Client", "Client-disabled"):
+                    p = os.path.join(harness.SRV, "Resources", folder, n)
+                    if os.path.exists(p):
+                        os.remove(p)
+
+    def test_mods_storage_and_full_disk(self):
+        d = self.owner.call("/api/mods")[1]
+        self.assertIsNotNone(d["storage"]["free"])
+        self.assertGreaterEqual(d["storage"]["total"], d["storage"]["free"])
+        old = D.UPLOAD_SPARE
+        D.UPLOAD_SPARE = d["storage"]["free"] * 4           # pretend the disk is full
+        try:
+            st, r = self.owner.call("/api/mods/upload?name=zz_full.zip", method="PUT", raw=b"PK" + b"0" * 100,
+                                    headers={"Content-Type": "application/zip"})[:2]
+            self.assertEqual(st, 507)
+            self.assertIn("Not enough space", r["error"])
+            self.assertIsNone(self._where("zz_full.zip"))
+        finally:
+            D.UPLOAD_SPARE = old
+
+    def test_restore_a_backup(self):
+        c = self.owner
+        self.assertEqual(c.call("/api/backups/restore", {"file": "../../etc/passwd"})[0], 404)
+        self.assertEqual(c.call("/api/backups/now", {})[0], 200)
+        first = c.call("/api/backups")[1]["items"][0]["file"]
+        before = D.APP.read_config_text()
+        D.APP.write_config_text(before.replace('MaxPlayers = 8', 'MaxPlayers = 3') if 'MaxPlayers = 8' in before else
+                                D.toml_set(before, "General", "MaxPlayers", 3))
+        try:
+            st, r = c.call("/api/backups/restore", {"file": first})[:2]
+            self.assertEqual(st, 200, r)
+            self.assertTrue(r["undo"])
+            self.assertNotEqual(r["undo"], first)              # the restored backup is still there
+            self.assertIn(first, [x["file"] for x in c.call("/api/backups")[1]["items"]])
+            self.assertIn(r["undo"], [x["file"] for x in c.call("/api/backups")[1]["items"]])
+            self.assertEqual(D.toml_parse(D.APP.read_config_text())[0]["General"]["MaxPlayers"],
+                             D.toml_parse(before)[0]["General"]["MaxPlayers"])
+        finally:
+            D.APP.write_config_text(before)
+
     def test_webhook_cannot_target_home_network(self):
         for u in ("https://127.0.0.1:30815/api/logout", "https://169.254.169.254/latest/", "https://192.168.1.1/",
                   "http://hooks.example/x", "https://10.0.0.1@evil.example/"):
