@@ -34,6 +34,14 @@ export default {
     license: "MIT licenc. Nem a BeamMP csapat vagy a BeamNG GmbH készítette, és nem kapcsolódik hozzájuk. Az EasyServer az ő munkájukra és sok mod- és pluginszerző munkájára épül: [a közreműködők]({GH}#-credits).",
     tryTitle: "Próbáld ki a gépeden",
     viewOnGithub: "Megnézem a GitHubon",
+    downloadFor: "Letöltés {os} rendszerre",
+    downloadVFor: "{v} letöltése {os} rendszerre",
+    setupFor: "Telepítés {os} rendszerre",
+    macRolling: "Mac: Rolling verzió (kísérleti)",
+    onPhone: "Letöltés a gépedre",
+    otherSystems: "Más rendszerek és verziók",
+    themeDark: "Sötét mód",
+    themeLight: "Világos mód",
   },
 
   tour: {
@@ -329,5 +337,17 @@ export default {
       ["Szerverpluginek", "Telepíts közösségi játékmódokat, például CareerMP-t, freeRoamMP-t és BeamJoyt, egyenesen a szerzőjük oldaláról."],
       ["Csapatban üzemeltetve", "Hívd meg a barátaidat egy linkkel, ami egyszer működik és egy óra múlva lejár, és döntsd el, ki mit csinálhat az egyes szervereken. Discorddal is beléphetnek."],
     ],
+  },
+  notFound: {
+    title: "Az oldal nem található - BeamMP EasyServer",
+    h1: "404: rossz kanyar",
+    joke: "Ez az oldal nagyobbat tört, mint egy BeamNG-s autó padlógázzal, és ehhez nincs reset gomb.",
+    text: "Ha már itt vagy, nézd meg, meddig jutsz.",
+    start: "Nyomd meg a szóközt, vagy koppints az útra az induláshoz",
+    again: "Összetörtél! Szóköz vagy koppintás az újrapróbáláshoz",
+    best: "Rekord",
+    gameLabel: "Minijáték: egy autó, ami bóják és gumik fölött ugrál át",
+    home: "Vissza a kezdőlapra",
+    help: "Súgó és GYIK",
   },
 };
