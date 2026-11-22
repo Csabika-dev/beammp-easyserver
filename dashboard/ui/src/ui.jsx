@@ -63,6 +63,25 @@ export const SkelPage = ({ cards = 4 }) => <div aria-busy="true" aria-label="Loa
   <Skel w={220} h={28} /><Skel w="48%" h={13} style={{ margin: "12px 0 22px" }} />
   <div className="grid g2">{Array.from({ length: cards }, (_, i) => <SkelCard key={i} lines={i % 2 ? 4 : 3} />)}</div></div>;
 
+/* ---------------- when something can't load: say so, and offer to try again */
+export function Oops({ err, retry, page, style }) {
+  const [busy, setBusy] = useState(false);
+  const go = async () => { setBusy(true); try { await retry(); } finally { setBusy(false); } };
+  return <div className={"card oops" + (page ? " page" : "")} role="alert" style={style}>
+    <h2>{page ? "This page couldn't load" : "This part couldn't load"}</h2>
+    <p className="small muted">{err}</p>
+    {retry && <button className="btn sm primary" onClick={go} disabled={busy}>{busy ? "Trying again…" : "Try again"}</button>}
+  </div>;
+}
+// A card's placeholder: the shimmer while it loads, or Oops if it failed.
+export const CardWait = ({ err, retry, lines, style }) => err ? <Oops err={err} retry={retry} style={style} /> : <SkelCard lines={lines} style={style} />;
+export const PageWait = ({ err, retry, cards }) => err ? <Oops err={err} retry={retry} page /> : <SkelPage cards={cards} />;
+
+/* ---------------- an empty list: what goes here, and the button to add the first one */
+export const Empty = ({ title, children, actions }) => <div className="empty">
+  <svg viewBox="0 0 48 48" width="40" height="40" aria-hidden="true"><path d="M4 34h40M10 34l4-12h20l4 12" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /><path d="M14 40h4M30 40h4" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" /><path d="M20 28h8" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" opacity=".5" /></svg>
+  <b>{title}</b>{children && <p className="small muted">{children}</p>}{actions && <div className="row">{actions}</div>}</div>;
+
 export const post = async (path, body, ms, after) => {
   try { const r = await L.api(path, { json: body }); L.toast(r.note, ms); if (after) after(r); return r; } catch (e) { L.toast(e.message, 6000); }
 };
