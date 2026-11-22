@@ -1492,6 +1492,14 @@
   "{} warning": "{} Warnung",
   "{} warnings": "{} Warnungen",
   "· internet address": "· Internetadresse",
-  "· this computer": "· dieser Computer"
+  "· this computer": "· dieser Computer",
+  "Average players online by time of day": "Durchschnittlich online nach Tageszeit",
+  "Average players online by time of day · busiest around {}:00": "Durchschnittlich online nach Tageszeit · am meisten los gegen {}:00",
+  "Click a message to see what was said around it.": "Klicke auf eine Nachricht, um zu sehen, was drumherum gesagt wurde.",
+  "Counted since {}.": "Gezählt seit {}.",
+  "Newest {} of {} messages.": "Neueste {} von {} Nachrichten.",
+  "Nobody is online right now (or the server isn't reporting).": "Gerade ist niemand online (oder der Server meldet sich nicht).",
+  "Nobody is online right now.": "Gerade ist niemand online.",
+  "The chat history is turned off (Config → Moderation).": "Der Chatverlauf ist ausgeschaltet (Konfiguration → Moderation)."
  }
 }
