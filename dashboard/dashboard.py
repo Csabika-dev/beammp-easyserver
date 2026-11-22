@@ -103,7 +103,7 @@ DEFAULT_SETTINGS = {
     "notify": {"crash": True, "stopped": True, "update": True, "mod_blocked": True,
                "login_failed": True, "player_join": False, "player_denied": True,
                "moderation": True, "network": True, "restart": False,
-               "resources": True, "backup": True, "rotation": False, "mod_update": True,
+               "resources": True, "backup": True, "rotation": False, "mod_update": True, "report": True,
                "sleep": False},
     "discord_enabled": False,
     "email_enabled": False,
@@ -1704,7 +1704,8 @@ def refresh_mod_desc():
 
 # ----------------------------------------------------------------------------- moderation
 MOD_DEFAULTS = {"admins": [], "filter": False, "words": [], "spam": False, "spam_limit": 5,
-                "antibot": False, "verify": True, "per_ip": 3, "join_flood": 8, "guests": True}
+                "antibot": False, "verify": True, "per_ip": 3, "join_flood": 8, "guests": True,
+                "report": True, "votekick": False, "votekick_min": 4, "chatlog": True}
 NAME_RE = re.compile(r"[^\t\r\n,]{1,64}")
 
 
@@ -1744,8 +1745,10 @@ def read_mod():
         k, v = m.groups()
         if k in ("admins", "words"):
             d[k] = [x.strip() for x in v.split(",") if x.strip()][:500]
-        elif k in ("filter", "spam", "antibot", "verify"):
+        elif k in ("filter", "spam", "antibot", "verify", "report", "votekick", "chatlog"):
             d[k] = v.lower() == "on"
+        elif k == "votekick_min" and v.isdigit() and 3 <= int(v) <= 20:
+            d[k] = int(v)
         elif k == "guests":
             d["guests"] = v.lower() != "block"
         elif k in ("spam_limit", "per_ip", "join_flood") and v.isdigit() and int(v) <= 100:
@@ -1757,10 +1760,63 @@ def write_mod(d):
     onoff = lambda b: "on" if b else "off"
     shared_write(I().MOD_FILE,
                  "# Managed by the BeamMP EasyServer dashboard (Config -> Moderation).\n"
-                 "admins=%s\nfilter=%s\nwords=%s\nspam=%s\nspam_limit=%d\nantibot=%s\nverify=%s\nper_ip=%d\njoin_flood=%d\nguests=%s\n" % (
+                 "admins=%s\nfilter=%s\nwords=%s\nspam=%s\nspam_limit=%d\nantibot=%s\nverify=%s\nper_ip=%d\njoin_flood=%d\nguests=%s\n"
+                 "report=%s\nvotekick=%s\nvotekick_min=%d\nchatlog=%s\n" % (
                      ",".join(d["admins"]), onoff(d["filter"]), ",".join(d["words"]), onoff(d["spam"]), d["spam_limit"],
                      onoff(d["antibot"]), onoff(d["verify"]), d["per_ip"], d["join_flood"],
-                     "allow" if d["guests"] else "block"))
+                     "allow" if d["guests"] else "block", onoff(d["report"]), onoff(d["votekick"]), d["votekick_min"],
+                     onoff(d["chatlog"])))
+
+
+# ----------------------------------------------------------------------------- reports + chat history
+REPORT_KEEP = 200
+_REPORT_LOCK = threading.Lock()
+CHAT_FILES = ("chat.log.1", "chat.log")
+
+
+def _reports_path(inst):
+    return os.path.join(DATA_DIR, "reports-%s.json" % inst.id)
+
+
+def load_reports(inst):
+    d = read_json(_reports_path(inst), [])
+    return [x for x in d if isinstance(x, dict) and isinstance(x.get("id"), str)] if isinstance(d, list) else []
+
+
+def chat_text(t):
+    """Player chat for alerts: no control characters, no clickable [masked](links) in Discord."""
+    return re.sub(r"[\x00-\x1f\x7f]", " ", str(t if t is not None else "")).replace("[", "(").replace("]", ")").strip()[:300]
+
+
+def read_chat(inst, since=0, until=None):
+    """Chat history (oldest first) from the plugin's chat.log and chat.log.1."""
+    out = []
+    for name in CHAT_FILES:
+        raw = shared_read(os.path.join(inst.STATS_DIR, name), 6 * 1024 * 1024)
+        for line in raw.splitlines():
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(e, dict) or not isinstance(e.get("t"), int) or e["t"] < since or (until and e["t"] > until):
+                continue
+            out.append({"t": e["t"], "name": clean_player_name(e.get("name")),
+                        "msg": re.sub(r"[\x00-\x1f\x7f]", " ", str(e.get("msg") or ""))[:300], "hid": bool(e.get("hid"))})
+    out.sort(key=lambda x: x["t"])
+    return out
+
+
+def add_report(inst, e):
+    """A /report from the game: kept for the Players page, with the chat just before it."""
+    t = e["t"]
+    ctx = [c for c in read_chat(inst, t - 180, t + 5) if not c["msg"].lstrip().lower().startswith("/report")][-15:]
+    item = {"id": uuid.uuid4().hex[:12], "t": t, "by": clean_player_name(e.get("name")),
+            "target": clean_player_name(e.get("target")), "reason": chat_text(e.get("reason"))[:150], "chat": ctx, "open": True}
+    with _REPORT_LOCK:
+        items = load_reports(inst)
+        items.insert(0, item)
+        write_json(_reports_path(inst), items[:REPORT_KEEP])
+    return item
 
 
 def read_bans():
@@ -6340,7 +6396,8 @@ USERS_FILE = os.path.join(DATA_DIR, "users.json")
 ROLES = {"viewer": 0, "moderator": 1, "admin": 2, "owner": 3}
 USER_RE = re.compile(r"[A-Za-z0-9_.\-]{2,24}")
 # What each role may change (GET pages are open to every role unless listed in ADMIN_GET).
-MOD_WRITE = {"/api/players/act", "/api/bans/add", "/api/bans/remove", "/api/allowlist", "/api/server/action",
+MOD_GET = {"/api/chat", "/api/reports"}         # what players wrote: not for read-only viewers
+MOD_WRITE = {"/api/reports/close", "/api/players/act", "/api/bans/add", "/api/bans/remove", "/api/allowlist", "/api/server/action",
              "/api/notifications/read", "/api/notifications/clear", "/api/security/ack", "/api/logout",
              "/api/events/stop", "/api/map", "/api/maintenance"}
 VIEWER_WRITE = {"/api/logout", "/api/notifications/read", "/api/logs/explain", "/api/devices",
@@ -6354,7 +6411,7 @@ ADMIN_GET = {"/api/export", "/api/backups/download", "/api/phoneapp", "/api/ntfy
 
 def required_role(method, path):
     if method in ("GET", "HEAD"):
-        return "admin" if path in ADMIN_GET else "viewer"
+        return "admin" if path in ADMIN_GET else "moderator" if path in MOD_GET else "viewer"
     if path in OWNER_WRITE:
         return "owner"
     if path in VIEWER_WRITE:
@@ -6439,7 +6496,7 @@ PERM_GROUPS = [
 PERM_IDS = [g[0] for g in PERM_GROUPS]
 _PG_EXACT = {
     "/api/players/act": "players", "/api/players/clear": "players", "/api/bans/add": "players", "/api/bans/remove": "players",
-    "/api/allowlist": "players",
+    "/api/allowlist": "players", "/api/chat": "players", "/api/reports": "players", "/api/reports/close": "players",
     "/api/server/action": "server", "/api/maintenance": "server", "/api/restarts": "server",
     "/api/map": "map", "/api/rotation": "map", "/api/mapvote": "map", "/api/events": "map", "/api/events/stop": "map",
     "/api/modbrowser/install": "mods", "/api/modpack/code": "mods", "/api/modpack": "mods",
@@ -6919,7 +6976,7 @@ ACTION_LABELS = {
     "/api/mods/rescan": "Re-checked mods", "/api/bans/add": "Banned {name}", "/api/bans/remove": "Unbanned {name}",
     "/api/players/act": "Player {action}: {name}", "/api/allowlist": "Changed the allow-list", "/api/settings": "Changed settings",
     "/api/password": "Changed the password", "/api/devices": "Forgot remembered devices", "/api/remote": "Changed internet access / HTTPS", "/api/authkey": "Changed the AuthKey",
-    "/api/import": "Imported a backup", "/api/backups/restore": "Restored a nightly backup", "/api/mods/sets": "Mod set {action}: {name}", "/api/upnp": "Automatic port forwarding: {on}", "/api/modbrowser/install": "Installed a mod from the mod browser", "/api/supporter": "Changed the supporter licence", "/api/guard": "Unblocked an address in the BeamMP-only guard", "/api/invite": "Changed the invite message", "/api/map": "Switched the map to {map}", "/api/restarts": "Changed scheduled restarts",
+    "/api/import": "Imported a backup", "/api/reports/close": "Marked a player report as handled", "/api/chat/clear": "Deleted the chat history", "/api/backups/restore": "Restored a nightly backup", "/api/mods/sets": "Mod set {action}: {name}", "/api/upnp": "Automatic port forwarding: {on}", "/api/modbrowser/install": "Installed a mod from the mod browser", "/api/supporter": "Changed the supporter licence", "/api/guard": "Unblocked an address in the BeamMP-only guard", "/api/invite": "Changed the invite message", "/api/map": "Switched the map to {map}", "/api/restarts": "Changed scheduled restarts",
     "/api/moderation": "Changed moderation settings", "/api/extras": "Changed cars & chat settings",
     "/api/messages": "Changed chat messages", "/api/rotation": "Changed map rotation", "/api/template": "Applied a template",
     "/api/backups/now": "Made a backup", "/api/events": "Changed events", "/api/events/stop": "Ended an event early",
@@ -8141,7 +8198,7 @@ class App:
                         raw = raw[:raw.rindex(b"\n") + 1]     # never cut a line in half
                     S["ev_pos"] += len(raw)
                     chunk = raw.decode("utf-8", "replace")
-                joined, denied, modmsgs, bots, refused, chat = [], [], [], 0, [], []
+                joined, denied, modmsgs, bots, refused, chat, reports = [], [], [], 0, [], [], []
                 for line in chunk.splitlines():
                     try:
                         e = json.loads(line)
@@ -8151,6 +8208,11 @@ class App:
                         continue
                     if e.get("ev") == "join":
                         joined.append(clean_player_name(e.get("name")))
+                    elif e.get("ev") == "report" and len(reports) < 10:
+                        reports.append(e)
+                    elif e.get("ev") == "votekick":
+                        activity(clean_player_name(e.get("by")), "/votekick %s (%s)" % (clean_player_name(e.get("name")), chat_text(e.get("reason"))[:80]),
+                                 "game", server=inst.id)
                     elif e.get("ev") == "chat" and len(chat) < 40:
                         chat.append((clean_player_name(e.get("name")), clean_msg(e.get("msg"))[:300]))
                     elif e.get("ev") == "mapvote" and isinstance(e.get("map"), str):
@@ -8191,6 +8253,13 @@ class App:
                                            "trying to fill the server. Anti-bot paused new joins for 2 minutes; players "
                                            "who joined before can still come in." % e.get("count"))
                     S["last_t"] = max(S["last_t"], e["t"])
+                for e in reports:
+                    r = add_report(inst, e)
+                    lines = "\n".join("%s %s: %s" % (time.strftime("%H:%M", time.localtime(c["t"])), c["name"], chat_text(c["msg"]))
+                                      for c in r["chat"][-8:])
+                    self.notifier.add("report", "%s reported %s" % (r["by"], r["target"]),
+                                      "Reason: %s%s\nSee Players -> Reports in the dashboard." % (r["reason"], ("\n\nChat before the report:\n" + lines) if lines else ""),
+                                      "warning")
                 if modmsgs:
                     self.notifier.add("moderation", modmsgs[0] if len(modmsgs) == 1 else "%d moderation actions" % len(modmsgs),
                                       "\n".join(modmsgs[:20]), "info")
@@ -9219,7 +9288,7 @@ class Handler(BaseHTTPRequestHandler):
     def post_moderation(self, q):
         b = self.body_json()
         d = read_mod()
-        for k in ("filter", "spam", "antibot", "verify", "guests"):
+        for k in ("filter", "spam", "antibot", "verify", "guests", "report", "votekick", "chatlog"):
             if k in b:
                 d[k] = bool(b[k])
         for k in ("admins", "words"):
@@ -9234,7 +9303,7 @@ class Handler(BaseHTTPRequestHandler):
                     if x and x not in items:
                         items.append(x)
                 d[k] = items
-        for k, lo, hi in (("spam_limit", 2, 30), ("per_ip", 0, 20), ("join_flood", 0, 100)):
+        for k, lo, hi in (("spam_limit", 2, 30), ("per_ip", 0, 20), ("join_flood", 0, 100), ("votekick_min", 3, 20)):
             if k in b:
                 v = int(b[k])
                 if not lo <= v <= hi:
@@ -9242,6 +9311,55 @@ class Handler(BaseHTTPRequestHandler):
                 d[k] = v
         write_mod(d)
         self.send(200, {"ok": True, "note": "Saved - works right away, no restart needed."})
+
+    def get_reports(self, q):
+        items = load_reports(I())
+        self.send(200, {"items": items[:100], "open": sum(1 for x in items if x.get("open")),
+                        "on": read_mod()["report"]})
+
+    def post_reports_close(self, q):
+        b = self.body_json()
+        rid, every = str(b.get("id") or ""), b.get("id") == "all"
+        with _REPORT_LOCK:
+            items = load_reports(I())
+            hit = 0
+            for x in items:
+                if (every or x["id"] == rid) and x.get("open"):
+                    x["open"], x["closed_by"], x["closed_at"] = False, getattr(_TL, "user", "owner"), now()
+                    hit += 1
+            if not hit and not every:
+                return self.fail(404, "No such report")
+            write_json(_reports_path(I()), items)
+        self.send(200, {"ok": True, "note": "Marked as handled."})
+
+    def get_chat(self, q):
+        """Chat history: newest last. q = words, player = name, around = a time (shows the 5 minutes around it)."""
+        try:
+            around = int(q.get("around") or 0)
+        except ValueError:
+            around = 0
+        days = 30
+        lines = read_chat(I(), around - 300 if around else now() - days * 86400, around + 300 if around else None)
+        word = str(q.get("q") or "").strip().lower()[:80]
+        player = str(q.get("player") or "").strip().lower()[:40]
+        if not around:
+            if player:
+                lines = [c for c in lines if c["name"].lower() == player]
+            if word:
+                lines = [c for c in lines if word in c["msg"].lower() or word in c["name"].lower()]
+        total = len(lines)
+        self.send(200, {"lines": lines[-500:], "total": total, "on": read_mod()["chatlog"],
+                        "players": sorted({c["name"] for c in lines[-3000:]}, key=str.lower)[:300] if not player else []})
+
+    def post_chat_clear(self, q):
+        for name in CHAT_FILES:
+            try:
+                os.remove(os.path.join(I().STATS_DIR, name))
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                return self.fail(500, "Couldn't delete the chat history (%s)" % short_err(e))
+        self.send(200, {"ok": True, "note": "Chat history deleted."})
 
     def get_bans(self, q):
         self.send(200, {"bans": read_bans(), "online": online_names()})
