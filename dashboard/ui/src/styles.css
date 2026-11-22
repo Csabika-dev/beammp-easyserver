@@ -202,3 +202,16 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 .news .item{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--surface-2)}
 .news .item b{display:block;margin-bottom:4px}
 .news .item p{margin:0;color:var(--text-2);font-size:13.5px}
+
+/* loading placeholders: grey shapes with a soft light sweeping over them */
+.skel{position:relative;overflow:hidden;border-radius:6px;background:var(--surface-2);max-width:100%}
+.skel::after{content:"";position:absolute;inset:0;transform:translateX(-100%);background:linear-gradient(90deg,transparent,rgba(255,255,255,.55),transparent)}
+[data-theme=dark] .skel::after{background:linear-gradient(90deg,transparent,rgba(255,255,255,.06),transparent)}
+.skelcard{pointer-events:none}
+@media (prefers-reduced-motion:no-preference){
+  .skel::after{animation:es-shimmer 1.4s ease-in-out infinite}
+  .skelcard,.skel{animation:es-fade .3s ease backwards}
+  main.enter>div>.card:not(.skelcard),main.enter>div>div>.card:not(.skelcard){animation:es-fade .35s ease backwards}
+}
+@keyframes es-shimmer{100%{transform:translateX(100%)}}
+@keyframes es-fade{from{opacity:0}}
