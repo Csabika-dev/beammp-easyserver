@@ -280,6 +280,9 @@ function Install-Dashboard($dir, [hashtable]$preset = $null) {
         New-Item -ItemType Directory -Force -Path (Join-Path $dst 'lang') | Out-Null
         Copy-Item -Force (Join-Path $langSrc '*.json') (Join-Path $dst 'lang')
     }
+    # the "New in" cards on the Overview after an update
+    $news = Join-Path $src 'whatsnew.json'
+    if (Test-Path $news) { Copy-Item -Force $news (Join-Path $dst 'whatsnew.json') }
     # player statistics plugin, runs inside the BeamMP server
     $plug = Join-Path $dir 'Resources\Server\EasyServerStats'
     New-Item -ItemType Directory -Force -Path $plug | Out-Null
