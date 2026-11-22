@@ -36,6 +36,14 @@ export default {
     license: "MIT license. Not made by or affiliated with the BeamMP team or BeamNG GmbH. EasyServer builds on their work and on many mod and plugin authors: [see the credits]({GH}#-credits).",
     tryTitle: "Try it on your PC",
     viewOnGithub: "View on GitHub",
+    downloadFor: "Download for {os}",
+    downloadVFor: "Download {v} for {os}",
+    setupFor: "Set up on {os}",
+    macRolling: "Mac: Rolling version (experimental)",
+    onPhone: "Download for your PC",
+    otherSystems: "Other systems and versions",
+    themeDark: "Switch to dark mode",
+    themeLight: "Switch to light mode",
   },
 
   tour: {
@@ -323,5 +331,17 @@ export default {
           "[Ask in the community forum]({ASK}) and attach the report. Bugs go to [issues]({GH}/issues/new/choose)."] },
         "Found a security problem? Please use [private reporting]({GH}/security/advisories/new) instead of posting it publicly."]],
     ],
+  },
+  notFound: {
+    title: "Page not found - BeamMP EasyServer",
+    h1: "404: wrong turn",
+    joke: "This page crashed harder than a BeamNG car at full speed, and there's no reset button for it.",
+    text: "While you're here, see how far you can drive.",
+    start: "Press Space or tap the road to start driving",
+    again: "Crashed! Press Space or tap to try again",
+    best: "Best",
+    gameLabel: "Mini game: a car jumping over traffic cones and tyres",
+    home: "Back to the home page",
+    help: "Help & FAQ",
   },
 };
