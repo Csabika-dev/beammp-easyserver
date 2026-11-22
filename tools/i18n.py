@@ -3,15 +3,14 @@
   python3 tools/i18n.py              how much of each language in dashboard/lang is translated
   python3 tools/i18n.py missing de   the English text that has no German translation yet
 
-It reads the English text straight out of dashboard/webui.html, so it is always up to date."""
+It reads the English text straight out of the dashboard's source (dashboard/ui/src), so it is always up to date."""
 import re, json, sys
 import os
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-src = open(os.path.join(ROOT, "dashboard", "webui.html"), encoding="utf-8").read()
-start = src.index('<script nonce="__NONCE__">') + len('<script nonce="__NONCE__">')
-end = src.index('</script>', start)
-code = src[start:end]
-html_head = src[:start - len('<script nonce="__NONCE__">')]
+UI = os.path.join(ROOT, "dashboard", "ui")
+code = open(os.path.join(UI, "src", "legacy.js"), encoding="utf-8").read()     # pages still drawn as HTML text
+jsx = open(os.path.join(UI, "src", "app.jsx"), encoding="utf-8").read()         # the React part
+html_head = open(os.path.join(UI, "head.html"), encoding="utf-8").read()
 M = "\x00"
 templates, strings = [], []   # (text with M for ${}) ; (literal, plus_before, plus_after)
 
@@ -127,6 +126,19 @@ for lit, pb, pa in strings:
         if not re.search(r"^[A-Z][a-z]", lit): continue
     add(s, "str")
 html_text(re.sub(r"<style[\s\S]*?</style>", "", html_head), "head")
+
+# React (app.jsx): text between tags, the attributes people read, and quoted text that isn't code
+jsx = re.sub(r"//[^\n]*", "", jsx)
+for m in re.finditer(r"(?<![=\w])>([^<>{}]*[A-Za-z][^<>{}]*)(?=[<{])|\}([^<>{}]*[A-Za-z][^<>{}]*)(?=<)", jsx):
+    t = m.group(1) or m.group(2)
+    if not re.search(r"[;=]|\breturn\b|\bcase\b|\)\s*$", t): add(t, "jsx")
+CODE_ATTR = r"(?:className|key|type|autoComplete|inputMode|rel|target|href|kind|role|shapeRendering|fill|viewBox|value|name|n|d|x|y|width|height|style)"
+for m in re.finditer(r'(\b' + CODE_ATTR + r'=)?"((?:[^"\\\n]|\\.)*)"', jsx):
+    if m.group(1): continue
+    lit = unesc(m.group(2))
+    if re.fullmatch(r"[#.\[\w\-=\]\s:>\"*,()/]+", lit) and not re.search(r"^[A-Z][a-z]", lit) and not re.search(r"[a-z] [a-z]", lit):
+        continue
+    add(lit, "jsx")
 ENGLISH = sorted(keys)
 
 
