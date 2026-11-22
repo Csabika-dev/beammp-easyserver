@@ -916,9 +916,13 @@ VIEWS.config = async m => {
 };
 
 /* ---------------- mods */
+let MOD_SORT = store.get("es-modsort", "name");
 VIEWS.mods = async m => {
   const [d, mu] = await Promise.all([api("/api/mods"), api("/api/mods/updates").catch(() => ({ mods: {} }))]);
   const U = mu.mods || {};
+  const ST = d.storage || {}, SETS = d.sets || [];
+  let roomLeft = ST.free == null ? null : Math.max(0, ST.free - (ST.spare || 0));
+  if (MOD_SORT === "size") d.mods.sort((a, b) => b.size - a.size);
   setTimeout(() => { const t = $("#descsize"); if (t) t.onchange = async () => { try { const r = await api("/api/mods/desc", { json: { enabled: t.checked } }); toast(r.note, 7000); } catch (e) { toast(e.message); t.checked = !t.checked; } }; }, 0);
   const B = { clean: ["good", "✓ safe"], warning: ["warn", "⚠ check"], unchecked: ["", "not checked yet"] };
   m.innerHTML = `
@@ -929,8 +933,15 @@ VIEWS.mods = async m => {
     <div class="card" style="margin-bottom:16px"><div class="row"><div><div class="small muted">Players download before they can join</div><div style="font-size:22px;font-weight:650">${d.download ? fmtSize(d.download) : "Nothing - vanilla"}</div>
       ${d.maps_size && !d.light ? `<div class="small muted">${fmtSize(d.maps_size)} of that is map mods. Light mode (below) sends only the map being played.</div>` : ""}
       ${d.light && d.all_maps_size > d.maps_size ? `<div class="small" style="color:var(--good-ink)">Light mode saves players ${fmtSize(d.all_maps_size - d.maps_size)} of map downloads.</div>` : ""}</div></div>
+      ${ST.free != null ? `<div style="margin-top:12px"><div class="row small"><span>Mods take <b>${fmtSize(ST.mods)}</b> on this drive</span><span class="spacer"></span><span class="${ST.low ? "" : "muted"}" style="${ST.low ? "color:var(--warn-ink);font-weight:600" : ""}">${fmtSize(ST.free)} free of ${fmtSize(ST.total)}</span></div>
+        <div class="bar" role="img" aria-label="Disk space: ${fmtSize(ST.total - ST.free)} used of ${fmtSize(ST.total)}"><i style="width:${Math.min(100, Math.round((ST.total - ST.free) / ST.total * 100))}%;${ST.low ? "background:var(--warning)" : ""}"></i></div>
+        ${ST.low ? `<p class="small" style="color:var(--warn-ink);margin:6px 0 0">This drive is almost full. Turn off or delete mods you don't play (sort by size below), or move the server to a bigger drive. On a Raspberry Pi, a USB 3 stick or SSD is faster and bigger than the SD card.</p>` : ""}</div>` : ""}
       <label class="toggle" style="margin-top:10px"><input type="checkbox" id="lightmode" ${d.light ? "checked" : ""}><span><b>Light mode: only send the map being played</b><small>Map mods for other maps wait and come back by themselves when you switch to their map (Config, map vote, rotation or events). Mods that aren't maps are always sent. Players join much faster on servers with several map mods</small></span></label>
       <label class="toggle" style="margin-top:10px"><input type="checkbox" id="descsize" ${d.desc_modsize ? "checked" : ""}><span><b>Show the download size in the server description</b><small>Adds "| Mods: ${esc(d.download ? fmtSize(d.download) : "0")}" to the end of the description in the BeamMP server list and keeps it up to date. Takes effect after the server restarts</small></span></label></div>
+    <div class="card" style="margin-bottom:16px"><div class="row"><div style="flex:1;min-width:240px"><h2 style="margin:0">Mod sets</h2><p class="small muted" style="margin:4px 0 0">Save the mods that are on now under a name, like "Drift night", and switch between sets in one click. Mods outside the set are turned off, not deleted.</p></div><button class="btn sm" id="set_save">Save as a set…</button></div>
+      ${SETS.length ? `<table style="margin-top:10px"><tbody>${SETS.map(x => `<tr><td><b>${esc(x.name)}</b>${x.active ? '<span class="badge good">on now</span>' : ""}<div class="small muted">${x.mods.length} mod${x.mods.length === 1 ? "" : "s"} · ${fmtSize(x.size)}${x.missing.length ? ` · <span style="color:var(--warn-ink)">${x.missing.length} no longer on the server</span>` : ""}</div></td>
+        <td class="num"><div class="row" style="justify-content:flex-end">${x.active ? "" : `<button class="btn sm primary" data-set="apply" data-sn="${esc(x.name)}">Switch to this set</button>`}<button class="btn sm" data-set="save" data-sn="${esc(x.name)}" title="Replace this set with the mods that are on now">Update</button><button class="btn sm danger" data-set="delete" data-sn="${esc(x.name)}">Delete</button></div></td></tr>`).join("")}</tbody></table>` : `<p class="small muted" style="margin:10px 0 0">No sets yet.</p>`}</div>
+    <div class="row" style="margin-bottom:6px"><span class="spacer"></span><label class="small muted" for="modsort">Sort</label><select id="modsort" style="width:auto"><option value="name" ${MOD_SORT === "name" ? "selected" : ""}>By name</option><option value="size" ${MOD_SORT === "size" ? "selected" : ""}>Biggest first</option></select></div>
     <div class="card tight"><table><thead><tr><th>Mod</th><th class="num">Size</th><th></th></tr></thead><tbody>
       ${d.mods.length ? d.mods.map(x => `<tr><td><b class="${x.enabled ? "" : "muted"}">${esc(x.name)}</b>${x.builtin ? '<span class="badge good">EasyServer tools</span>' : `<span class="badge ${B[x.safety][0]}">${B[x.safety][1]}</span>`}${x.enabled ? "" : x.parked ? '<span class="badge">waiting - light mode</span>' : '<span class="badge">off</span>'}${x.maps.map(mp => `<span class="badge">map: ${esc(mp)}</span>`).join("")}${(x.needs || []).length ? `<span class="badge warn" title="This mod adds parts to a vehicle that isn't in the game or in your other mods, so it does nothing on its own. Add the mod that has this vehicle.">needs the mod for: ${esc(x.needs.join(", "))}</span>` : ""}${U[x.name] ? (U[x.name].update ? `<span class="badge warn">update ${esc(U[x.name].have || "?")} → ${esc(U[x.name].latest || "new")}</span>` : `<span class="badge good">up to date${U[x.name].have ? " (" + esc(U[x.name].have) + ")" : ""}</span>`) : ""}
         ${x.reasons.length ? `<div class="small" style="color:var(--warn-ink);margin-top:4px">${x.reasons.map(esc).join("<br>")}</div>` : ""}</td>
@@ -947,6 +958,23 @@ VIEWS.mods = async m => {
     ${d.quarantine.length ? `<h2 style="margin-top:26px">⛔ Blocked mods (quarantine)</h2><div class="card tight"><table><tbody>${d.quarantine.map(q => `<tr><td><b>${esc(q.name)}</b><div class="small" style="color:var(--crit-ink);white-space:pre-wrap">${esc(q.why)}</div></td><td class="num"><button class="btn sm danger" data-a="qdelete" data-n="${esc(q.name)}">Delete</button></td></tr>`).join("")}</tbody></table></div>` : ""}`;
   $("#mb_open").onclick = () => modBrowser();
   $("#mpcode").onclick = () => modpackCode();
+  $("#modsort").onchange = e => { MOD_SORT = e.target.value; store.set("es-modsort", MOD_SORT); show("mods"); };
+  const setAct = async (action, name) => {
+    try { const r = await api("/api/mods/sets", { json: { action, name } }); toast(r.note, 8000); show("mods"); } catch (e) { toast(e.message, 6000); }
+  };
+  $("#set_save").onclick = () => {
+    const n = (prompt("Name for this mod set (for example Drift night). It saves the mods that are on now.") || "").trim();
+    if (!n) return;
+    if (SETS.some(x => x.name.toLowerCase() === n.toLowerCase()) && !confirm("There's already a set called " + n + ". Replace it with the mods that are on now?")) return;
+    setAct("save", n);
+  };
+  m.querySelectorAll("[data-set]").forEach(b => b.onclick = () => {
+    const a = b.dataset.set, n = b.dataset.sn;
+    if (a === "delete" && !confirm("Delete the mod set " + n + "? The mods themselves stay.")) return;
+    if (a === "save" && !confirm("Replace " + n + " with the mods that are on now?")) return;
+    if (a === "apply" && !confirm("Switch to " + n + "? Mods that aren't in this set are turned off (not deleted).")) return;
+    setAct(a, n);
+  });
   loadPlugins();
   const D = $("#drop");
   D.onclick = () => $("#file").click();
@@ -1010,6 +1038,10 @@ VIEWS.mods = async m => {
       box.innerHTML = `<b>${esc(f.name)}</b><div class="bar"><i></i></div><div class="small muted" data-s>Uploading…</div>`;
       $("#uploads").appendChild(box);
       if (!/\.zip$/i.test(f.name)) { box.querySelector("[data-s]").textContent = "Only .zip files"; return res(); }
+      if (roomLeft != null && f.size > roomLeft) {
+        box.querySelector("[data-s]").innerHTML = `<span style="color:var(--crit-ink)">Not enough space: this mod is ${fmtSize(f.size)} and only ${fmtSize(roomLeft)} is free. Delete or turn off mods you don't play, or use a bigger drive.</span>`;
+        return res();
+      }
       const x = new XMLHttpRequest();
       x.open("PUT", "/api/mods/upload?name=" + encodeURIComponent(f.name));
       x.setRequestHeader("X-ES-CSRF", CSRF); x.setRequestHeader("X-ES-Server", SERVER);
@@ -1020,7 +1052,7 @@ VIEWS.mods = async m => {
         const s = box.querySelector("[data-s]");
         if (x.status === 422) { s.innerHTML = `<b style="color:var(--crit-ink)">Blocked - not uploaded.</b><br>${(j.reasons || []).map(esc).join("<br>")}`; }
         else if (x.status !== 200) { s.textContent = j.error || "Upload failed"; }
-        else { s.innerHTML = `<span style="color:var(--good-ink)">✓ Uploaded and checked (${esc((j.checks || []).join(" + "))})</span>${j.maps && j.maps.length ? " · contains map " + esc(j.maps.join(", ")) : ""}${j.safety === "warning" ? `<div style="color:var(--warn-ink)">⚠ ${j.reasons.map(esc).join("<br>⚠ ")}</div>` : ""}`; }
+        else { if (roomLeft != null) roomLeft = Math.max(0, roomLeft - f.size); s.innerHTML = `<span style="color:var(--good-ink)">✓ Uploaded and checked (${esc((j.checks || []).join(" + "))})</span>${j.maps && j.maps.length ? " · contains map " + esc(j.maps.join(", ")) : ""}${j.safety === "warning" ? `<div style="color:var(--warn-ink)">⚠ ${j.reasons.map(esc).join("<br>⚠ ")}</div>` : ""}`; }
         res();
       };
       x.onerror = () => { box.querySelector("[data-s]").textContent = "Upload failed"; res(); };
@@ -1652,12 +1684,12 @@ async function loadSet17() {
   el.innerHTML = `
   <div class="grid g2" style="margin-top:16px">
     <div class="card"><div class="row"><h2 style="margin:0">Automatic backups</h2><span class="spacer"></span><span class="pill ${bk.on ? "good" : ""}"><span class="dot"></span>${bk.on ? "Nightly " + esc(bk.at) : "Off"}</span></div>
-      <p class="small muted">Every night the settings of all servers (config, allow-list, bans, moderation, messages, rotation) are saved. The last ${bk.keep} are kept. Restore one with Import below.</p>
+      <p class="small muted">Every night the settings of all servers (config, allow-list, bans, moderation, messages, rotation) are saved. The last ${bk.keep} are kept. ${SESSION.role === "owner" || !SESSION.role ? "Click Restore to put one back - how things are right now is saved first, so you can undo it." : "The owner can restore one."}</p>
       <label class="toggle"><input type="checkbox" id="bk_on" ${bk.on ? "checked" : ""}><span><b>Back up every night</b><small>On by default. Keys and passwords are never in a backup</small></span></label>
       <label class="toggle"><input type="checkbox" id="bk_mods" ${bk.mods ? "checked" : ""}><span><b>Include the mods</b><small>Can use a lot of disk space</small></span></label>
       <label class="f"><span>At</span><input type="time" id="bk_at" value="${esc(bk.at)}" style="max-width:160px;color-scheme:light dark;color:inherit"></label>
       <div class="row"><button class="btn primary" id="bk_save">Save</button><button class="btn" id="bk_now">Back up now</button></div>
-      ${bk.items.length ? `<div style="margin-top:10px">${bk.items.map(b => `<div class="row small" style="padding:3px 0"><span>${esc(fmtTime(b.t))}${b.mods ? " · with mods" : ""} · ${esc(fmtSize(b.size))}</span><span class="spacer"></span><a href="/api/backups/download?file=${encodeURIComponent(b.file)}&srv=${encodeURIComponent(SERVER)}" download>Download</a></div>`).join("")}</div>` : `<p class="small muted" style="margin-top:8px">No backups of this server yet.</p>`}
+      ${bk.items.length ? `<div style="margin-top:10px">${bk.items.map(b => `<div class="row small" style="padding:3px 0"><span>${esc(fmtTime(b.t))}${b.mods ? " · with mods" : ""} · ${esc(fmtSize(b.size))}</span><span class="spacer"></span>${SESSION.role === "owner" || !SESSION.role ? `<button class="btn sm" data-bres="${esc(b.file)}" data-bmods="${b.mods ? 1 : ""}" data-bt="${esc(fmtTime(b.t))}">Restore</button>` : ""}<a href="/api/backups/download?file=${encodeURIComponent(b.file)}&srv=${encodeURIComponent(SERVER)}" download>Download</a></div>`).join("")}</div>` : `<p class="small muted" style="margin-top:8px">No backups of this server yet.</p>`}
     </div>
     <div class="card"><div class="row"><h2 style="margin:0">Fixed address (DuckDNS)</h2><span class="spacer"></span><span class="pill ${st.duckdns_domain ? (st.duck_err ? "warn" : "good") : ""}"><span class="dot"></span>${st.duckdns_domain ? esc(st.duckdns_domain) + ".duckdns.org" : "Off"}</span></div>
       <p class="small muted">Most home internet gets a new IP address now and then, and your friends' saved address stops working. With a free DuckDNS name they always use <b>yourname.duckdns.org</b> - the dashboard keeps it pointing at your home.</p>
@@ -1680,6 +1712,12 @@ async function loadSet17() {
     <label class="f"><span>Your upload speed (Mbit/s)</span><div class="row"><input type="number" id="up_mbit" min="0" step="0.1" value="${esc(rs.upload_mbit || "")}" placeholder="e.g. 20" style="max-width:160px"><button class="btn" id="up_save">Save</button></div><small>Run a speed test (for example speedtest.net) on this computer and enter the <b>upload</b> number. Without it you only get memory and processor warnings.</small></label>
   </div>`;
   $("#bk_save").onclick = async () => { try { const r = await api("/api/backups", { json: { on: $("#bk_on").checked, mods: $("#bk_mods").checked, at: $("#bk_at").value } }); toast(r.note); loadSet17(); } catch (e) { toast(e.message); } };
+  el.querySelectorAll("[data-bres]").forEach(b => b.onclick = async () => {
+    if (!confirm("Restore the backup from " + b.dataset.bt + "? The server's config, allow-list, bans, moderation and messages go back to how they were then. How things are right now is saved as a backup first.")) return;
+    const mods = !!b.dataset.bmods && confirm("This backup has the mods in it too. Put those mods back as well?\n\nOK = settings and mods, Cancel = only the settings.");
+    b.disabled = true; toast("Restoring…", 20000);
+    try { const r = await api("/api/backups/restore", { json: { file: b.dataset.bres, mods } }); toast(r.note, 9000); loadSet17(); } catch (e) { toast(e.message, 8000); b.disabled = false; }
+  });
   $("#bk_now").onclick = async () => { $("#bk_now").disabled = true; try { const r = await api("/api/backups/now", { json: { mods: $("#bk_mods").checked } }); toast(r.note); loadSet17(); } catch (e) { toast(e.message, 6000); $("#bk_now").disabled = false; } };
   $("#dk_save").onclick = async () => { $("#dk_save").disabled = true; try { const r = await api("/api/duckdns", { json: { domain: $("#dk_dom").value, token: $("#dk_tok").value } }); toast(r.note, 7000); loadSet17(); } catch (e) { toast(e.message, 7000); $("#dk_save").disabled = false; } };
   drawLoadGraphs(rs.upload_mbit, rs.cpus);
