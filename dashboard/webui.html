@@ -443,6 +443,17 @@ async function finishDiscord(note, code) {
   }
 }
 
+// Put the server computer to sleep (Overview "Sleep PC" and Settings -> Sleep & wake-up). True once it's on its way.
+async function sleepComputer(note) {
+  if (!confirm((note ? note + "\n\n" : "") + "Put the server computer to sleep now? The game servers pause and players are disconnected.\n\nWake it with the phone app's Wake up button (if Wake-on-LAN is set up) or its power button.")) return false;
+  try { await api("/api/power/sleep", { json: {} }); } catch (e) {
+    if (e.status !== 409 || !confirm(e.message + "\n\nSleep anyway?")) { toast(e.message, 6000); return false; }
+    try { await api("/api/power/sleep", { json: { force: true } }); } catch (e2) { toast(e2.message, 6000); return false; }
+  }
+  toast("💤 Going to sleep in a few seconds", 6000);
+  return true;
+}
+
 const ROLE_TABS = { viewer: ["overview", "players", "network", "logs", "notifications"], moderator: ["overview", "players", "network", "logs", "notifications"] };
 const myRole = () => (SESSION.server_roles && SESSION.server_roles[SERVER]) || null;
 const myTabs = () => {
@@ -592,12 +603,13 @@ VIEWS.overview = async m => {
     </div>
     <div class="grid g3" style="margin-top:16px">
       <div class="card"><h2>Server control</h2><p class="muted small">Start, stop or restart the BeamMP server. A restart disconnects everyone who is playing.</p>
-        <div class="row">${s.state === "running" ? `<button class="btn" data-act="restart">Restart</button><button class="btn danger" data-act="stop">Stop</button>` : `<button class="btn primary" data-act="start">Start server</button>`}</div></div>
+        <div class="row">${s.state === "running" ? `<button class="btn" data-act="restart">Restart</button><button class="btn danger" data-act="stop">Stop</button>` : `<button class="btn primary" data-act="start">Start server</button>`}${myTabs().some(t => t[0] === "settings") ? `<span class="spacer"></span><button class="btn" id="ov_sleep" title="Put the server computer to sleep - wake it with the phone app's Wake up button or its power button">Sleep PC</button>` : ""}</div></div>
       <div class="card"><h2>Map</h2><p class="muted small">Switch the map in one click. The server restarts, so players are disconnected for a moment and reconnect on the new map.</p>
         <div class="row"><select id="qmap" style="flex:1;min-width:0">${[["Built-in maps", d.maps.builtin], ["Map mods", d.maps.mods]].filter(g => g[1].length).map(([l, xs]) => `<optgroup label="${l}">${xs.map(x => `<option ${x === d.map ? "selected" : ""}>${esc(x)}</option>`).join("")}</optgroup>`).join("")}${d.map && !d.maps.builtin.includes(d.map) && !d.maps.mods.includes(d.map) ? `<option selected>${esc(d.map)}</option>` : ""}</select><button class="btn primary" id="qmapgo">Apply</button></div></div>
       <div class="card"><h2>Who's online</h2>${online.length ? `<div class="row">${online.map(p => `<span class="pill"><span class="dot"></span>${esc(p)}</span>`).join("")}</div>` : `<p class="muted">Nobody is playing right now.</p>`}</div>
     </div>`;
   m.querySelectorAll("[data-act]").forEach(b => b.onclick = () => serverAction(b.dataset.act, b));
+  if ($("#ov_sleep")) $("#ov_sleep").onclick = async () => { if (await sleepComputer()) { $("#ov_sleep").disabled = true; $("#ov_sleep").textContent = "Going to sleep…"; } };
   $("#ov_invite").onclick = openInvite;
   if ($("#rv_open")) $("#rv_open").onclick = async e => { e.preventDefault(); if (await reviewGate(undefined, false)) { toast("Thanks - this server is ready to start"); show("overview"); } };
   m.querySelectorAll("[data-go]").forEach(b => b.onclick = () => show(b.dataset.go));
@@ -2107,12 +2119,7 @@ sudo bash install-wake-helper.sh</pre>
   $("#pw_save").onclick = async () => { try { await save(); loadPower(); } catch (e) { toast(e.message, 6000); } };
   $("#pw_ref").onclick = () => { el.querySelector("h2").insertAdjacentHTML("beforeend", ` <span class="small muted">checking…</span>`); loadPower(true); };
   $("#pw_sleep").onclick = async () => {
-    if (!confirm((wolOk ? "" : "Wake-on-LAN isn't ready yet - you may have to press the power button to wake it up.\n\n") + "Put the server computer to sleep now? The game servers pause and players are disconnected.")) return;
-    try { await api("/api/power/sleep", { json: {} }); } catch (e) {
-      if (e.status !== 409 || !confirm(e.message + "\n\nSleep anyway?")) return toast(e.message, 6000);
-      try { await api("/api/power/sleep", { json: { force: true } }); } catch (e2) { return toast(e2.message, 6000); }
-    }
-    el.innerHTML = `<h2>Sleep &amp; wake-up</h2><p>💤 Going to sleep in a few seconds…</p>`;
+    if (await sleepComputer(wolOk ? "" : "Wake-on-LAN isn't ready yet - you may have to press the power button to wake it up.")) el.innerHTML = `<h2>Sleep &amp; wake-up</h2><p>💤 Going to sleep in a few seconds…</p>`;
   };
   el.querySelectorAll("[data-wol]").forEach(b => b.onclick = async () => { b.disabled = true; b.textContent = "Working…"; try { const r = await api("/api/power/wol", { json: { adapter: b.dataset.wol } }); toast(r.msg, 7000); loadPower(true); } catch (e) { toast(e.message, 8000); b.disabled = false; b.textContent = "Turn on"; } });
   $("#pw_router").onchange = () => { const r = ROUTERS.find(x => x[0] === $("#pw_router").value); $("#pw_rguide").innerHTML = r ? `<div class="card tight" style="padding:10px 14px">${r[2](m)}</div>` : ""; store.set("es-router", $("#pw_router").value); };
