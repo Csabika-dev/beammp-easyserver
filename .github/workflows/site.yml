@@ -30,7 +30,7 @@ jobs:
           npm run build
       - name: Commit the built pages
         run: |
-          git add docs
+          git add docs dashboard/whatsnew.json
           if git diff --cached --quiet; then echo "Website already up to date"; exit 0; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
