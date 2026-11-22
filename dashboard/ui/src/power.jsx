@@ -2,7 +2,7 @@
 import { useRef, useState } from "react";
 import * as L from "./legacy.js";
 import { Blur, Ip } from "./pages.jsx";
-import { chk, val, TIME, Mono, Toggle, Warn, useLoad } from "./ui.jsx";
+import { chk, val, TIME, Mono, Toggle, Warn, useLoad, SkelCard } from "./ui.jsx";
 
 const NEW_TAB = { target: "_blank", rel: "noopener noreferrer" };
 const Guide = ({ children }) => <div className="card tight" style={{ padding: "10px 14px" }}>{children}</div>;
@@ -40,7 +40,7 @@ function Score({ W }) {
   const col = W.blocking ? "var(--crit-ink)" : W.score >= 90 ? "var(--good-ink)" : "var(--warn-ink)";
   return (<div className="card tight" style={{ padding: "12px 14px", margin: "8px 0" }}><div className="row" style={{ gap: 14, alignItems: "center" }}>
     <div style={{ fontSize: 30, fontWeight: 700, color: col, minWidth: 64 }}>{W.score}<span className="small muted" style={{ fontWeight: 400 }}>/100</span></div>
-    <div><b>{`Compatibility: ${W.verdict}`}</b><div className="small muted">{W.blocking ? `${W.blocking} thing${W.blocking > 1 ? "s" : ""} must be changed before it can wake up.` : "Nothing is blocking it."}</div></div></div>
+    <div><b>{`Compatibility: ${W.verdict}`}</b><div className="small muted">{W.blocking > 1 ? `${W.blocking} things must be changed before it can wake up.` : W.blocking ? "1 thing must be changed before it can wake up.": "Nothing is blocking it."}</div></div></div>
     <div style={{ marginTop: 8 }}>{W.checks.slice().sort((x, y) => ORDER[x.state] - ORDER[y.state]).map((c, i) => <div key={i} className="row small" style={{ alignItems: "flex-start", gap: 8, padding: "4px 0", borderTop: "1px solid var(--line)" }}>
       <b style={{ color: IC[c.state][1], width: 14, flex: "none", textAlign: "center" }}>{IC[c.state][0]}</b>
       <div style={{ flex: 1 }}><b>{c.title}</b>{" - " + c.why}{c.fix && c.state !== "pass" && <div style={{ marginTop: 2 }}><b>What to change:</b> {c.fix}</div>}</div></div>)}</div></div>);
@@ -55,7 +55,7 @@ export function Power() {
   const reload = full => { fresh.current = !!full; setChecking(!!full); again(); };
   if (asleep) return <div className="card" style={{ margin: "0 0 16px" }}><h2>Sleep &amp; wake-up</h2><p>💤 Going to sleep in a few seconds…</p></div>;
   if (err && !p) return <div className="card" style={{ margin: "0 0 16px" }}><h2>Sleep &amp; wake-up</h2><p className="small muted">{err}</p></div>;
-  if (!p) return <div className="card" style={{ margin: "0 0 16px" }}><h2>Sleep &amp; wake-up</h2><p className="muted small">Loading…</p></div>;
+  if (!p) return <SkelCard lines={6} style={{ margin: "0 0 16px" }} />;
   const St = p.settings, wired = p.adapters.filter(a => !a.wifi), main = p.adapters.find(a => a.name === p.main);
   const wolOk = main && main.wol === "on";
   const mins = [15, 30, 45, 60, 120, 240, 480]; if (!mins.includes(St.sleep_idle)) mins.push(St.sleep_idle); mins.sort((a, b) => a - b);
