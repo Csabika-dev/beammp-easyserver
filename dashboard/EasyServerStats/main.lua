@@ -19,6 +19,7 @@
 --   tools.txt      written by the dashboard: /tp and /repair settings (key=value); needs the client mod
 --                  easyserver_tools.zip that the dashboard puts into Resources/Client
 --   vehicles.txt   written by the dashboard: vehicle rules (blocked cars and props, spawn cooldown, spam limit)
+--   chat.log       every chat message, for the dashboard's chat history (only while it's on; rolls over at 5 MB)
 
 local DIR = "Resources/Server/EasyServerStats/"
 local EVENTS = DIR .. "events.log"
@@ -497,7 +498,8 @@ end
 -- Bans are stored by the dashboard (bans.txt). Bans made in game take effect
 -- right away and are sent to the dashboard as events, which saves them.
 local mod = { admins = {}, filter = false, words = {}, spam = false, spam_limit = 5,
-              antibot = false, verify = true, per_ip = 3, join_flood = 8, guests = true }
+              antibot = false, verify = true, per_ip = 3, join_flood = 8, guests = true,
+              report = true, votekick = false, votekick_min = 4, chatlog = true }
 local modRead = -1000
 
 local function splitList(v, lower)
@@ -516,14 +518,18 @@ local function readMod(now)
   local f = io.open(MODFILE, "r")
   if not f then return end
   local m = { admins = {}, filter = false, words = {}, spam = false, spam_limit = 5,
-              antibot = false, verify = true, per_ip = 3, join_flood = 8, guests = true }
+              antibot = false, verify = true, per_ip = 3, join_flood = 8, guests = true,
+              report = true, votekick = false, votekick_min = 4, chatlog = true }
   for line in f:lines() do
     local k, v = trim(line):match("^([%w_]+)%s*=%s*(.-)$")
     if k == "admins" then
       for _, n in ipairs(splitList(v, true)) do m.admins[n] = true end
     elseif k == "words" then m.words = splitList(v, true)
-    elseif k == "filter" or k == "spam" or k == "antibot" or k == "verify" then m[k] = v:lower() == "on"
+    elseif k == "filter" or k == "spam" or k == "antibot" or k == "verify" or k == "report" or k == "votekick"
+        or k == "chatlog" then m[k] = v:lower() == "on"
     elseif k == "guests" then m.guests = v:lower() ~= "block"
+    elseif k == "votekick_min" then
+      local n = tonumber(v); if n and n >= 3 and n <= 20 then m.votekick_min = math.floor(n) end
     elseif k == "spam_limit" or k == "per_ip" or k == "join_flood" then
       local n = tonumber(v); if n and n >= 0 and n <= 100 then m[k] = math.floor(n) end
     end
@@ -1175,6 +1181,8 @@ function sug.list(id)
   if tools.repair ~= "off" and sug.modOn() then
     add("repair", "", tools.repair == "cooldown" and ("Repair your car (every " .. tools.repair_cd .. " min)") or "Repair your car")
   end
+  if mod.report then add("report", "player what happened", "Tell the admins about a player") end
+  if mod.votekick then add("votekick", "player reason", "Start a vote to kick a player (when no admin is on)") end
   local name = MP.GetPlayerName(id)
   if name and isAdmin(tostring(name):lower()) then
     add("kick", "player reason", "Admin: kick a player")
@@ -1384,6 +1392,181 @@ local leftVeh = esMsgLeft
 function esMsgLeft(id)
   leftVeh(id)
   vehLast[id], vehTimes[id], vehSpamSaid[id] = nil, nil, nil
+end
+
+-- ---------------------------------------------------------------------------
+-- Reports, vote kick and chat history (Config -> Moderation in the dashboard).
+--   /report <player> <what happened>   tells the admins (dashboard, Discord, phone) and admins in game
+--   /votekick <player> <reason>        when no admin is online: more than half the players agree -> out for 10 minutes
+--   chat.log                           every chat message, for the dashboard's chat history (off with chatlog=off)
+local CHATLOG = DIR .. "chat.log"
+local CHAT_MAX = 5 * 1024 * 1024
+local startT = os.time()
+local joinedAt = {}          -- player id -> when they joined (vote kick: new arrivals can't vote straight away)
+local repTimes = {}          -- lower name -> report times (spam limit)
+local vk = nil               -- the running vote kick
+local vkLast, vkFailed = {}, {}
+local VK_SECONDS, VK_BAN, VK_SETTLE = 90, 600, 120
+
+local function chatLog(t, name, msg, hidden)
+  if not mod.chatlog or msg == "" then return end
+  local f = io.open(CHATLOG, "a")
+  if not f then return end
+  local size = f:seek("end")
+  if size and size > CHAT_MAX then
+    f:close()
+    os.remove(CHATLOG .. ".1")
+    os.rename(CHATLOG, CHATLOG .. ".1")
+    f = io.open(CHATLOG, "a")
+    if not f then return end
+  end
+  f:write(string.format('{"t":%d,"name":"%s","msg":"%s"%s}\n', t, jsonEscape(name), jsonEscape(msg:sub(1, 300)),
+    hidden and ',"hid":1' or ""))
+  f:close()
+end
+
+local function adminsOnline()
+  local out = {}
+  for pid, n in pairs(MP.GetPlayers() or {}) do
+    if isAdmin(tostring(n):lower()) then out[#out + 1] = pid end
+  end
+  return out
+end
+
+local function settled(id, t) return t - (joinedAt[id] or startT) >= VK_SETTLE end
+
+local function vkNeeded()
+  local online = MP.GetPlayerCount() or 0
+  return math.floor(math.max(1, online - 1) / 2) + 1     -- the player the vote is about doesn't count
+end
+
+local function vkCount()
+  local n = 0
+  for pid in pairs(vk.yes) do if MP.GetPlayerName(pid) and pid ~= vk.pid then n = n + 1 end end
+  return n
+end
+
+local function vkCheck(t)
+  if not vk then return end
+  local n, needed = vkCount(), vkNeeded()
+  if n >= needed then
+    local v = vk
+    vk = nil
+    gameBans[v.lname] = { untilT = t + VK_BAN, reason = "Vote kick: " .. v.reason }
+    unbanned[v.lname] = nil
+    event("ban", string.format(',"name":"%s","by":"vote kick","until":%d,"reason":"%s"', jsonEscape(v.name), t + VK_BAN,
+      jsonEscape("Vote kick (" .. n .. " votes, started by " .. v.by .. "): " .. v.reason)))
+    if MP.GetPlayerName(v.pid) then MP.DropPlayer(v.pid, "Kicked by a player vote for 10 minutes: " .. v.reason) end
+    say(-1, "Vote passed - " .. v.name .. " is kicked for 10 minutes.")
+  elseif t >= vk.ends then
+    say(-1, "The vote to kick " .. vk.name .. " failed (" .. n .. "/" .. needed .. " votes).")
+    vkFailed[vk.lname] = t
+    vk = nil
+  end
+end
+
+local function reportCmd(id, name, arg, t)
+  if not mod.report then say(id, "Reports are turned off on this server.") return 1 end
+  local who, reason = arg:match("^(%S+)%s*(.-)$")
+  if not who or reason == "" then say(id, "Use: /report <player> <what happened>, for example /report Bob ramming at spawn") return 1 end
+  local pid, many = findPlayer(who)
+  if not pid then say(id, many and "More than one player matches - type more of the name." or "No player called " .. who .. " is online.") return 1 end
+  if pid == id then say(id, "You can't report yourself.") return 1 end
+  local lname, keep = name:lower(), {}
+  for _, x in ipairs(repTimes[lname] or {}) do if x > t - 3600 then keep[#keep + 1] = x end end
+  if #keep > 0 and keep[#keep] > t - 60 then say(id, "Please wait a minute before sending another report.") return 1 end
+  if #keep >= 5 then say(id, "You've sent a lot of reports this hour - the admins will look at them.") return 1 end
+  keep[#keep + 1] = t
+  repTimes[lname] = keep
+  local target = tostring(MP.GetPlayerName(pid))
+  reason = reason:sub(1, 150)
+  event("report", string.format(',"name":"%s","target":"%s","reason":"%s"', jsonEscape(name), jsonEscape(target), jsonEscape(reason)))
+  for _, a in ipairs(adminsOnline()) do
+    if a ~= id then say(a, "[Report] " .. name .. " reported " .. target .. ": " .. reason) end
+  end
+  say(id, "Thanks - your report about " .. target .. " was sent to the server's admins.")
+  return 1
+end
+
+local function votekickCmd(id, name, arg, t)
+  if not mod.votekick then say(id, "Vote kick is turned off on this server." .. (mod.report and " Use /report <player> <what happened> to tell the admins." or "")) return 1 end
+  local who, reason = arg:match("^(%S+)%s*(.-)$")
+  if vk and (not who or findPlayer(who) == vk.pid) then
+    if id == vk.pid then say(id, "You can't vote in a vote about you.") return 1 end
+    if not settled(id, t) then say(id, "You joined just now - you can vote after 2 minutes on the server.") return 1 end
+    vk.yes[id] = true
+    local n, needed = vkCount(), vkNeeded()
+    if n < needed then say(-1, name .. " voted to kick " .. vk.name .. " (" .. n .. "/" .. needed .. "). Type /yes to agree.") end
+    vkCheck(t)
+    return 1
+  end
+  if vk then say(id, "A vote to kick " .. vk.name .. " is already running - type /yes to agree.") return 1 end
+  if not who or reason == "" then say(id, "Use: /votekick <player> <reason>") return 1 end
+  if (MP.GetPlayerCount() or 0) < mod.votekick_min then
+    say(id, "Vote kick needs at least " .. mod.votekick_min .. " players online." .. (mod.report and " Use /report to tell the admins." or "")) return 1
+  end
+  if #adminsOnline() > 0 then say(id, "An admin is online - use /report " .. who .. " <what happened> instead.") return 1 end
+  local pid, many = findPlayer(who)
+  if not pid then say(id, many and "More than one player matches - type more of the name." or "No player called " .. who .. " is online.") return 1 end
+  if pid == id then say(id, "You can't start a vote about yourself.") return 1 end
+  local target = tostring(MP.GetPlayerName(pid))
+  local lt = target:lower()
+  if isAdmin(lt) then say(id, target .. " is an admin - use /report instead.") return 1 end
+  if not settled(id, t) then say(id, "You joined just now - you can start a vote after 2 minutes on the server.") return 1 end
+  local lname = name:lower()
+  if vkLast[lname] and t - vkLast[lname] < 300 then say(id, "You can start another vote in " .. math.ceil((300 - (t - vkLast[lname])) / 60) .. " min.") return 1 end
+  if vkFailed[lt] and t - vkFailed[lt] < 300 then say(id, "A vote about " .. target .. " failed just now - wait a few minutes.") return 1 end
+  vkLast[lname] = t
+  vk = { pid = pid, name = target, lname = lt, reason = reason:sub(1, 100), by = name, yes = { [id] = true }, ends = t + VK_SECONDS }
+  event("votekick", string.format(',"name":"%s","by":"%s","reason":"%s"', jsonEscape(target), jsonEscape(name), jsonEscape(vk.reason)))
+  say(-1, name .. " started a vote to kick " .. target .. " (" .. vk.reason .. "). Type /yes to agree - " .. vkNeeded() ..
+    " votes needed within " .. VK_SECONDS .. " seconds.")
+  vkCheck(t)
+  return 1
+end
+
+local chatBeforeMod2 = esOnChat
+function esOnChat(id, name, message)
+  local t = os.time()
+  readMod(t)
+  name = tostring(name or "")
+  local msg = tostring(message or "")
+  local cmd, arg = msg:match("^%s*/(%a+)%s*(.-)%s*$")
+  cmd = cmd and cmd:lower()
+  local r
+  if not pendingV[id] then
+    if cmd == "report" then r = reportCmd(id, name, arg, t)
+    elseif cmd == "votekick" then r = votekickCmd(id, name, arg, t)
+    elseif cmd == "yes" and vk then r = votekickCmd(id, name, "", t) end
+  end
+  if r == nil then r = chatBeforeMod2(id, name, message) end
+  chatLog(t, name, msg, r == 1 and not cmd)
+  return r
+end
+
+local tickBeforeVk = esModTick
+function esModTick()
+  tickBeforeVk()
+  if vk then vkCheck(os.time()) end
+end
+
+local joinedBeforeVk = esOnJoined
+function esOnJoined(id)
+  joinedAt[id] = os.time()
+  joinedBeforeVk(id)
+end
+
+local leftBeforeVk = esMsgLeft
+function esMsgLeft(id)
+  leftBeforeVk(id)
+  joinedAt[id] = nil
+  if vk then
+    vk.yes[id] = nil
+    if vk.pid == id then
+      say(-1, vk.name .. " left - the vote is over.")
+      vk = nil
+    end
+  end
 end
 
 MP.RegisterEvent("onPlayerAuth", "esOnAuth")
