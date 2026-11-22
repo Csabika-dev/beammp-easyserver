@@ -1509,6 +1509,12 @@
   "Newest {} of {} messages.": "A legújabb {} a(z) {} üzenetből.",
   "Nobody is online right now (or the server isn't reporting).": "Most senki sincs online (vagy a szerver nem jelent).",
   "Nobody is online right now.": "Most senki sincs online.",
-  "The chat history is turned off (Config → Moderation).": "A chatelőzmények ki vannak kapcsolva (Konfiguráció → Moderáció)."
+  "The chat history is turned off (Config → Moderation).": "A chatelőzmények ki vannak kapcsolva (Konfiguráció → Moderáció).",
+  "Mods from the BeamNG repository": "Modok a BeamNG-tárolóból",
+  "Mods from the BeamNG repository · last check {}": "Modok a BeamNG-tárolóból · utolsó ellenőrzés {}",
+  "up to date": "naprakész",
+  "up to date ({})": "naprakész ({})",
+  "By {} ·": "Készítő: {} ·",
+  "By {} · {}": "Készítő: {} · {}"
  }
 }
