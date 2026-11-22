@@ -1,0 +1,38 @@
+# Builds the website (docs/) from its React source in site/ and commits the result,
+# so GitHub Pages always shows the latest version. Edit site/src, not docs/*.html.
+name: Website
+
+on:
+  push:
+    branches: [main]
+    paths: ["site/**", ".github/workflows/site.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: website
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build
+        working-directory: site
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+      - name: Commit the built pages
+        run: |
+          git add docs/index.html docs/features.html docs/help.html docs/assets
+          if git diff --cached --quiet; then echo "Website already up to date"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Website: rebuild from site/"
+          git push
