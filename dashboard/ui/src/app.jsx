@@ -1,6 +1,6 @@
 // The dashboard's React app: logging in, the frame around every page (menu, server picker, theme,
-// language, security alerts) and the Overview page. Other pages are still drawn by legacy.js inside
-// the frame while they're moved over; they reach the app through `bridge`.
+// language, security alerts) and the Overview page. The other pages are in their own files; the
+// helpers in legacy.js reach the app through `bridge`.
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as L from "./legacy.js";
 import { Logs, Notifications, Servers, Updates } from "./pages.jsx";
@@ -9,6 +9,13 @@ import { Players } from "./players.jsx";
 import { Mods } from "./mods.jsx";
 import { Config } from "./config.jsx";
 import { Settings } from "./settings.jsx";
+import { cacheGet, cachedApi, cacheClear, prefetch, SkelPage } from "./ui.jsx";
+
+// What each page asks for first: fetched quietly in the background after logging in, so pages open without waiting
+const PREFETCH = ["/api/overview", "/api/config", "/api/allowlist", "/api/mapvote", "/api/restarts", "/api/vehicles", "/api/tools", "/api/preset", "/api/timed",
+  "/api/config/history", "/api/templates", "/api/rotation", "/api/messages", "/api/events", "/api/moderation", "/api/extras", "/api/joinalerts",
+  "/api/mods", "/api/mods/updates", "/api/plugins", "/api/players", "/api/bans", "/api/updates", "/api/notifications", "/api/settings", "/api/supporter",
+  "/api/phoneapp", "/api/ntfy", "/api/discordbot", "/api/integrations", "/api/statuspage", "/api/users", "/api/devices", "/api/guard", "/api/backups", "/api/resources"];
 
 const S = () => L.state();
 const Icon = ({ n }) => <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" dangerouslySetInnerHTML={{ __html: L.I[n] }} />;
@@ -197,6 +204,7 @@ function ServerPick() {
 function Shell({ tab, reload, unread, onLang, logout }) {
   const [, redraw] = useState(0);
   const ses = S().SESSION, role = L.myRole();
+  useEffect(() => { const t = setTimeout(() => prefetch(PREFETCH), 900); return () => clearTimeout(t); }, []);
   const dark = document.documentElement.dataset.theme === "dark";
   const flip = () => { L.store.set("es-theme", dark ? "light" : "dark"); L.applyTheme(); redraw(x => x + 1); if (tab === "players") L.bridge.show("players"); };
   const navs = L.myTabs().map(([k, label]) => (
@@ -262,10 +270,10 @@ function News() {
 }
 
 function Overview({ reload }) {
-  const [d, setD] = useState(null), [err, setErr] = useState(""), [map, setMap] = useState(""), [sleeping, setSleeping] = useState(false);
+  const [d, setD] = useState(() => cacheGet("/api/overview") ?? null), [err, setErr] = useState(""), [map, setMap] = useState(() => (cacheGet("/api/overview") || {}).map || ""), [sleeping, setSleeping] = useState(false);
   const last = useRef(null);
   const load = useCallback(async () => {
-    const x = await L.api("/api/overview");
+    const x = await cachedApi("/api/overview");
     last.current = x; setD(x); setMap(x.map || ""); L.bridge.setUnread(x.unread);
   }, []);
   useEffect(() => { setErr(""); load().catch(e => { if (e.message !== "Please log in") setErr(e.message); }); }, [load, reload]);
@@ -279,7 +287,7 @@ function Overview({ reload }) {
     return () => clearInterval(t);
   }, []);
   if (err) return <div className="banner bad">{err}</div>;
-  if (!d) return <p className="muted">Loading…</p>;
+  if (!d) return <SkelPage />;
   const s = d.status, online = d.online || [], go = v => () => L.bridge.show(v);
   const act = a => e => L.serverAction(a, e.currentTarget);
   const applyMap = async e => {
@@ -407,6 +415,7 @@ export function App() {
   const onLang = async code => { L.store.set("es-lang", code); await L.loadLang(code); setEpoch(e => Math.floor(e) + 1); boot(); };
   const logout = async () => {
     try { await L.api("/api/logout", { method: "POST" }); } catch (e) {}
+    cacheClear();
     try { if ("caches" in window) (await caches.open("es-shell-v2")).delete("/__wake.json"); } catch (e) {}
     boot();
   };
