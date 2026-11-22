@@ -9,7 +9,7 @@ import { Players } from "./players.jsx";
 import { Mods } from "./mods.jsx";
 import { Config } from "./config.jsx";
 import { Settings } from "./settings.jsx";
-import { cacheGet, cachedApi, cacheClear, prefetch, SkelPage } from "./ui.jsx";
+import { cacheGet, cachedApi, cacheClear, prefetch, PageWait } from "./ui.jsx";
 
 // What each page asks for first: fetched quietly in the background after logging in, so pages open without waiting
 const PREFETCH = ["/api/overview", "/api/config", "/api/allowlist", "/api/mapvote", "/api/restarts", "/api/vehicles", "/api/tools", "/api/preset", "/api/timed",
@@ -286,8 +286,7 @@ function Overview({ reload }) {
     }, 10000);
     return () => clearInterval(t);
   }, []);
-  if (err) return <div className="banner bad">{err}</div>;
-  if (!d) return <SkelPage />;
+  if (!d) return <PageWait err={err} retry={() => load().then(() => setErr(""), e => setErr(e.message))} />;
   const s = d.status, online = d.online || [], go = v => () => L.bridge.show(v);
   const act = a => e => L.serverAction(a, e.currentTarget);
   const applyMap = async e => {
