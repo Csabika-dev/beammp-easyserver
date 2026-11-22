@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Md, useSite } from "./i18n.jsx";
+import { useNews } from "./news.jsx";
 import { Command, Fold, Footer, GH, LATEST, Nav, Words, useOpenSet, useReducedMotion } from "./shared.jsx";
 
 const LINUX_STABLE = "curl -fsSL https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/stable/linux/install.sh | sudo bash";
@@ -199,13 +200,14 @@ function Faq() {
 }
 
 const Rows = ({ rows }) => (
-  <div className="rows" data-reveal="stagger">{rows.map(([h, p]) => <div className="row" key={h}><h3>{h}</h3><p>{p}</p></div>)}</div>
+  <div className="rows" data-reveal="stagger">{rows.map(([h, p]) => <div className="row" key={h}><h3>{h}</h3><p><Md s={p} /></p></div>)}</div>
 );
 const Head = ({ title, sub }) => <h2><span className="sweep">{title}</span><small><Md s={sub} /></small></h2>;
 
 export function Home() {
   const { t } = useSite();
   const h = t.home;
+  const news = useNews();
   return (
     <>
       <Nav page="home" spy={HOME_SPY} />
@@ -226,10 +228,10 @@ export function Home() {
           <Explorer />
         </section>
 
-        <section className="new" data-reveal="">
-          <Head title={h.newTitle} sub={h.newSub} />
-          <Rows rows={h.news} />
-        </section>
+        {news && <section className="new" data-reveal="">
+          <Head title={news.title} sub={news.sub} />
+          <Rows rows={news.items} />
+        </section>}
 
         <section data-reveal="">
           <Head title={h.alsoTitle} sub={h.alsoSub} />
