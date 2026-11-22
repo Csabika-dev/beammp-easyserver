@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as L from "./legacy.js";
 import { useApi } from "./pages.jsx";
+import { SkelPage } from "./ui.jsx";
 
 const S = () => L.state();
 const pad2 = n => String(n).padStart(2, "0");
@@ -203,7 +204,7 @@ export function Players({ reload }) {
   const [d, err] = useApi("/api/players", reload, [tick]);
   const [bn] = useApi("/api/bans", reload, [tick]);
   const [ban, setBan] = useState({ name: "", len: "0", reason: "" });
-  if (!d || !bn) return err ? <div className="banner bad">{err}</div> : <p className="muted">Loading…</p>;
+  if (!d || !bn) return err ? <div className="banner bad">{err}</div> : <SkelPage />;
   const s = d.summary, hm = d.heatmap, hmMax = Math.max(0.0001, ...hm.flat().filter(v => v !== null));
   const shade = v => v === null ? "var(--surface-2)" : `var(--heat-${Math.min(6, Math.round(v / hmMax * 6))})`;
   const again = () => { setBan({ name: "", len: "0", reason: "" }); setTick(t => t + 1); };
