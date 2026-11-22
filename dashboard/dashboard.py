@@ -8726,6 +8726,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, {"languages": lang_index()}, extra={"Cache-Control": "no-cache"})
             if method == "GET" and LANG_PATH_RE.fullmatch(path):
                 return self.lang_file(path)
+            if method == "GET" and path == "/whatsnew.json":
+                return self.whatsnew_file()
             public = {("GET", "/api/session"), ("POST", "/api/login"), ("POST", "/api/setup"),
                       ("GET", "/api/teaminvite/info"), ("POST", "/api/teaminvite/accept"),
                       ("POST", "/api/discord/start"), ("POST", "/api/discord/finish")}
@@ -8819,6 +8821,16 @@ class Handler(BaseHTTPRequestHandler):
                 body = f.read(2 * 1024 * 1024)
         except OSError:
             return self.fail(404, "not found")
+        return self.send(200, body, "application/json", {"Cache-Control": "no-cache"})
+
+    def whatsnew_file(self):
+        """The "New in" cards shown on the Overview after an update (dashboard/whatsnew.json, made from
+        CHANGELOG.md when the website is built). Public like the language files: nothing private in it."""
+        try:
+            with open(os.path.join(HERE, "whatsnew.json"), "rb") as f:
+                body = f.read(256 * 1024)
+        except OSError:
+            return self.send(200, {"version": "", "languages": {}}, extra={"Cache-Control": "no-cache"})
         return self.send(200, body, "application/json", {"Cache-Control": "no-cache"})
 
     def page(self):
