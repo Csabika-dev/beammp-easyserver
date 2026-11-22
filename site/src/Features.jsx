@@ -1,5 +1,5 @@
 import { Md, useSite } from "./i18n.jsx";
-import { Footer, LATEST, Nav, Words, useScrollSpy } from "./shared.jsx";
+import { DownloadButton, Footer, Nav, Words, useScrollSpy } from "./shared.jsx";
 import { Tour } from "./Home.jsx";
 import { useNews } from "./news.jsx";
 
@@ -39,7 +39,7 @@ export function Features() {
             <span className="lane" aria-hidden="true" />
             <p>{f.lead}</p>
             <div className="btns">
-              <a className="btn go" href={LATEST} data-goatcounter-click="features-download">{t.common.download}</a>
+              <DownloadButton home="./" />
               <a className="btn" href="./#start">{f.howInstall}</a>
             </div>
           </div>
@@ -72,7 +72,7 @@ export function Features() {
           <h2 className="hop"><Words text={t.common.tryTitle} /></h2>
           <p>{f.closing}</p>
           <div className="btns">
-            <a className="btn go" href={LATEST} data-goatcounter-click="features-download">{t.common.download}</a>
+            <DownloadButton home="./" />
             <a className="btn" href="help.html">{t.nav.help}</a>
           </div>
         </div>
