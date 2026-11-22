@@ -18,7 +18,7 @@ const S = "scr" + "ipt";
 const js = r.outputFiles[0].text.split("</" + S).join("<\\/" + S).split("<!" + "--").join("<\\!--");
 const css = readFileSync(join(here, "src/styles.css"), "utf8");
 const html = readFileSync(join(here, "head.html"), "utf8") +
-  `<style nonce="__NONCE__">\n${css}</style>\n</head>\n<body>\n<div id="root"></div>\n<div id="toast" class="hidden"></div>\n` +
+  `<style nonce="__NONCE__">\n${css}</style>\n</head>\n<body>\n<div id="root"></div>\n<div id="toast" class="hidden" role="status" aria-live="polite"></div>\n` +
   `<!-- Built from dashboard/ui by build.mjs - edit the files there, not this one. -->\n` +
   `<${S} nonce="__NONCE__">${js}</${S}>\n</body>\n</html>\n`;
 writeFileSync(join(here, "..", "webui.html"), html);
