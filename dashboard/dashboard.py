@@ -136,6 +136,7 @@ DEFAULT_SETTINGS = {
     "ntfy_enabled": False,         # push notifications to phones through the free ntfy app
     "ntfy_server": "https://ntfy.sh",
     "mod_update_check": True,      # look for newer versions of repository mods once a day
+    "mod_auto_update": False,      # ...and install them by themselves while nobody is playing
     "sleep_on": False,             # the computer goes to sleep when nobody has played for sleep_idle minutes
     "sleep_idle": 30,
     "sleep_from": "",              # ...only between these times (HH:MM, empty = any time)
@@ -4166,6 +4167,62 @@ def mod_updates_for(inst, force=False):
     for k in [k for k in cache if k.startswith("f:") and k[2:].split("|")[0] not in {m["name"] for m in list_mods()}]:
         cache.pop(k, None)
     return out
+
+
+def apply_mod_update(name, u):
+    """Download the newest version of one repository mod of the current server, virus-check it and replace the
+    old file. Returns (200, {"version"}) or (an HTTP status, {"error"} / {"blocked", "reasons"})."""
+    url = REPO_DL % (u["resource_id"], u["latest_id"])
+    tdir = tempfile.mkdtemp(dir=UPLOAD_TMP, prefix=".up-")
+    tmp = os.path.join(tdir, name)
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "BeamMP-EasyServer/%s (mod update)" % EASY_VERSION})
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r, open(tmp, "wb") as f:
+                total = 0
+                while True:
+                    chunk = r.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > 4 * 1024 ** 3:
+                        raise ValueError("too big")
+                    f.write(chunk)
+        except Exception as e:
+            return 502, {"error": "Couldn't download it (%s). Get it yourself from %s and upload it here." % (short_err(e), u["page"])}
+        if not zipfile.is_zipfile(tmp):
+            return 502, {"error": "beamng.com didn't send a zip file (it may want you to log in). Download it from %s and upload it here." % u["page"]}
+        got = mod_repo_info(tmp)
+        if not got or got["resource_id"] != u["resource_id"]:
+            return 502, {"error": "The downloaded file isn't the same mod - not installed."}
+        result = modscan.scan(tmp)
+        if result["verdict"] == "blocked":
+            APP.alerts.raise_("mod:%s:%s" % (I().id, name), "A mod update failed the virus check: %s" % name,
+                              "\n".join(result["reasons"]) + "\nThe old version is still installed.")
+            return 422, {"ok": False, "blocked": True, "reasons": result["reasons"], "error": "The update failed the virus check - the old version stays."}
+        dest = os.path.join(I().CLIENT_DIR if u["enabled"] else I().DISABLED_DIR, name)
+        if not IS_WIN:
+            os.chmod(tmp, 0o664)
+        os.replace(tmp, dest) if os.path.dirname(tmp) == os.path.dirname(dest) else shutil.move(tmp, dest)
+        modscan.remember(dest, result.get("sha256"))
+        u.update({"update": False, "have": got["version"], "have_id": got["version_id"]})
+        return 200, {"version": got["version"]}
+    finally:
+        shutil.rmtree(tdir, ignore_errors=True)
+
+
+def update_mods(names, ups):
+    """Update several mods of the current server one by one. Returns ([names updated], [(name, error)])."""
+    done, failed = [], []
+    for i, n in enumerate(names):
+        if i:
+            time.sleep(1)                      # be polite to beamng.com
+        st, r = apply_mod_update(n, ups[n])
+        if st == 200:
+            done.append(n)
+        else:
+            failed.append((n, r.get("error") or "failed"))
+    return done, failed
 
 
 # ----------------------------------------------------------------------------- mod browser (BeamNG repository)
@@ -8842,10 +8899,46 @@ class App:
         if not self.settings.get("mod_update_check"):
             return
         t = now()
+        if self.settings.get("mod_auto_update") and t >= self.state.get("modauto_next", 0):
+            self.state["modauto_next"] = t + 600
+            self.mod_auto_update()
         if t < self.state.get("modupd_next", 0):
             return
         self.state["modupd_next"] = t + 24 * 3600
         self.run_mod_check(False)
+
+    def mod_auto_update(self):
+        """Install known mod updates on every server nobody is playing on, then restart it if it's running
+        (players already on it would have the old version)."""
+        with LOCK:
+            insts = list(INSTANCES.values())
+        for inst in insts:
+            ups = (getattr(self, "mod_updates", {}) or {}).get(inst.id) or {}
+            todo = [n for n, u in sorted(ups.items()) if u.get("update")]
+            if not todo:
+                continue
+            use_server(inst.id)
+            if online_names():
+                continue
+            try:
+                done, failed = update_mods(todo, ups)
+            except Exception as e:
+                sys.stderr.write("mod auto update %s: %s\n" % (inst.id, short_err(e)))
+                continue
+            if done:
+                refresh_mod_desc()
+                restart = inst.server.status()["state"] == "running" and not online_names()
+                if restart:
+                    inst.server.action("restart")
+                else:
+                    self.config_changed()
+                self.notifier.add("mod_update", "Mod%s updated by itself" % ("s" if len(done) > 1 else ""),
+                                  "While nobody was playing on %s: %s.%s" % (inst.name, ", ".join(done[:15]),
+                                                                            " The server was restarted." if restart else ""), "info")
+            if failed:
+                self.notifier.add("mod_update", "A mod update didn't work", "\n".join("%s: %s" % (n, e) for n, e in failed[:10]), "warning")
+                for n, _ in failed:
+                    ups[n]["update"] = False       # don't try again every 10 minutes; the next daily check brings it back
 
     def run_mod_check(self, force):
         with LOCK:
@@ -12261,13 +12354,17 @@ class Handler(BaseHTTPRequestHandler):
     def get_mods_updates(self, q):
         ups = (getattr(APP, "mod_updates", {}) or {}).get(I().id)
         self.send(200, {"checked": APP.state.get("modupd_t"), "on": bool(APP.settings.get("mod_update_check")),
-                        "mods": ups if ups is not None else {}})
+                        "auto": bool(APP.settings.get("mod_auto_update")), "mods": ups if ups is not None else {}})
 
     def post_mods_updates(self, q):
         b = self.body_json()
         if "on" in b:
             APP.settings.update({"mod_update_check": bool(b["on"])})
             return self.send(200, {"ok": True})
+        if "auto" in b:
+            APP.settings.update({"mod_auto_update": bool(b["auto"])})
+            return self.send(200, {"ok": True, "note": "Saved - updates are installed by themselves while nobody is playing, and a running "
+                                                       "server is restarted for them." if b["auto"] else "Saved."})
         if now() - getattr(APP, "modupd_manual", 0) < 30:
             return self.fail(429, "Just checked - try again in a moment")
         APP.modupd_manual = now()
@@ -12285,45 +12382,28 @@ class Handler(BaseHTTPRequestHandler):
         u = ups.get(name or "")
         if not u or not u.get("update"):
             return self.fail(400, "No update known for this mod - press Check for updates first")
-        url = REPO_DL % (u["resource_id"], u["latest_id"])
-        tdir = tempfile.mkdtemp(dir=UPLOAD_TMP, prefix=".up-")
-        tmp = os.path.join(tdir, name)
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "BeamMP-EasyServer/%s (mod update)" % EASY_VERSION})
-            try:
-                with urllib.request.urlopen(req, timeout=60) as r, open(tmp, "wb") as f:
-                    total = 0
-                    while True:
-                        chunk = r.read(1024 * 1024)
-                        if not chunk:
-                            break
-                        total += len(chunk)
-                        if total > 4 * 1024 ** 3:
-                            raise ValueError("too big")
-                        f.write(chunk)
-            except Exception as e:
-                return self.fail(502, "Couldn't download it (%s). Get it yourself from %s and upload it here." % (short_err(e), u["page"]))
-            if not zipfile.is_zipfile(tmp):
-                return self.fail(502, "beamng.com didn't send a zip file (it may want you to log in). Download it from %s and upload it here." % u["page"])
-            got = mod_repo_info(tmp)
-            if not got or got["resource_id"] != u["resource_id"]:
-                return self.fail(502, "The downloaded file isn't the same mod - not installed.")
-            result = modscan.scan(tmp)
-            if result["verdict"] == "blocked":
-                APP.alerts.raise_("mod:%s:%s" % (I().id, name), "A mod update failed the virus check: %s" % name,
-                                  "\n".join(result["reasons"]) + "\nThe old version is still installed.")
-                return self.send(422, {"ok": False, "blocked": True, "reasons": result["reasons"]})
-            dest = os.path.join(I().CLIENT_DIR if u["enabled"] else I().DISABLED_DIR, name)
-            if not IS_WIN:
-                os.chmod(tmp, 0o664)
-            os.replace(tmp, dest) if os.path.dirname(tmp) == os.path.dirname(dest) else shutil.move(tmp, dest)
-            modscan.remember(dest, result.get("sha256"))
-            u.update({"update": False, "have": got["version"], "have_id": got["version_id"]})
+        st, r = apply_mod_update(name, u)
+        if st != 200:
+            return self.send(st, r) if r.get("blocked") else self.fail(st, r["error"])
+        refresh_mod_desc()
+        APP.config_changed()
+        self.send(200, {"ok": True, "note": "Updated %s to %s. %s" % (name, r["version"] or "the newest version", APP.applied_note())})
+
+    def post_mods_updateall(self, q):
+        """Every repository mod that has an update, one after the other."""
+        ups = (getattr(APP, "mod_updates", {}) or {}).get(I().id) or {}
+        todo = [n for n, u in sorted(ups.items()) if u.get("update")]
+        if not todo:
+            return self.fail(400, "No updates known - press Check for updates first")
+        done, failed = update_mods(todo, ups)
+        if done:
             refresh_mod_desc()
             APP.config_changed()
-            self.send(200, {"ok": True, "note": "Updated %s to %s. %s" % (name, got["version"] or "the newest version", APP.applied_note())})
-        finally:
-            shutil.rmtree(tdir, ignore_errors=True)
+        note = ("Updated %d mod%s. %s" % (len(done), "" if len(done) == 1 else "s", APP.applied_note())) if done else ""
+        if failed:
+            note += (" " if note else "") + " ".join("%s: %s" % (n, e) for n, e in failed[:5])
+        self.send(200 if done else 502, {"ok": bool(done), "note": note, "error": note, "done": done,
+                                         "failed": [{"name": n, "error": e} for n, e in failed]})
 
     # ---------- mod browser
     def get_modbrowser(self, q):

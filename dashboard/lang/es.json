@@ -1940,7 +1940,13 @@
   "This map": "Este mapa",
   "Turn drift scoring on under Game rules.": "Activa la puntuación de drift en Reglas del juego.",
   "best drift scores on this map": "mejores puntuaciones de drift en este mapa",
-  "this map": "este mapa"
+  "this map": "este mapa",
+  "Download and install {} mod updates? Each one is virus-checked first.": "¿Descargar e instalar {} actualizaciones de mods? Cada una se analiza antes en busca de virus.",
+  "Downloading and checking the updates…": "Descargando y comprobando las actualizaciones…",
+  "Install updates by themselves": "Instalar las actualizaciones solas",
+  "Only while nobody is playing - a running server restarts for them": "Solo cuando nadie juega - un servidor en marcha se reinicia para ellas",
+  "Update all ({})": "Actualizar todo ({})",
+  "Saved - updates are installed by themselves while nobody is playing, and a running server is restarted for them.": "Guardado - las actualizaciones se instalan solas cuando nadie juega, y un servidor en marcha se reinicia para ellas."
  },
  "game": {
   "Map voting is turned off on this server.": "La votación de mapa está desactivada en este servidor.",

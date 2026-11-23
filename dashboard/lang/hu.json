@@ -1940,7 +1940,13 @@
   "This map": "Ez a pálya",
   "Turn drift scoring on under Game rules.": "Kapcsold be a drift pontozást a Játékszabályoknál.",
   "best drift scores on this map": "a legjobb drift pontszámok ezen a pályán",
-  "this map": "ez a pálya"
+  "this map": "ez a pálya",
+  "Download and install {} mod updates? Each one is virus-checked first.": "Letöltöd és telepíted a(z) {} mod frissítést? Mindegyiket először víruskereső ellenőrzi.",
+  "Downloading and checking the updates…": "A frissítések letöltése és ellenőrzése…",
+  "Install updates by themselves": "Frissítések automatikus telepítése",
+  "Only while nobody is playing - a running server restarts for them": "Csak amikor senki sem játszik - a futó szerver újraindul miattuk",
+  "Update all ({})": "Mind frissítése ({})",
+  "Saved - updates are installed by themselves while nobody is playing, and a running server is restarted for them.": "Mentve - a frissítések maguktól települnek, amikor senki sem játszik, és a futó szerver újraindul miattuk."
  },
  "game": {
   "Map voting is turned off on this server.": "A pályaszavazás ki van kapcsolva ezen a szerveren.",

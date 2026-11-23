@@ -179,7 +179,7 @@ export function Mods({ reload }) {
     return () => { live = false; };
   }, [reload, tick]);
   if (!data) return <PageWait err={err} retry={async () => again()} />;
-  const { d, mu } = data, U = mu.mods || {}, ST = d.storage || {}, SETS = (d.sets || []).filter(x => !gone.has("set:" + x.name));
+  const { d, mu } = data, U = mu.mods || {}, nUpd = Object.values(U).filter(u => u.update).length, ST = d.storage || {}, SETS = (d.sets || []).filter(x => !gone.has("set:" + x.name));
   const roomLeft = ST.free == null ? null : Math.max(0, ST.free - (ST.spare || 0));
   const mods = (sort === "size" ? [...d.mods].sort((a, b) => b.size - a.size) : d.mods).filter(x => !gone.has(x.name));
   const hide = (k, on) => setGone(g => { const n = new Set(g); on ? n.add(k) : n.delete(k); return n; });
@@ -215,6 +215,12 @@ export function Mods({ reload }) {
     L.toast("Downloading and checking " + name + "…", 60000);
     try { const r = await L.api("/api/mods/update", { json: { name } }); L.toast(r.note, 7000); again(); return true; }
     catch (e) { L.toast(e.data && e.data.blocked ? "The update failed the virus check - the old version stays." : e.message, 9000); return false; }
+  };
+  const updateAll = async n => {
+    if (!confirm(`Download and install ${n} mod updates? Each one is virus-checked first.`)) return;
+    setUpdBusy(true); L.toast("Downloading and checking the updates…", 120000);
+    try { const r = await L.api("/api/mods/updateall", { json: {} }); L.toast(r.note, 9000); } catch (e) { L.toast(e.message, 9000); }
+    setUpdBusy(false); again();
   };
   const checkUpdates = async () => {
     setUpdBusy(true); L.toast("Asking beamng.com…", 15000);
@@ -290,8 +296,11 @@ export function Mods({ reload }) {
       <button className="btn sm" disabled={scan} title="Checks only mods that are new or changed since their last check" onClick={() => rescan(false)}>Check new mods</button>
       <button className="btn sm ghost" disabled={scan} title="Checks every mod again, e.g. after your antivirus got new virus definitions" onClick={() => rescan(true)}>Check all again</button>
       <button className="btn sm" disabled={updBusy} onClick={checkUpdates}>Check for updates</button>
-      <label className="toggle" style={{ margin: "0 0 0 8px" }}><input type="checkbox" defaultChecked={mu.on !== false} onChange={async e => { try { await L.api("/api/mods/updates", { json: { on: e.target.checked } }); L.toast("Saved"); } catch (x) { L.toast(x.message); } }} />
-        <span><b>Check every day</b><small>{mu.checked ? `Mods from the BeamNG repository · last check ${L.ago(mu.checked)}` : "Mods from the BeamNG repository"}</small></span></label></div>
+      {nUpd > 1 && <button className="btn sm primary" disabled={updBusy} onClick={() => updateAll(nUpd)}>{`Update all (${nUpd})`}</button>}
+      <label className="toggle" style={{ margin: "0 0 0 8px" }}><input type="checkbox" defaultChecked={mu.on !== false} onChange={async e => { try { await L.api("/api/mods/updates", { json: { on: e.target.checked } }); L.toast("Saved"); again(); } catch (x) { L.toast(x.message); } }} />
+        <span><b>Check every day</b><small>{mu.checked ? `Mods from the BeamNG repository · last check ${L.ago(mu.checked)}` : "Mods from the BeamNG repository"}</small></span></label>
+      {mu.on !== false && <label className="toggle" style={{ margin: "0 0 0 8px" }}><input type="checkbox" defaultChecked={!!mu.auto} onChange={async e => { try { const r = await L.api("/api/mods/updates", { json: { auto: e.target.checked } }); L.toast(r.note, 7000); } catch (x) { L.toast(x.message); } }} />
+        <span><b>{"Install updates by themselves"}</b><small>{"Only while nobody is playing - a running server restarts for them"}</small></span></label>}</div>
     {d.quarantine.length > 0 && <><h2 style={{ marginTop: 26 }}>⛔ Blocked mods (quarantine)</h2><div className="card tight"><table><tbody>{d.quarantine.map(q => <tr key={q.name}>
       <td><b>{q.name}</b><div className="small" style={{ color: "var(--crit-ink)", whiteSpace: "pre-wrap" }}>{q.why}</div></td>
       <td className="num"><button className="btn sm danger" onClick={() => act("qdelete", q.name)}>Delete</button></td></tr>)}</tbody></table></div></>}
