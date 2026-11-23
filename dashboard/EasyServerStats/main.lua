@@ -20,6 +20,8 @@
 --                  easyserver_tools.zip that the dashboard puts into Resources/Client
 --   vehicles.txt   written by the dashboard: vehicle rules (blocked cars and props, spawn cooldown, spam limit)
 --   tracks.tsv / laptimes.tsv / laps.txt  lap times: tracks made in the game with /track, best laps, on/off (see below)
+--   games.txt, traps.tsv, trapspeeds.tsv, gamestats.tsv, seasonstats.tsv, badges.tsv, season.txt, seasons.tsv,
+--   livemap.txt / livemap.json   races, cops and robbers, speed traps, badges, seasons, live map (see below)
 --   chat.log       every chat message, for the dashboard's chat history (only while it's on; rolls over at 5 MB)
 
 local DIR = "Resources/Server/EasyServerStats/"
@@ -1770,6 +1772,7 @@ local function lapDone(pid, vid, t, ms)
   local mine = rows[name:lower()]
   if mine and ms >= mine.ms then
     say(pid, "Lap " .. fmtLap(ms) .. " on " .. t.name .. " - your best is " .. fmtLap(mine.ms) .. ".")
+    if lap.onLap then lap.onLap(name, false) end
     return
   end
   rows[name:lower()] = { name = name, ms = ms, car = carName(pid, vid), t = os.time() }
@@ -1780,6 +1783,7 @@ local function lapDone(pid, vid, t, ms)
   say(-1, name .. ": " .. fmtLap(ms) .. " on " .. t.name .. note)
   event("lap", string.format(',"track":"%s","name":"%s","ms":%d,"car":"%s","record":%s', jsonEscape(t.name), jsonEscape(name), ms,
     jsonEscape(rows[name:lower()].car), (not before or ms < before.ms) and "true" or "false"))
+  if lap.onLap then lap.onLap(name, not before or ms < before.ms) end
 end
 
 function esLapTick(fromPlayer)
@@ -1875,7 +1879,7 @@ local function trackCmd(id, name, arg)
     return 1
   end
   if not isAdmin(name:lower()) then say(id, "Only the server's admins can make tracks (dashboard: Config -> Moderation -> Admins).") return 1 end
-  if not lap.on then say(id, "Lap times are turned off on this server (dashboard: Players -> Lap times).") return 1 end
+  if not lap.on then say(id, "Lap times are turned off on this server (dashboard: Games -> Lap times).") return 1 end
   local d = lapDraft[id]
   if sub == "new" then
     local p = carPos(id)
@@ -1961,6 +1965,1032 @@ end
 
 readLapCfg(os.time())
 
+-- ---------------------------------------------------------------------------
+-- Games: races, cops and robbers, speed traps, badges, seasons and the dashboard's live map.
+-- Everything shares one look at where the cars are, four times a second, and only while a
+-- game needs it. Times come from each car's own game clock, like lap times.
+--   games.txt       written by the dashboard: which games are on and their rules (key=value)
+--   traps.tsv       speed traps: id <TAB> name <TAB> map <TAB> x,y,z
+--   trapspeeds.tsv  each player's best speed per trap: trap id <TAB> name <TAB> km/h <TAB> car <TAB> unix time
+--   gamestats.tsv   all-time counts: name <TAB> laps <TAB> races <TAB> wins <TAB> busts <TAB> escapes <TAB> cops and robbers games
+--   seasonstats.tsv the same counts for this season only
+--   badges.tsv      name <TAB> badge id <TAB> unix time
+--   season.txt      the season that's running (like 2026-11); seasons.tsv: past winners
+--                   season <TAB> lap|trap|wins|busts|escapes <TAB> track or trap <TAB> name <TAB> value
+--   livemap.txt     written by the dashboard while someone has the live map open: "until=<unix time>"
+--   livemap.json    where every car is, once a second while the live map is open
+local G = {
+  F = { cfg = DIR .. "games.txt", traps = DIR .. "traps.tsv", speeds = DIR .. "trapspeeds.tsv", stats = DIR .. "gamestats.tsv",
+        sstats = DIR .. "seasonstats.tsv", badges = DIR .. "badges.tsv", season = DIR .. "season.txt", seasons = DIR .. "seasons.tsv",
+        mapwant = DIR .. "livemap.txt", map = DIR .. "livemap.json" },
+  cfg = {}, cfgRead = -1000, ticks = 0, cars = {}, last = {}, race = nil, cnr = nil,
+  traps = {}, trapBest = {}, trapLast = {}, stats = {}, sstats = {}, dirty = false, badges = {},
+  mapUntil = 0, mapRead = -1000, mapWrote = -1000, lastRace = {},
+  BADGES = {
+    { "first_lap", "First lap", "set a lap time" },
+    { "laps_25", "Lap regular", "drive 25 timed laps" },
+    { "record", "Record breaker", "set a track record" },
+    { "race_win", "Race winner", "win a race against other players" },
+    { "race_5", "Champion", "win 5 races" },
+    { "sheriff", "Sheriff", "bust 5 robbers" },
+    { "getaway", "Getaway driver", "stay free as a robber until the time runs out" },
+    { "speed_demon", "Speed demon", "set a speed trap record" },
+    { "flat_out", "Flat out", "drive 200 km/h" },
+    { "km_100", "100 km club", "drive 100 km" },
+    { "km_1000", "Road tripper", "drive 1000 km" },
+    { "night_owl", "Night owl", "drive between 2 and 5 in the morning" },
+    { "season_champ", "Season champion", "win a season leaderboard" },
+  },
+  COUNTS = { "laps", "races", "wins", "busts", "escapes", "cnr" },
+  DIRS = { "north", "north-east", "east", "south-east", "south", "south-west", "west", "north-west" },
+  CNR_SLOW = 20,        -- a robber going slower than this (km/h) next to a cop is being stopped
+  JOIN_SECONDS = 30,
+}
+
+function G.pname(pid) return (tostring(MP.GetPlayerName(pid) or ""):gsub("[%c\t]", "")) end
+
+function G.readCfg(now)
+  if now - G.cfgRead < 10 then return end
+  G.cfgRead = now
+  local c = { race = true, race_who = "everyone", cnr = true, cnr_who = "everyone", cnr_minutes = 10, cnr_catch = 10,
+              cnr_hold = 3, cnr_busted = "out", traps = true, badges = true, seasons = false }
+  local f = io.open(G.F.cfg, "r")
+  if f then
+    for line in f:lines() do
+      local k, v = line:match("^([%w_]+)=(.-)%s*$")
+      if k == "race" or k == "cnr" or k == "traps" or k == "badges" or k == "seasons" then c[k] = v == "on"
+      elseif k == "race_who" or k == "cnr_who" then c[k] = v == "admins" and "admins" or "everyone"
+      elseif k == "cnr_busted" then c[k] = v == "cop" and "cop" or "out"
+      elseif k == "cnr_minutes" then c[k] = math.max(3, math.min(60, math.floor(tonumber(v) or 10)))
+      elseif k == "cnr_catch" then c[k] = math.max(4, math.min(30, tonumber(v) or 10))
+      elseif k == "cnr_hold" then c[k] = math.max(1, math.min(10, tonumber(v) or 3)) end
+    end
+    f:close()
+  end
+  G.cfg = c
+  G.readTraps()
+end
+
+-- ------------------------------------------------------------------ counts and badges
+function G.readStats(file)
+  local out = {}
+  local f = io.open(file, "r")
+  if not f then return out end
+  for line in f:lines() do
+    local p = {}
+    for x in (line .. "\t"):gmatch("([^\t]*)\t") do p[#p + 1] = x end
+    if p[1] and p[1] ~= "" then
+      local r = { name = p[1] }
+      for i, k in ipairs(G.COUNTS) do r[k] = tonumber(p[i + 1]) or 0 end
+      out[p[1]:lower()] = r
+    end
+  end
+  f:close()
+  return out
+end
+
+function G.writeStats(file, tbl)
+  local f = io.open(file .. ".tmp", "w")
+  if not f then return end
+  for _, r in pairs(tbl) do
+    local row = { r.name }
+    for _, k in ipairs(G.COUNTS) do row[#row + 1] = tostring(math.floor(r[k] or 0)) end
+    f:write(table.concat(row, "\t") .. "\n")
+  end
+  f:close()
+  os.remove(file)
+  os.rename(file .. ".tmp", file)
+end
+
+function G.saveStats()
+  if not G.dirty then return end
+  G.dirty = false
+  G.writeStats(G.F.stats, G.stats)
+  G.writeStats(G.F.sstats, G.sstats)
+end
+
+function G.bump(name, key, n)
+  if name == "" then return end
+  for _, tbl in ipairs({ G.stats, G.sstats }) do
+    local r = tbl[name:lower()] or { name = name }
+    for _, k in ipairs(G.COUNTS) do r[k] = r[k] or 0 end
+    r.name = name
+    r[key] = r[key] + (n or 1)
+    tbl[name:lower()] = r
+  end
+  G.dirty = true
+  G.checkBadges(name)
+end
+
+function G.readBadges()
+  G.badges = {}
+  local f = io.open(G.F.badges, "r")
+  if not f then return end
+  for line in f:lines() do
+    local name, id, t = line:match("^([^\t]+)\t([%w_]+)\t(%d+)$")
+    if name then
+      G.badges[name:lower()] = G.badges[name:lower()] or {}
+      G.badges[name:lower()][id] = tonumber(t)
+    end
+  end
+  f:close()
+end
+
+function G.badge(id)
+  for _, b in ipairs(G.BADGES) do if b[1] == id then return b end end
+end
+
+function G.give(name, id)
+  if not G.cfg.badges or name == "" then return end
+  local mine = G.badges[name:lower()] or {}
+  if mine[id] then return end
+  local b = G.badge(id)
+  if not b then return end
+  mine[id] = os.time()
+  G.badges[name:lower()] = mine
+  local f = io.open(G.F.badges, "a")
+  if f then f:write(string.format("%s\t%s\t%d\n", name, id, os.time())) f:close() end
+  say(-1, name .. " earned a badge: " .. b[2] .. " (" .. b[3] .. ")")
+  event("badge", string.format(',"name":"%s","badge":"%s","title":"%s"', jsonEscape(name), id, jsonEscape(b[2])))
+end
+
+function G.checkBadges(name)
+  if not G.cfg.badges then return end
+  local c = G.stats[name:lower()]
+  if c then
+    if c.laps >= 1 then G.give(name, "first_lap") end
+    if c.laps >= 25 then G.give(name, "laps_25") end
+    if c.wins >= 1 then G.give(name, "race_win") end
+    if c.wins >= 5 then G.give(name, "race_5") end
+    if c.busts >= 5 then G.give(name, "sheriff") end
+    if c.escapes >= 1 then G.give(name, "getaway") end
+  end
+  local r = stats[name]               -- the /top records: top speed and distance
+  if r then
+    if r.speed >= 200 then G.give(name, "flat_out") end
+    if r.dist >= 100 then G.give(name, "km_100") end
+    if r.dist >= 1000 then G.give(name, "km_1000") end
+  end
+end
+
+lap.onLap = function(name, record)
+  G.bump(name, "laps")
+  if record then G.give(name, "record") end
+end
+
+-- ------------------------------------------------------------------ where the cars are
+function G.sample()
+  local cars, keep = {}, {}
+  for pid, _ in pairs(players()) do
+    local vs = MP.GetPlayerVehicles(pid)
+    if type(vs) == "table" then
+      for vid, _ in pairs(vs) do
+        local raw = MP.GetPositionRaw(pid, vid)
+        local p, tim = type(raw) == "table" and raw.pos, type(raw) == "table" and tonumber(raw.tim)
+        if type(p) == "table" and p[1] and tim then
+          local key = pid .. ":" .. vid
+          local c = { pid = pid, vid = vid, key = key, x = p[1], y = p[2], z = p[3] or 0, tim = tim }
+          local old = G.last[key]
+          if type(raw.vel) == "table" and raw.vel[1] then
+            c.kmh = math.sqrt(raw.vel[1] ^ 2 + raw.vel[2] ^ 2 + (raw.vel[3] or 0) ^ 2) * 3.6
+          elseif old and tim > old.tim then
+            c.kmh = math.sqrt((c.x - old.x) ^ 2 + (c.y - old.y) ^ 2 + (c.z - old.z) ^ 2) / (tim - old.tim) * 3.6
+          else
+            c.kmh = 0
+          end
+          -- the step since the last look counts for lines and traps only if it's a real drive,
+          -- not a reset, a teleport or a long gap
+          if old and tim >= old.tim and tim - old.tim <= 5 and (c.x - old.x) ^ 2 + (c.y - old.y) ^ 2 <= 400 ^ 2 then c.from = old end
+          cars[#cars + 1] = c
+          keep[key] = { x = c.x, y = c.y, z = c.z, tim = tim }
+        end
+      end
+    end
+  end
+  G.last, G.cars = keep, cars
+  return cars
+end
+
+function G.carOf(pid, vid)
+  for _, c in ipairs(G.cars) do
+    if c.pid == pid and (vid == nil or c.vid == vid) then return c end
+  end
+end
+
+function G.dist(a, b) return math.sqrt((a.x - b.x) ^ 2 + (a.y - b.y) ^ 2 + (a.z - b.z) ^ 2) end
+
+function G.compass(from, to)
+  local ang = math.deg(math.atan(to.x - from.x, to.y - from.y)) % 360
+  return G.DIRS[math.floor((ang + 22.5) / 45) % 8 + 1]
+end
+
+-- Did the car pass a point between the last look and now? Returns the time it did.
+function G.passed(c, pt, r)
+  if not c.from then return nil end
+  local u = crossed({ c.from.x, c.from.y, c.from.z }, { c.x, c.y, c.z }, pt, r)
+  if u then return c.from.tim + u * (c.tim - c.from.tim) end
+end
+
+function G.inGame(pid)
+  local r, k = G.race, G.cnr
+  if r and r.state ~= "join" and r.ent[pid] and not r.ent[pid].done then return "a race" end
+  if k and k.role and (k.role[pid] == "cop" or k.role[pid] == "robber") then return "cops and robbers" end
+end
+
+function G.may(pid, who)
+  return who ~= "admins" or isAdmin(G.pname(pid):lower())
+end
+
+function G.findTrack(q)
+  q = (q or ""):lower()
+  if q == "" then return nil end
+  local list = activeTracks()
+  for _, t in ipairs(list) do if t.name:lower() == q then return t end end
+  for _, t in ipairs(list) do if t.name:lower():sub(1, #q) == q then return t end end
+  for _, t in ipairs(list) do if t.name:lower():find(q, 1, true) then return t end end
+end
+
+-- ------------------------------------------------------------------ races
+-- /race <track> [laps]: everyone who types /race join in the next 30 seconds races. A 5-second
+-- countdown, then the checkpoints in order, lap after lap. Positions come from each car's time.
+function G.raceCmd(id, name, arg)
+  local sub, rest = arg:match("^(%S*)%s*(.-)$")
+  local low = (sub or ""):lower()
+  local r = G.race
+  if not G.cfg.race then say(id, "Races are turned off on this server.") return 1 end
+  if low == "" or low == "help" then
+    if r then
+      local n = 0
+      for _ in pairs(r.ent) do n = n + 1 end
+      say(id, string.format("Race on %s, %d lap%s, %d driver%s. %s", r.track.name, r.laps, r.laps == 1 and "" or "s", n, n == 1 and "" or "s",
+        r.state == "join" and "Type /race join to take part." or "It's already started."))
+    else
+      local names = {}
+      for _, t in ipairs(activeTracks()) do names[#names + 1] = t.name end
+      say(id, "Start a race: /race <track> [laps]. " .. (#names > 0 and ("Tracks here: " .. table.concat(names, ", ") .. ".") or "There are no tracks on this map yet - an admin makes one with /track new."))
+      say(id, "Also: /race join, /race leave, /race cancel, /race top")
+    end
+    return 1
+  end
+  if low == "top" then
+    local list = {}
+    for _, s in pairs(G.sstats) do if s.wins > 0 then list[#list + 1] = s end end
+    table.sort(list, function(a, b) return a.wins > b.wins end)
+    local out = {}
+    for i = 1, math.min(5, #list) do out[#out + 1] = i .. ") " .. list[i].name .. " " .. list[i].wins end
+    say(id, "Race wins this season: " .. (#out > 0 and table.concat(out, "   ") or "none yet"))
+    return 1
+  end
+  if low == "join" then
+    if not r then say(id, "No race is starting. Start one: /race <track>") return 1 end
+    if r.state ~= "join" then say(id, "This race has already started - wait for the next one.") return 1 end
+    if G.cnr and G.cnr.role and G.cnr.role[id] then say(id, "You're playing cops and robbers - one game at a time.") return 1 end
+    if r.ent[id] then say(id, "You're already in.") return 1 end
+    r.ent[id] = { name = name, idx = 2, lap = 0 }
+    say(-1, name .. " joined the race on " .. r.track.name .. ".")
+    G.toStart(id, r)
+    return 1
+  end
+  if low == "leave" then
+    if r and r.ent[id] then r.ent[id] = nil say(id, "You left the race.") else say(id, "You're not in a race.") end
+    return 1
+  end
+  if low == "cancel" or low == "stop" then
+    if not r then say(id, "No race is running.") return 1 end
+    if r.by ~= id and not isAdmin(name:lower()) then say(id, "Only " .. r.byName .. " or an admin can cancel this race.") return 1 end
+    G.race = nil
+    say(-1, "The race on " .. r.track.name .. " was cancelled by " .. name .. ".")
+    return 1
+  end
+  -- start one
+  if r then say(id, "A race on " .. r.track.name .. " is already on. Type /race join" .. (r.state == "join" and "" or " for the next one later") .. ".") return 1 end
+  if G.cnr then say(id, "Cops and robbers is on - start the race when it's over.") return 1 end
+  if not G.may(id, G.cfg.race_who) then say(id, "Only admins can start races on this server.") return 1 end
+  local tq, lq = arg:match("^(.-)%s+(%d+)$")
+  local t = (tq and G.findTrack(tq)) or G.findTrack(arg)
+  if not t then say(id, "There's no track called " .. arg .. " on this map. /race lists the tracks.") return 1 end
+  if not (tq and G.findTrack(tq) == t) then lq = nil end
+  local laps = tonumber(lq or "") or (t.kind == "sprint" and 1 or 3)
+  if t.kind == "sprint" then laps = 1 end
+  laps = math.max(1, math.min(20, laps))
+  local now = os.time()
+  if G.lastRace[id] and now - G.lastRace[id] < 60 then say(id, "Wait a minute before starting another race.") return 1 end
+  G.lastRace[id] = now
+  G.race = { track = t, laps = laps, by = id, byName = name, state = "join", untilT = now + G.JOIN_SECONDS, ent = {} }
+  G.race.ent[id] = { name = name, idx = 2, lap = 0 }
+  say(-1, string.format("%s started a race on %s, %d lap%s! Type /race join in the next %d seconds and drive to the start line.",
+    name, t.name, laps, laps == 1 and "" or "s", G.JOIN_SECONDS))
+  G.toStart(id, G.race)
+  return 1
+end
+
+function G.toStart(pid, r)
+  local c = carPos(pid)
+  if not c then say(pid, "Get in a car and drive to the start line of " .. r.track.name .. ".") return end
+  local s = r.track.pts[1]
+  local d = math.sqrt((c[1] - s[1]) ^ 2 + (c[2] - s[2]) ^ 2)
+  if d > 150 then say(pid, string.format("The start line of %s is %d m %s of you.", r.track.name, math.floor(d),
+    G.compass({ x = c[1], y = c[2] }, { x = s[1], y = s[2] }))) end
+end
+
+function G.racePos(r, pid)
+  local me, n = r.ent[pid], 1
+  for p, e in pairs(r.ent) do
+    if p ~= pid and e.start then
+      if e.done and not me.done then n = n + 1
+      elseif e.done and me.done and e.ms < me.ms then n = n + 1
+      elseif not e.done and not me.done and (e.lap > me.lap or (e.lap == me.lap and (e.idx > me.idx or (e.idx == me.idx and (e.at or 0) < (me.at or 0))))) then n = n + 1 end
+    end
+  end
+  return n
+end
+
+function G.raceTick(now)
+  local r = G.race
+  if not r then return end
+  if r.state == "join" then
+    if now < r.untilT then return end
+    local n = 0
+    for _ in pairs(r.ent) do n = n + 1 end
+    if n == 0 then G.race = nil say(-1, "Nobody joined the race on " .. r.track.name .. ".") return end
+    r.state, r.count, r.nextT = "countdown", 5, now
+    say(-1, "Race on " .. r.track.name .. " starts in 5 seconds!")
+    return
+  end
+  if r.state == "countdown" then
+    if now < r.nextT then return end
+    if r.count > 0 then say(-1, tostring(r.count)) r.count, r.nextT = r.count - 1, now + 1 return end
+    r.state, r.goT, r.started = "on", now, 0
+    for pid, e in pairs(r.ent) do
+      local c = G.carOf(pid)
+      if c then e.vid, e.start, e.at = c.vid, c.tim, c.tim r.started = r.started + 1
+      else r.ent[pid] = nil say(pid, "You weren't in a car at the start, so you're out of this race.") end
+    end
+    if r.started == 0 then G.race = nil say(-1, "Nobody was in a car - race cancelled.") return end
+    say(-1, "GO!")
+    return
+  end
+  -- racing
+  local t, rad = r.track, lap.radius
+  for pid, e in pairs(r.ent) do
+    if not e.done then
+      local c = G.carOf(pid, e.vid)
+      local target = t.pts[e.idx] or t.pts[1]
+      local at = c and G.passed(c, target, rad)
+      if at then
+        e.at = at
+        local last = (t.kind == "loop" and e.idx > #t.pts) or (t.kind == "sprint" and e.idx == #t.pts)
+        if last then
+          e.lap = e.lap + 1
+          if e.lap >= r.laps then
+            e.done, e.ms = true, math.floor((at - e.start) * 1000 + 0.5)
+            r.finished = (r.finished or 0) + 1
+            r.firstT = r.firstT or now
+            say(-1, string.format("%s finishes P%d in %s", e.name, r.finished, fmtLap(e.ms)))
+          else
+            e.idx = 2
+            say(pid, string.format("Lap %d/%d - P%d", e.lap + 1, r.laps, G.racePos(r, pid)))
+          end
+        else
+          e.idx = e.idx + 1
+        end
+      end
+    end
+  end
+  local left = 0
+  for _, e in pairs(r.ent) do if not e.done then left = left + 1 end end
+  if left == 0 or (r.firstT and now - r.firstT >= 120) or now - r.goT >= math.min(3600, r.laps * 600) then G.raceEnd(r) end
+end
+
+function G.raceEnd(r)
+  G.race = nil
+  local fin, dnf = {}, {}
+  for _, e in pairs(r.ent) do if e.done then fin[#fin + 1] = e else dnf[#dnf + 1] = e.name end end
+  for _, name in ipairs(r.gone or {}) do dnf[#dnf + 1] = name end
+  table.sort(fin, function(a, b) return a.ms < b.ms end)
+  local parts, json = {}, {}
+  for i, e in ipairs(fin) do
+    parts[#parts + 1] = i == 1 and (i .. ") " .. e.name .. " " .. fmtLap(e.ms)) or string.format("%d) %s +%.3f", i, e.name, (e.ms - fin[1].ms) / 1000)
+    json[#json + 1] = string.format('{"name":"%s","ms":%d,"pos":%d}', jsonEscape(e.name), e.ms, i)
+  end
+  local starters = #fin + #dnf
+  say(-1, "Race results - " .. r.track.name .. ", " .. r.laps .. " lap" .. (r.laps == 1 and "" or "s") .. ": " ..
+    (#parts > 0 and table.concat(parts, "   ") or "nobody finished") .. (#dnf > 0 and ("   Didn't finish: " .. table.concat(dnf, ", ")) or ""))
+  local dj = {}
+  for _, n in ipairs(dnf) do dj[#dj + 1] = '"' .. jsonEscape(n) .. '"' end
+  event("race", string.format(',"track":"%s","laps":%d,"results":[%s],"dnf":[%s],"by":"%s"', jsonEscape(r.track.name), r.laps,
+    table.concat(json, ","), table.concat(dj, ","), jsonEscape(r.byName)))
+  for i, e in ipairs(fin) do
+    event("racepos", string.format(',"name":"%s","track":"%s","pos":%d,"of":%d,"ms":%d', jsonEscape(e.name), jsonEscape(r.track.name), i, starters, e.ms))
+    G.bump(e.name, "races")
+    if i == 1 and starters >= 2 then G.bump(e.name, "wins") end
+  end
+  for _, n in ipairs(dnf) do G.bump(n, "races") end
+  G.saveStats()
+end
+
+-- ------------------------------------------------------------------ cops and robbers
+-- /cnr start: everyone who types /cnr join in the next 30 seconds plays. About one in three are
+-- cops. Robbers get a head start, then cops catch them by staying close (catch distance) while
+-- the robber is stopped or crawling, for a few seconds. Robbers still free when the time runs out win.
+function G.cnrCmd(id, name, arg)
+  local sub, rest = arg:match("^(%S*)%s*(.-)$")
+  sub = (sub or ""):lower()
+  local k = G.cnr
+  if not G.cfg.cnr then say(id, "Cops and robbers is turned off on this server.") return 1 end
+  if sub == "" or sub == "help" then
+    if k and k.state ~= "join" then
+      say(id, string.format("Cops and robbers: %d cop%s, %d robber%s free, %s left.", G.cnrCount("cop"), G.cnrCount("cop") == 1 and "" or "s",
+        G.cnrCount("robber"), G.cnrCount("robber") == 1 and "" or "s", fmtLeft(math.max(0, k.endT - os.time()))))
+    elseif k then
+      say(id, "A game of cops and robbers is starting. Type /cnr join (or /cnr join cop, /cnr join robber).")
+    else
+      say(id, "Cops and robbers: /cnr start [minutes] starts a game, then everyone types /cnr join. Cops catch robbers by keeping them stopped within " ..
+        math.floor(G.cfg.cnr_catch) .. " m for " .. G.cfg.cnr_hold .. " seconds. Also: /cnr leave, /cnr stop, /cnr top")
+    end
+    return 1
+  end
+  if sub == "top" then
+    local function best(key)
+      local list = {}
+      for _, s in pairs(G.sstats) do if s[key] > 0 then list[#list + 1] = s end end
+      table.sort(list, function(a, b) return a[key] > b[key] end)
+      local out = {}
+      for i = 1, math.min(3, #list) do out[#out + 1] = i .. ") " .. list[i].name .. " " .. list[i][key] end
+      return #out > 0 and table.concat(out, "   ") or "nobody yet"
+    end
+    say(id, "Most busts this season: " .. best("busts"))
+    say(id, "Most escapes this season: " .. best("escapes"))
+    return 1
+  end
+  if sub == "start" then
+    if k then say(id, "A game is already on - type /cnr join" .. (k.state == "join" and "" or " for the next one") .. ".") return 1 end
+    if G.race then say(id, "A race is on - start cops and robbers when it's over.") return 1 end
+    if not G.may(id, G.cfg.cnr_who) then say(id, "Only admins can start cops and robbers on this server.") return 1 end
+    local mins = tonumber(rest:match("^(%d+)") or "") or G.cfg.cnr_minutes
+    mins = math.max(3, math.min(60, mins))
+    G.cnr = { state = "join", by = id, byName = name, untilT = os.time() + G.JOIN_SECONDS, minutes = mins, join = { [id] = "any" }, names = { [id] = name } }
+    say(-1, string.format("%s started cops and robbers (%d minutes)! Type /cnr join in the next %d seconds - add cop or robber if you have a wish.",
+      name, mins, G.JOIN_SECONDS))
+    return 1
+  end
+  if sub == "join" then
+    if not k then say(id, "No game is starting. Start one: /cnr start") return 1 end
+    if k.state ~= "join" then say(id, "This game has already started - wait for the next one.") return 1 end
+    if G.race and G.race.ent[id] then say(id, "You're in a race - one game at a time.") return 1 end
+    local want = rest:lower():match("^cop") and "cop" or rest:lower():match("^rob") and "robber" or "any"
+    local was = k.join[id]
+    k.join[id], k.names[id] = want, name
+    if not was then say(-1, name .. " joined cops and robbers.") else say(id, "Got it.") end
+    return 1
+  end
+  if sub == "leave" then
+    if k and k.join[id] then G.cnrDrop(id, "left the game") say(id, "You left cops and robbers.") else say(id, "You're not playing.") end
+    return 1
+  end
+  if sub == "stop" or sub == "cancel" then
+    if not k then say(id, "No game is running.") return 1 end
+    if k.by ~= id and not isAdmin(name:lower()) then say(id, "Only " .. k.byName .. " or an admin can stop this game.") return 1 end
+    G.cnr = nil
+    say(-1, "Cops and robbers was stopped by " .. name .. ".")
+    return 1
+  end
+  say(id, "Unknown /cnr command. Type /cnr for help.")
+  return 1
+end
+
+function G.cnrCount(role)
+  local n, k = 0, G.cnr
+  if k and k.role then for _, r in pairs(k.role) do if r == role then n = n + 1 end end end
+  return n
+end
+
+function G.cnrDrop(pid, why)
+  local k = G.cnr
+  if not k then return end
+  k.join[pid] = nil
+  if k.role and k.role[pid] then
+    local was = k.role[pid]
+    k.role[pid] = nil
+    if was == "cop" or was == "robber" then say(-1, (k.names[pid] or "A player") .. " " .. why .. ".") end
+  end
+end
+
+function G.cnrBegin(k, now)
+  local list, cops, robbers = {}, {}, {}
+  for pid, want in pairs(k.join) do list[#list + 1] = { pid = pid, want = want, r = math.random() } end
+  if #list < 2 then G.cnr = nil say(-1, "Cops and robbers needs at least 2 players - game cancelled.") return end
+  local nCops = math.max(1, math.floor(#list / 3 + 0.5))
+  if nCops >= #list then nCops = #list - 1 end
+  -- wishes first: people who asked to be cops, then the ones who didn't mind, robbers last
+  local rank = { cop = 0, any = 1, robber = 2 }
+  table.sort(list, function(a, b) if rank[a.want] ~= rank[b.want] then return rank[a.want] < rank[b.want] end return a.r < b.r end)
+  k.role, k.busts, k.hold, k.warn, k.noCar = {}, {}, {}, {}, {}
+  for i, x in ipairs(list) do
+    k.role[x.pid] = i <= nCops and "cop" or "robber"
+    if i <= nCops then cops[#cops + 1] = k.names[x.pid] else robbers[#robbers + 1] = k.names[x.pid] end
+  end
+  k.cops, k.robbers = cops, robbers
+  k.state, k.headT, k.endT, k.nextRadar, k.startT = "head", now + 30, now + 30 + k.minutes * 60, now + 30, now
+  say(-1, "Cops: " .. table.concat(cops, ", ") .. ".  Robbers: " .. table.concat(robbers, ", ") .. ".  Robbers, get away - the cops start in 30 seconds!")
+  local catch, hold = math.floor(G.cfg.cnr_catch), G.cfg.cnr_hold
+  for pid, role in pairs(k.role) do
+    if role == "cop" then
+      say(pid, string.format("You're a COP. In 30 seconds, chase the robbers: stay within %d m of one while they're stopped for %d seconds to bust them. You'll get a hint where the nearest robber is every 30 seconds.", catch, hold))
+    else
+      say(pid, string.format("You're a ROBBER. Stay free for %d minutes. If a cop keeps you stopped (under %d km/h) within %d m for %d seconds, you're busted. Stay in your car!", k.minutes, G.CNR_SLOW, catch, hold))
+    end
+  end
+end
+
+function G.cnrTick(now)
+  local k = G.cnr
+  if not k then return end
+  if k.state == "join" then
+    if now >= k.untilT then G.cnrBegin(k, now) end
+    return
+  end
+  if k.state == "head" and now >= k.headT then
+    k.state, k.toldLeft = "on", k.endT - now
+    say(-1, "Cops, go! " .. fmtLeft(k.endT - now) .. " on the clock.")
+  end
+  local cfg = G.cfg
+  local free = {}
+  for pid, role in pairs(k.role) do
+    if role == "robber" then
+      local c = G.carOf(pid)
+      if c then k.noCar[pid] = nil free[#free + 1] = { pid = pid, c = c }
+      elseif k.state == "on" then
+        if not k.noCar[pid] then
+          k.noCar[pid] = now
+          say(pid, "Get back in a car within 30 seconds or you're out!")
+        elseif now - k.noCar[pid] >= 30 then
+          k.role[pid] = "out"
+          say(-1, k.names[pid] .. " left their car and is out.")
+        end
+      end
+    end
+  end
+  local cops = {}
+  for pid, role in pairs(k.role) do
+    if role == "cop" then local c = G.carOf(pid) if c then cops[#cops + 1] = { pid = pid, c = c } end end
+  end
+  if k.state == "on" then
+    for _, rb in ipairs(free) do
+      local holder, near = nil, nil
+      for _, cp in ipairs(cops) do
+        local d = G.dist(rb.c, cp.c)
+        if not near or d < near then near = d end
+        if d <= cfg.cnr_catch and rb.c.kmh <= G.CNR_SLOW and (not holder or cp.pid == (k.hold[rb.pid] or {}).cop) then holder = cp end
+      end
+      if holder then
+        local h = k.hold[rb.pid]
+        if not h or h.cop ~= holder.pid or rb.c.tim < h.since then
+          k.hold[rb.pid] = { cop = holder.pid, since = rb.c.tim }
+        elseif rb.c.tim - h.since >= cfg.cnr_hold then
+          G.cnrBust(k, holder.pid, rb.pid)
+        end
+      else
+        k.hold[rb.pid] = nil
+        if near and near <= 60 and (not k.warn[rb.pid] or now - k.warn[rb.pid] >= 20) then
+          k.warn[rb.pid] = now
+          say(rb.pid, string.format("A cop is close - %d m!", math.floor(near)))
+        end
+      end
+    end
+    if G.cnr and now >= k.nextRadar then
+      k.nextRadar = now + 30
+      for _, cp in ipairs(cops) do
+        local best, bd = nil, nil
+        for _, rb in ipairs(free) do
+          if k.role[rb.pid] == "robber" then
+            local d = G.dist(cp.c, rb.c)
+            if not bd or d < bd then best, bd = rb, d end
+          end
+        end
+        if best then say(cp.pid, string.format("Nearest robber: %s, %d m %s.", k.names[best.pid], math.floor(bd), G.compass(cp.c, best.c))) end
+      end
+    end
+  end
+  if not G.cnr then return end
+  local left = k.endT - now
+  if k.state == "on" and left > 0 and left ~= k.toldLeft and (left == 60 or left == 30 or left == 10 or (left % 300 == 0)) then
+    k.toldLeft = left
+    say(-1, "Cops and robbers: " .. fmtLeft(left) .. " left, " .. G.cnrCount("robber") .. " robber" .. (G.cnrCount("robber") == 1 and "" or "s") .. " free.")
+  end
+  if G.cnrCount("robber") == 0 then G.cnrEnd(k, "cops", now)
+  elseif G.cnrCount("cop") == 0 then G.cnrEnd(k, "robbers", now)
+  elseif now >= k.endT then G.cnrEnd(k, "robbers", now) end
+end
+
+function G.cnrBust(k, cop, robber)
+  local cname, rname = k.names[cop] or "A cop", k.names[robber] or "a robber"
+  k.busts[cop] = (k.busts[cop] or 0) + 1
+  k.hold[robber] = nil
+  k.log = k.log or {}
+  k.log[#k.log + 1] = { cop = cname, robber = rname }
+  G.bump(cname, "busts")
+  event("bust", string.format(',"name":"%s","target":"%s"', jsonEscape(cname), jsonEscape(rname)))
+  if G.cfg.cnr_busted == "cop" then
+    k.role[robber] = "cop"
+    say(robber, "Busted! You're a cop now - help catch the rest.")
+  else
+    k.role[robber] = "out"
+    say(robber, "Busted! You're out of this game - please stay out of the way of the others.")
+  end
+  local n = G.cnrCount("robber")
+  say(-1, string.format("%s busted %s! %d robber%s left.", cname, rname, n, n == 1 and "" or "s"))
+end
+
+function G.cnrEnd(k, winner, now)
+  G.cnr = nil
+  local escaped = {}
+  for pid, role in pairs(k.role) do if role == "robber" then escaped[#escaped + 1] = k.names[pid] end end
+  local played = math.max(0, now - (k.headT or now))
+  if winner == "cops" then
+    say(-1, "Cops win! Every robber was busted in " .. fmtLeft(played) .. ".")
+  elseif #escaped > 0 then
+    say(-1, "Robbers win! " .. table.concat(escaped, ", ") .. " got away.")
+  else
+    say(-1, "Cops and robbers is over - no cops left.")
+  end
+  local top, topN = nil, 0
+  for pid, n in pairs(k.busts) do if n > topN then top, topN = k.names[pid], n end end
+  if top then say(-1, "Most busts: " .. top .. " (" .. topN .. ")") end
+  local function list(t) local o = {} for _, n in ipairs(t) do o[#o + 1] = '"' .. jsonEscape(n) .. '"' end return "[" .. table.concat(o, ",") .. "]" end
+  local bj = {}
+  for _, b in ipairs(k.log or {}) do bj[#bj + 1] = string.format('{"cop":"%s","robber":"%s"}', jsonEscape(b.cop), jsonEscape(b.robber)) end
+  event("cnr", string.format(',"winner":"%s","minutes":%d,"seconds":%d,"cops":%s,"robbers":%s,"escaped":%s,"busts":[%s],"by":"%s"',
+    winner, k.minutes, played, list(k.cops or {}), list(k.robbers or {}), list(escaped), table.concat(bj, ","), jsonEscape(k.byName)))
+  for _, n in ipairs(k.cops or {}) do G.bump(n, "cnr") end
+  for _, n in ipairs(k.robbers or {}) do G.bump(n, "cnr") end
+  if winner == "robbers" then for _, n in ipairs(escaped) do G.bump(n, "escapes") end end
+  G.saveStats()
+end
+
+-- ------------------------------------------------------------------ speed traps
+function G.readTraps()
+  local list = {}
+  local f = io.open(G.F.traps, "r")
+  if f then
+    for line in f:lines() do
+      local id, name, map, x, y, z = line:match("^([%w%-]+)\t([^\t]+)\t([^\t]*)\t([%-%d%.]+),([%-%d%.]+),([%-%d%.]+)$")
+      if id then list[#list + 1] = { id = id, name = name, map = map, p = { tonumber(x), tonumber(y), tonumber(z) } } end
+    end
+    f:close()
+  end
+  G.traps = list
+  G.trapBest = {}
+  f = io.open(G.F.speeds, "r")
+  if f then
+    for line in f:lines() do
+      local id, name, kmh, car, t = line:match("^([%w%-]+)\t([^\t]+)\t([%d%.]+)\t([^\t]*)\t(%d+)$")
+      if id then
+        G.trapBest[id] = G.trapBest[id] or {}
+        G.trapBest[id][name:lower()] = { name = name, kmh = tonumber(kmh), car = car, t = tonumber(t) }
+      end
+    end
+    f:close()
+  end
+end
+
+function G.writeTraps()
+  local f = io.open(G.F.traps .. ".tmp", "w")
+  if not f then return end
+  for _, t in ipairs(G.traps) do f:write(string.format("%s\t%s\t%s\t%.2f,%.2f,%.2f\n", t.id, t.name, t.map, t.p[1], t.p[2], t.p[3])) end
+  f:close()
+  os.remove(G.F.traps)
+  os.rename(G.F.traps .. ".tmp", G.F.traps)
+end
+
+function G.writeSpeeds()
+  local f = io.open(G.F.speeds .. ".tmp", "w")
+  if not f then return end
+  for id, rows in pairs(G.trapBest) do
+    for _, r in pairs(rows) do f:write(string.format("%s\t%s\t%.1f\t%s\t%d\n", id, r.name, r.kmh, r.car, r.t)) end
+  end
+  f:close()
+  os.remove(G.F.speeds)
+  os.rename(G.F.speeds .. ".tmp", G.F.speeds)
+end
+
+function G.trapsHere()
+  local map, out = currentMap(), {}
+  for _, t in ipairs(G.traps) do if map == "" or t.map == "" or t.map == map then out[#out + 1] = t end end
+  return out
+end
+
+function G.trapTop(id)
+  local best = nil
+  for _, r in pairs(G.trapBest[id] or {}) do if not best or r.kmh > best.kmh then best = r end end
+  return best
+end
+
+function G.trapTick(now)
+  if not G.cfg.traps then return end
+  local here = G.trapsHere()
+  if #here == 0 then return end
+  for _, c in ipairs(G.cars) do
+    for _, t in ipairs(here) do
+      local k = c.key .. "@" .. t.id
+      if (not G.trapLast[k] or now - G.trapLast[k] >= 5) and c.kmh >= 20 and G.passed(c, t.p, 12) then
+        G.trapLast[k] = now
+        local name = G.pname(c.pid)
+        if name ~= "" then
+          local kmh = math.floor(c.kmh * 10 + 0.5) / 10
+          local rows = G.trapBest[t.id] or {}
+          G.trapBest[t.id] = rows
+          local top, mine = G.trapTop(t.id), rows[name:lower()]
+          if not mine or kmh > mine.kmh then
+            rows[name:lower()] = { name = name, kmh = kmh, car = carName(c.pid, c.vid), t = now }
+            G.writeSpeeds()
+          end
+          if not top or kmh > top.kmh then
+            say(-1, string.format("%s set a speed trap record at %s: %d km/h!", name, t.name, math.floor(kmh)))
+            event("trap", string.format(',"name":"%s","trap":"%s","kmh":%.1f,"record":true', jsonEscape(name), jsonEscape(t.name), kmh))
+            G.give(name, "speed_demon")
+          else
+            say(c.pid, string.format("Speed trap %s: %d km/h (record %d km/h by %s)", t.name, math.floor(kmh), math.floor(top.kmh), top.name))
+          end
+        end
+      end
+    end
+  end
+  for k, t in pairs(G.trapLast) do if now - t > 60 then G.trapLast[k] = nil end end
+end
+
+function G.trapCmd(id, name, arg)
+  local sub, rest = arg:match("^(%a*)%s*(.-)$")
+  sub = (sub or ""):lower()
+  if not G.cfg.traps then say(id, "Speed traps are turned off on this server.") return 1 end
+  if sub == "" or sub == "list" or sub == "top" then
+    local here = G.trapsHere()
+    if #here == 0 then say(id, "There are no speed traps on this map. Admins make one with /trap new <name> where their car is.") return 1 end
+    for _, t in ipairs(here) do
+      local list = {}
+      for _, r in pairs(G.trapBest[t.id] or {}) do list[#list + 1] = r end
+      table.sort(list, function(a, b) return a.kmh > b.kmh end)
+      local out = {}
+      for i = 1, math.min(3, #list) do out[#out + 1] = i .. ") " .. list[i].name .. " " .. math.floor(list[i].kmh) .. " km/h" end
+      say(id, "Speed trap " .. t.name .. ": " .. (#out > 0 and table.concat(out, "   ") or "no speeds yet"))
+    end
+    return 1
+  end
+  if not isAdmin(name:lower()) then say(id, "Only the server's admins can make speed traps.") return 1 end
+  if sub == "new" then
+    local p = carPos(id)
+    if not p then say(id, "Get in a car first - the trap goes where your car is.") return 1 end
+    local tname = rest:gsub("[%c\t;,]", ""):sub(1, 40)
+    if tname == "" then say(id, "Give the trap a name: /trap new <name>") return 1 end
+    for _, t in ipairs(G.traps) do if t.name:lower() == tname:lower() then say(id, "There's already a trap called " .. t.name .. ".") return 1 end end
+    G.traps[#G.traps + 1] = { id = string.format("%x%04x", os.time(), math.random(0, 65535)), name = tname, map = currentMap(), p = p }
+    G.writeTraps()
+    say(-1, name .. " put up a speed trap: " .. tname .. ". Drive through it as fast as you can! /trap shows the fastest.")
+    return 1
+  end
+  if sub == "delete" then
+    local keep, gone = {}, nil
+    for _, t in ipairs(G.traps) do if not gone and t.name:lower() == rest:lower() then gone = t else keep[#keep + 1] = t end end
+    if not gone then say(id, "No trap called " .. rest .. ".") return 1 end
+    G.traps = keep
+    G.writeTraps()
+    say(id, "Deleted the speed trap " .. gone.name .. ".")
+    return 1
+  end
+  say(id, "Speed traps: /trap (fastest), /trap new <name>, /trap delete <name>")
+  return 1
+end
+
+-- ------------------------------------------------------------------ seasons
+function G.readSeason()
+  local f = io.open(G.F.season, "r")
+  if not f then return nil end
+  local s = f:read("l")
+  f:close()
+  return s and s:match("^(%d%d%d%d%-%d%d)") or nil
+end
+
+function G.writeSeason(s)
+  local f = io.open(G.F.season, "w")
+  if f then f:write(s .. "\n") f:close() end
+end
+
+function G.seasonTick()
+  if not G.cfg.seasons then return end
+  local cur, was = os.date("%Y-%m"), G.readSeason()
+  if was == cur then return end
+  if was then G.endSeason(was) end
+  G.writeSeason(cur)
+end
+
+function G.endSeason(season)
+  local lines, winners, champs = {}, {}, {}
+  local function add(cat, what, name, value, text)
+    lines[#lines + 1] = table.concat({ season, cat, what, name, tostring(value) }, "\t")
+    winners[#winners + 1] = text
+    champs[name] = true
+  end
+  for _, t in ipairs(lap.tracks) do
+    local w = ranked(t.id)[1]
+    if w then add("lap", t.name, w.name, w.ms, t.name .. ": " .. w.name .. " " .. fmtLap(w.ms)) end
+  end
+  for _, t in ipairs(G.traps) do
+    local w = G.trapTop(t.id)
+    if w then add("trap", t.name, w.name, w.kmh, t.name .. ": " .. w.name .. " " .. math.floor(w.kmh) .. " km/h") end
+  end
+  for _, x in ipairs({ { "wins", "most race wins" }, { "busts", "most busts" }, { "escapes", "most escapes" } }) do
+    local best = nil
+    for _, s in pairs(G.sstats) do if s[x[1]] > 0 and (not best or s[x[1]] > best[x[1]]) then best = s end end
+    if best then add(x[1], "", best.name, best[x[1]], x[2] .. ": " .. best.name .. " (" .. best[x[1]] .. ")") end
+  end
+  if #lines > 0 then
+    local f = io.open(G.F.seasons, "a")
+    if f then f:write(table.concat(lines, "\n") .. "\n") f:close() end
+  end
+  say(-1, "Season " .. season .. " is over!" .. (#winners > 0 and (" Winners - " .. table.concat(winners, ", ")) or "") .. " A new season starts now - all times are back to zero.")
+  event("season", string.format(',"season":"%s","winners":%d', season, #lines))
+  for name in pairs(champs) do G.give(name, "season_champ") end
+  lap.best = {}
+  writeBest()
+  G.trapBest = {}
+  G.writeSpeeds()
+  G.sstats = {}
+  G.dirty = true
+  G.saveStats()
+end
+
+function G.seasonCmd(id)
+  if not G.cfg.seasons then say(id, "Seasons are turned off on this server - times stay forever.") return 1 end
+  local now = os.date("*t")
+  local nextMonth = os.time({ year = now.month == 12 and now.year + 1 or now.year, month = now.month % 12 + 1, day = 1, hour = 0 })
+  local days = math.max(0, math.ceil((nextMonth - os.time()) / 86400))
+  say(id, "Season " .. os.date("%Y-%m") .. " - " .. days .. " day" .. (days == 1 and "" or "s") .. " left. Then lap times, speed traps and win counts start again from zero, and the winners get a badge.")
+  local last, out = nil, {}
+  local f = io.open(G.F.seasons, "r")
+  if f then
+    for line in f:lines() do
+      local s, cat, what, name, v = line:match("^([^\t]+)\t([^\t]+)\t([^\t]*)\t([^\t]+)\t([^\t]+)$")
+      if s then
+        if s ~= last then last, out = s, {} end
+        out[#out + 1] = (what ~= "" and what or ({ wins = "race wins", busts = "busts", escapes = "escapes" })[cat] or cat) .. ": " .. name
+      end
+    end
+    f:close()
+  end
+  if last then say(id, "Season " .. last .. " winners - " .. table.concat(out, ", ")) end
+  return 1
+end
+
+-- ------------------------------------------------------------------ badges command
+function G.badgesCmd(id, name, arg)
+  if not G.cfg.badges then say(id, "Badges are turned off on this server.") return 1 end
+  local who = name
+  if arg ~= "" then
+    local q = arg:lower()
+    who = nil
+    for _, n in pairs(players()) do if tostring(n):lower() == q then who = tostring(n) end end
+    if not who then for lname, _ in pairs(G.badges) do if lname == q then who = arg end end end
+    if not who then for _, n in pairs(players()) do if tostring(n):lower():sub(1, #q) == q then who = tostring(n) end end end
+    if not who then say(id, "Nobody called " .. arg .. " has badges.") return 1 end
+  end
+  local mine, have, next_ = G.badges[who:lower()] or {}, {}, nil
+  for _, b in ipairs(G.BADGES) do
+    if mine[b[1]] then have[#have + 1] = b[2] elseif not next_ then next_ = b end
+  end
+  local head = who == name and "Your badges" or (who .. "'s badges")
+  say(id, head .. " (" .. #have .. "/" .. #G.BADGES .. "): " .. (#have > 0 and table.concat(have, ", ") or "none yet"))
+  if who == name and next_ then say(id, "Next one to get: " .. next_[2] .. " - " .. next_[3] .. ".") end
+  return 1
+end
+
+-- ------------------------------------------------------------------ live map for the dashboard
+function G.mapWanted(now)
+  if now - G.mapRead >= 3 then
+    G.mapRead = now
+    G.mapUntil = 0
+    local f = io.open(G.F.mapwant, "r")
+    if f then
+      local u = tonumber((f:read("a") or ""):match("until=(%d+)") or "")
+      f:close()
+      if u then G.mapUntil = math.min(u, now + 120) end
+    end
+  end
+  return now < G.mapUntil
+end
+
+function G.writeMap(now)
+  local rows = {}
+  local r, k = G.race, G.cnr
+  for _, c in ipairs(G.cars) do
+    local role = ""
+    if k and k.role and k.role[c.pid] then role = k.role[c.pid]
+    elseif r and r.ent[c.pid] then role = "race" end
+    rows[#rows + 1] = string.format('{"n":"%s","x":%.1f,"y":%.1f,"z":%.1f,"v":%d,"car":"%s","role":"%s"}',
+      jsonEscape(G.pname(c.pid)), c.x, c.y, c.z, math.floor(c.kmh + 0.5), jsonEscape(carName(c.pid, c.vid)), role)
+  end
+  local game = ""
+  if r then game = string.format(',"race":{"track":"%s","laps":%d,"state":"%s"}', jsonEscape(r.track.name), r.laps, r.state) end
+  if k then game = game .. string.format(',"cnr":{"state":"%s","left":%d}', k.state, math.max(0, (k.endT or now) - now)) end
+  local f = io.open(G.F.map .. ".tmp", "w")
+  if not f then return end
+  f:write(string.format('{"t":%d,"map":"%s","cars":[%s]%s}', now, jsonEscape(currentMap()), table.concat(rows, ","), game))
+  f:close()
+  os.remove(G.F.map)
+  os.rename(G.F.map .. ".tmp", G.F.map)
+end
+
+-- ------------------------------------------------------------------ the timer
+function G.minute(now)
+  G.saveStats()
+  G.seasonTick()
+  if not G.cfg.badges then return end
+  local h = tonumber(os.date("%H"))
+  for pid, name in pairs(players()) do
+    local n = tostring(name)
+    G.checkBadges(n)
+    if h >= 2 and h < 5 then
+      local c = G.carOf(pid)
+      if c and c.kmh > 10 then G.give(n, "night_owl") end
+    end
+  end
+end
+
+function esGameTick(fromPlayer)
+  if fromPlayer ~= nil then return end   -- sent by a player, not by the server's timer
+  local now = os.time()
+  G.ticks = G.ticks + 1
+  G.readCfg(now)
+  if G.race and not G.cfg.race then G.race = nil end
+  if G.cnr and not G.cfg.cnr then G.cnr = nil end
+  local wantMap = G.mapWanted(now)
+  local need = wantMap or (G.race and G.race.state ~= "join") or (G.cnr and G.cnr.state ~= "join") or
+    (G.cfg.traps and #G.trapsHere() > 0) or (G.ticks % 240 == 0 and G.cfg.badges)
+  if need then G.sample() else G.cars, G.last = {}, {} end
+  G.raceTick(now)
+  G.cnrTick(now)
+  G.trapTick(now)
+  if wantMap and now ~= G.mapWrote then G.mapWrote = now G.writeMap(now) end
+  if G.ticks % 240 == 0 then G.minute(now) end
+end
+
+-- commands
+local chatBeforeGames = esOnChat
+function esOnChat(id, name, message)
+  local cmd, arg = tostring(message or ""):match("^%s*/(%a+)%s*(.-)%s*$")
+  cmd = cmd and cmd:lower()
+  local nm = (tostring(name or ""):gsub("[%c\t]", ""))
+  if cmd then
+    G.readCfg(os.time())
+    if cmd == "race" or cmd == "races" then lap.read = -1000 readLapCfg(os.time()) return G.raceCmd(id, nm, arg) end
+    if cmd == "cnr" or cmd == "copsandrobbers" then return G.cnrCmd(id, nm, arg) end
+    if cmd == "trap" or cmd == "traps" then return G.trapCmd(id, nm, arg) end
+    if cmd == "badges" or cmd == "badge" then return G.badgesCmd(id, nm, arg) end
+    if cmd == "season" then return G.seasonCmd(id) end
+    -- no teleporting out of a race or a chase
+    if cmd == "tp" or cmd == "tpaccept" then
+      local mover = id
+      if cmd == "tpaccept" and tpReq[id] then mover = tpReq[id].from end
+      local busy = G.inGame(mover)
+      if busy then say(id, "No teleporting during " .. busy .. ".") return 1 end
+    end
+  end
+  return chatBeforeGames(id, name, message)
+end
+
+local leftBeforeGames = esMsgLeft
+function esMsgLeft(id)
+  leftBeforeGames(id)
+  local r = G.race
+  if r and r.ent[id] then
+    if r.state == "on" and not r.ent[id].done then r.gone = r.gone or {} r.gone[#r.gone + 1] = r.ent[id].name end
+    r.ent[id] = nil
+  end
+  G.cnrDrop(id, "left the server")
+  G.lastRace[id] = nil
+end
+
+-- the new commands in /help and in the in-game suggestions
+local sugListBeforeGames = sug.list
+function sug.list(id)
+  local out = sugListBeforeGames(id)
+  G.readCfg(os.time())
+  local function add(c, a, d) out[#out + 1] = { c = c, a = a, d = d } end
+  if lap.on then add("laps", "", "Best lap times on this map") end
+  if G.cfg.race then add("race", "track laps", "Start a race, or /race join") end
+  if G.cfg.cnr then add("cnr", "start or join", "Cops and robbers") end
+  if G.cfg.traps then add("trap", "", "Speed trap records") end
+  if G.cfg.badges then add("badges", "player", "Your badges") end
+  if G.cfg.seasons then add("season", "", "This season and last season's winners") end
+  local n = MP.GetPlayerName(id)
+  if n and isAdmin(tostring(n):lower()) then add("track", "new name", "Admin: make a race track") end
+  return out
+end
+
+G.stats = G.readStats(G.F.stats)
+G.sstats = G.readStats(G.F.sstats)
+G.readBadges()
+G.readCfg(os.time())
+
 MP.RegisterEvent("onPlayerAuth", "esOnAuth")
 MP.RegisterEvent("onPlayerJoining", "esOnJoin")
 MP.RegisterEvent("onPlayerJoin", "esOnJoined")
@@ -1981,6 +3011,8 @@ MP.RegisterEvent("esToolsTick", "esToolsTick")
 MP.CreateEventTimer("esToolsTick", 15000)
 MP.RegisterEvent("esLapTick", "esLapTick")
 MP.CreateEventTimer("esLapTick", 250)
+MP.RegisterEvent("esGameTick", "esGameTick")
+MP.CreateEventTimer("esGameTick", 250)
 
 event("start")
 writeOnline()
