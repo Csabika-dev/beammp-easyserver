@@ -241,6 +241,7 @@ applyTheme();
 
 /* ------------------------------------------------------------------ icons */
 const I = {
+  games: '<path d="M5 3h2v18H5V3zm3 1h11.5l-2.6 4.5L19.5 13H8V4z"/>',
   search: '<path d="M10 4a6 6 0 1 0 3.7 10.7l4.8 4.8 1.4-1.4-4.8-4.8A6 6 0 0 0 10 4zm0 2a4 4 0 1 1 0 8 4 4 0 0 1 0-8z"/>',
   glass: '<path d="M12 3c-5 0-9 3.6-9 8.5 0 4 2.8 7.4 6.7 8.3.8.2 1.3-.5 1.1-1.2l-.4-1.4c-.2-.8.4-1.5 1.2-1.5h2.7c3.1 0 5.7-2.4 5.7-5.5C20 6.2 16.4 3 12 3zm-5 9a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm3-4a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm4 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm3 4a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/>',
   overview: '<path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/>',
@@ -259,7 +260,7 @@ const I = {
 };
 const LOGO_SVG = `<svg width="100%" height="100%" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><defs><linearGradient id="lga" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2f8cff"/><stop offset="1" stop-color="#1747b8"/></linearGradient><linearGradient id="lgb" gradientUnits="userSpaceOnUse" x1="0" y1="92" x2="0" y2="222"><stop offset="0" stop-color="#ffb24a"/><stop offset="1" stop-color="#ff6516"/></linearGradient></defs><rect width="512" height="512" rx="112" fill="url(#lga)"/><g fill="none" stroke="#fff" stroke-linecap="round"><path d="M192 148A136 136 0 1 0 320 148" stroke-width="40"/><path d="M124 300H388M256 300V392" stroke-width="34"/></g><circle cx="256" cy="300" r="44" fill="#fff"/><circle cx="256" cy="300" r="17" fill="#1f5fd6"/><path d="M256 104V214" stroke="url(#lgb)" stroke-width="40" stroke-linecap="round"/></svg>`;
 const icon = n => `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">${I[n]}</svg>`;
-const TABS = [["overview","Overview"],["servers","Servers"],["config","Config"],["mods","Mods"],["players","Players"],["network","Health"],["updates","Updates"],["logs","Logs"],["notifications","Notifications"],["settings","Settings"]];
+const TABS = [["overview","Overview"],["servers","Servers"],["config","Config"],["mods","Mods"],["players","Players"],["games","Games"],["network","Health"],["updates","Updates"],["logs","Logs"],["notifications","Notifications"],["settings","Settings"]];
 
 /* ------------------------------------------------------------------ boot / auth */
 async function approveFromLink(name) {
@@ -287,13 +288,13 @@ async function sleepComputer(note) {
   return true;
 }
 
-const ROLE_TABS = { viewer: ["overview", "players", "network", "logs", "notifications"], moderator: ["overview", "players", "network", "logs", "notifications"] };
+const ROLE_TABS = { viewer: ["overview", "players", "games", "network", "logs", "notifications"], moderator: ["overview", "players", "games", "network", "logs", "notifications"] };
 const myRole = () => (SESSION.server_roles && SESSION.server_roles[SERVER]) || null;
 const myTabs = () => {
   const r = myRole();
   if (r && r.perms) {                    // custom role: base tabs + what it may change
     const extra = { config: ["config"], mods: ["mods"], settings: ["settings", "updates", "servers"] };
-    const keep = new Set(["overview", "players", "network", "logs", "notifications"]);
+    const keep = new Set(["overview", "players", "games", "network", "logs", "notifications"]);
     r.perms.forEach(p => (extra[p] || []).forEach(t => keep.add(t)));
     return TABS.filter(t => keep.has(t[0]));
   }
