@@ -46,7 +46,7 @@ export function LapTimes({ canEdit }) {
         <select id="lp_rad" defaultValue={d.radius} style={{ width: "auto" }}>{d.radii.map(r => <option key={r} value={r}>{`${r} m`}</option>)}</select>
         <span className="spacer" /><button className="btn primary sm" onClick={() => save({ on: chk("lp_on"), public: chk("lp_pub"), radius: Number(document.getElementById("lp_rad").value) })}>Save</button></div>
     </>}
-    <details className="small" style={{ margin: "10px 0" }}><summary>How to make a track</summary>
+    <details className="small" style={{ margin: "10px 0" }}><summary>{"How to make a track"}</summary>
       <ol style={{ margin: "8px 0 0", paddingLeft: 20, lineHeight: 1.7 }}>
         <li>{"Drive to the start line and type /track new followed by a name, like /track new Canyon run."}</li>
         <li>{"Drive the route and type /track cp at each checkpoint, in order. Checkpoints stop people cutting corners."}</li>
@@ -90,6 +90,10 @@ const evText = h => {
     case "refused": return h.why === "banned" ? "Tried to join while banned" : h.why === "maintenance" ? "Tried to join during maintenance" : "Wasn't let in";
     case "denied": return "Not on the allow-list";
     case "lap": return h.record ? `Track record on ${h.track}: ${h.time}` : `Personal best on ${h.track}: ${h.time}`;
+    case "racepos": return `Race on ${h.track}: P${h.pos} of ${h.of}${h.time ? " in " + h.time : ""}`;
+    case "bust": return h.me === "cop" ? `Busted ${h.robber} (cops and robbers)` : `Busted by ${h.cop} (cops and robbers)`;
+    case "badge": return `Earned the badge ${h.title || ""}`;
+    case "trap": return `Speed trap record at ${h.trap}: ${Math.round(h.kmh || 0)} km/h`;
     default: return h.ev;
   }
 };
@@ -141,6 +145,11 @@ function Profile({ name, close, onBan }) {
         {(p.laps.length > 0 || p.records) && <><h3 className="ph">Driving</h3>
           <div className="small">{p.laps.map(l => <div key={l.track}>{`${l.track}: `}<span className="mono">{l.time}</span>{` · P${l.pos} of ${l.of}${l.car ? " · " + l.car : ""}`}</div>)}
             {p.records && <div className="muted">{`Top speed ${p.records.speed} km/h · ${p.records.dist} km driven`}</div>}</div></>}
+        {p.games && (p.games.all || p.games.badges.length > 0) && <><h3 className="ph">Games</h3>
+          <div className="small">{p.games.all && <div>{[`${p.games.all.races === 1 ? "1 race" : p.games.all.races + " races"}, ${p.games.all.wins === 1 ? "1 win" : p.games.all.wins + " wins"}`,
+            p.games.all.cnr ? `${p.games.all.cnr === 1 ? "1 game" : p.games.all.cnr + " games"} of cops and robbers: ${p.games.all.busts} busts, ${p.games.all.escapes} getaways` : null,
+            `${p.games.all.laps === 1 ? "1 timed lap" : p.games.all.laps + " timed laps"}`].filter(Boolean).join(" · ")}</div>}
+            {p.games.badges.length > 0 && <div className="muted">{"Badges: " + p.games.badges.map(b => b.title).join(", ")}</div>}</div></>}
         <h3 className="ph">Notes <span className="small muted" style={{ fontWeight: 400 }}>only your team sees these</span></h3>
         <div className="row" style={{ gap: 8, flexWrap: "nowrap" }}><input type="text" maxLength={500} placeholder="Warned about ramming at spawn…" value={note}
           onChange={e => setNote(e.target.value)} onKeyDown={e => { if (e.key === "Enter") addNote(); }} /><button className="btn sm primary" onClick={addNote}>Add</button></div>
