@@ -100,7 +100,7 @@ def add(t, where):
     if re.fullmatch(r"\{\}[\w\-]+|[\w\-]+\{\}", t): return
     if t.startswith(("http", "/api/", "#", ".", "&", "M{}")) or re.search(r"[;{}]\s*$", t.replace("{}", "")) : return
     if re.search(r"^(var\(|rgba?\(|\d+px|[a-z-]+:)", t) or t == "noopener noreferrer": return
-    if t.startswith(("?", "[", "(prefers", "{}&")) or t in ("btn sm", "light dark", "Content-Type", "no language file", "Current", "ArrowDown", "ArrowUp", "Escape", "Control+K", "Ctrl K") or "px," in t or "++" in t or t.startswith("main h1"): return
+    if t.startswith(("?", "[", "(prefers", "{}&")) or t in ("btn sm", "light dark", "Content-Type", "no language file", "Current", "ArrowDown", "ArrowUp", "Escape", "Control+K", "Ctrl K") or "px," in t or "++" in t or t.startswith(("main h1", "rotate(")): return
     keys.setdefault(t, where)
 
 ATTR_RE = re.compile(r'\b(placeholder|title|aria-label|alt)="([^"]*)"')
