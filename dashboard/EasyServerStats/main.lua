@@ -2345,6 +2345,7 @@ function G.raceTick(now)
           if e.lap >= r.laps then
             e.done, e.ms = true, math.floor((at - e.start) * 1000 + 0.5)
             r.finished = (r.finished or 0) + 1
+            e.pos = r.finished
             r.firstT = r.firstT or now
             say(-1, string.format("%s finishes P%d in %s", e.name, r.finished, fmtLap(e.ms)))
           else
@@ -2380,6 +2381,12 @@ function G.raceEnd(r)
   for _, n in ipairs(dnf) do dj[#dj + 1] = '"' .. jsonEscape(n) .. '"' end
   event("race", string.format(',"track":"%s","laps":%d,"results":[%s],"dnf":[%s],"by":"%s"', jsonEscape(r.track.name), r.laps,
     table.concat(json, ","), table.concat(dj, ","), jsonEscape(r.byName)))
+  local done = {}
+  for pid, e in pairs(r.ent) do
+    if e.done then done[pid] = { k = "race", st = "done", track = r.track.name, laps = r.laps, ms = e.ms, pos = e.pos or 0, of = starters,
+                                 untilT = os.time() + 8 } end
+  end
+  G.doneHud = done                       -- finishers keep their result on screen for a few seconds
   for i, e in ipairs(fin) do
     event("racepos", string.format(',"name":"%s","track":"%s","pos":%d,"of":%d,"ms":%d', jsonEscape(e.name), jsonEscape(r.track.name), i, starters, e.ms))
     G.bump(e.name, "races")
@@ -2899,6 +2906,159 @@ function G.writeMap(now)
   os.rename(G.F.map .. ".tmp", G.F.map)
 end
 
+-- ------------------------------------------------------------------ on-screen HUD (client mod)
+-- The helper mod (easyserver_tools.zip) draws what chat can't: the next checkpoint on the road,
+-- a lap/race timer, and COP / ROBBER above the cars. Each player gets their own state (event
+-- esHud, "" clears it); everyone gets the cop and robber cars (event esTags, "[]" clears).
+-- Sent when something changes, and every 2 seconds to keep the timers in step; the mod runs the
+-- clocks itself in between. Players without the mod just ignore the events.
+G.hudSent, G.tagsSent = {}, {}
+G.VOLATILE = { ms = true, left = true, held = true, go = true }
+
+function G.json(v)
+  local t = type(v)
+  if t == "number" then return v == math.floor(v) and string.format("%d", v) or string.format("%.2f", v) end
+  if t == "boolean" then return tostring(v) end
+  if t == "string" then return '"' .. jsonEscape(v) .. '"' end
+  if t ~= "table" then return "null" end
+  local out = {}
+  if #v > 0 then
+    for i, x in ipairs(v) do out[i] = G.json(x) end
+    return "[" .. table.concat(out, ",") .. "]"
+  end
+  local keys = {}
+  for k in pairs(v) do keys[#keys + 1] = k end
+  table.sort(keys)
+  for _, k in ipairs(keys) do out[#out + 1] = '"' .. k .. '":' .. G.json(v[k]) end
+  return "{" .. table.concat(out, ",") .. "}"
+end
+
+-- the idx-th thing to drive through (idx 2.. like the lap and race code), or nil past the end
+function G.target(t, idx)
+  if t.pts[idx] then return t.pts[idx] end
+  if t.kind == "loop" and idx == #t.pts + 1 then return t.pts[1] end
+end
+
+-- next checkpoint, the one after it, which one it is, whether it ends the lap (fin) and the
+-- whole run (last: the final lap of a race, or a sprint's finish)
+function G.cpInfo(t, idx, lastLap)
+  local n = t.kind == "loop" and #t.pts or #t.pts - 1
+  local fin = (t.kind == "loop" and idx > #t.pts) or (t.kind == "sprint" and idx == #t.pts)
+  local p = { cp = G.target(t, idx), cpn = idx - 1, cps = n, fin = fin, last = fin and lastLap, rad = lap.radius }
+  local after
+  if not fin then after = G.target(t, idx + 1) elseif not lastLap and t.kind == "loop" then after = t.pts[2] end
+  if after then p.cp2 = after end
+  return p
+end
+
+function G.hudRace(pid, now)
+  local r = G.race
+  local e = r and r.ent[pid]
+  if not e then
+    local d = G.doneHud and G.doneHud[pid]
+    if not d or now >= d.untilT then return nil end
+    local p = {}
+    for k, v in pairs(d) do if k ~= "untilT" then p[k] = v end end
+    return p
+  end
+  local p = { k = "race", st = r.state, track = r.track.name, laps = r.laps }
+  if r.state == "join" then
+    p.left, p.cp, p.cpn, p.cps, p.rad = math.max(0, r.untilT - now), r.track.pts[1], 0, 0, lap.radius
+  elseif r.state == "countdown" then
+    p.go, p.cp, p.cpn, p.cps, p.rad = math.max(0, r.nextT - now) + r.count, r.track.pts[1], 0, 0, lap.radius
+  elseif e.done then
+    p.st, p.ms, p.pos, p.of = "done", e.ms, e.pos or 0, r.started or 0
+  else
+    for k, v in pairs(G.cpInfo(r.track, e.idx, e.lap + 1 >= r.laps)) do p[k] = v end
+    p.lap, p.pos, p.of = e.lap + 1, G.racePos(r, pid), r.started or 0
+    local c = G.carOf(pid, e.vid)
+    e.lastMs = c and math.max(0, math.floor((c.tim - e.start) * 1000)) or e.lastMs or 0
+    p.ms = e.lastMs
+  end
+  return p
+end
+
+function G.hudLap(pid)
+  if not lap.on then return nil end
+  local pre = pid .. ":"
+  for key, s in pairs(lapRun) do
+    if s.track and key:sub(1, #pre) == pre then
+      local t = s.track
+      local p = { k = "lap", st = "on", track = t.name, ms = math.max(0, math.floor((s.tim - s.start) * 1000)) }
+      for k, v in pairs(G.cpInfo(t, s.idx, t.kind == "sprint")) do p[k] = v end
+      local mine = (lap.best[t.id] or {})[G.pname(pid):lower()]
+      if mine then p.best = mine.ms end
+      return p
+    end
+  end
+end
+
+function G.hudCnr(pid, now)
+  local k = G.cnr
+  if not k then return nil end
+  if k.state == "join" then
+    if k.join[pid] then return { k = "cnr", st = "join", left = math.max(0, k.untilT - now) } end
+    return nil
+  end
+  local role = k.role and k.role[pid]
+  if not role then return nil end
+  local p = { k = "cnr", st = k.state, role = role, left = math.max(0, k.endT - now), free = G.cnrCount("robber"),
+              cops = G.cnrCount("cop"), need = G.cfg.cnr_hold }
+  if k.state == "head" then p.go = math.max(0, k.headT - now) end
+  for rb, h in pairs(k.hold or {}) do
+    if rb == pid or h.cop == pid then
+      local c = G.carOf(rb)
+      p.held = c and math.max(0, c.tim - h.since) or 0
+      p.who = rb == pid and (k.names[h.cop] or "") or (k.names[rb] or "")
+      break
+    end
+  end
+  return p
+end
+
+function G.tagsJson()
+  local k = G.cnr
+  if not (k and k.role and k.state ~= "join") then return "[]" end
+  local list = {}
+  for _, c in ipairs(G.cars) do
+    local role = k.role[c.pid]
+    if role == "cop" or role == "robber" then list[#list + 1] = { v = c.pid .. "-" .. c.vid, r = role } end
+  end
+  table.sort(list, function(a, b) return a.v < b.v end)
+  return #list > 0 and G.json(list) or "[]"
+end
+
+function G.hudTick(now)
+  if not MP.TriggerClientEvent then return end
+  local tags = G.tagsJson()
+  for pid, _ in pairs(players()) do
+    local p = G.hudRace(pid, now) or G.hudCnr(pid, now) or G.hudLap(pid)
+    local data, key = "", ""
+    if p then
+      data = G.json(p)
+      local stable = {}
+      for k, v in pairs(p) do if not G.VOLATILE[k] then stable[k] = v end end
+      key = G.json(stable)
+    end
+    local last = G.hudSent[pid]
+    if (last and last.key or "") ~= key or (key ~= "" and now - last.at >= 2) then
+      G.hudSent[pid] = { key = key, at = now }
+      MP.TriggerClientEvent(pid, "esHud", data)
+    end
+    if (G.tagsSent[pid] or "[]") ~= tags then
+      G.tagsSent[pid] = tags
+      MP.TriggerClientEvent(pid, "esTags", tags)
+    end
+  end
+end
+
+-- a player whose mod just loaded (joined, or reloaded the map) gets everything again
+G.helloBefore = esToolsHello
+function esToolsHello(id)
+  G.helloBefore(id)
+  if type(id) == "number" then G.hudSent[id], G.tagsSent[id] = nil, nil end
+end
+
 -- ------------------------------------------------------------------ the timer
 function G.minute(now)
   G.saveStats()
@@ -2929,6 +3089,7 @@ function esGameTick(fromPlayer)
   G.raceTick(now)
   G.cnrTick(now)
   G.trapTick(now)
+  G.hudTick(now)
   if wantMap and now ~= G.mapWrote then G.mapWrote = now G.writeMap(now) end
   if G.ticks % 240 == 0 then G.minute(now) end
 end
@@ -2967,6 +3128,8 @@ function esMsgLeft(id)
   end
   G.cnrDrop(id, "left the server")
   G.lastRace[id] = nil
+  G.hudSent[id], G.tagsSent[id] = nil, nil
+  if G.doneHud then G.doneHud[id] = nil end
 end
 
 -- the new commands in /help and in the in-game suggestions

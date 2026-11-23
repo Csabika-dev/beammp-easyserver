@@ -452,6 +452,37 @@ test("a cut checkpoint means no finish, and only the starter or an admin can can
   assert(all():find("cancelled by Boss"), "admin couldn't cancel")
 end)
 
+test("the helper mod gets the race on screen: start line, checkpoints, timer, result", function()
+  clock = clock + 120
+  car[1] = { -15, 0, tim = 0 }
+  esOnChat(1, "Alice", "/race ring 1")
+  tick()
+  local h = sent(1, "esHud")
+  assert(h and h:find('"k":"race"', 1, true) and h:find('"st":"join"', 1, true) and h:find('"cp":[0,0,0]', 1, true) and
+    h:find('"cpn":0', 1, true), "join HUD: " .. tostring(h))
+  eq(sent(2, "esHud"), nil, "a player who isn't racing got the race HUD")
+  wait(37)
+  h = sent(1, "esHud")
+  for _, s in ipairs({ '"st":"on"', '"lap":1', '"laps":1', '"cpn":1', '"cps":3', '"cp":[300,0,0]', '"cp2":[300,300,0]', '"fin":false' }) do
+    assert(h:find(s, 1, true), s .. " missing: " .. h)
+  end
+  car[1] = { 310, 0, v = 30, tim = 4 } tick()
+  h = sent(1, "esHud")
+  assert(h:find('"cpn":2', 1, true) and h:find('"cp2":[0,0,0]', 1, true) and h:find('"ms":4000', 1, true), "after checkpoint 1: " .. h)
+  car[1] = { 300, 305, v = 30, tim = 6 } tick()
+  h = sent(1, "esHud")
+  assert(h:find('"fin":true', 1, true) and h:find('"last":true', 1, true) and not h:find('"cp2"', 1, true), "finish next: " .. h)
+  car[1] = { 150, 150, v = 30, tim = 7 } tick()
+  car[1] = { 5, 5, v = 30, tim = 8 } tick()
+  h = sent(1, "esHud")
+  assert(h:find('"st":"done"', 1, true) and h:find('"ms":8000', 1, true) and h:find('"pos":1', 1, true), "result: " .. h)
+  local n = #client
+  tick(3)
+  eq(#client, n, "an unchanged HUD was sent again within 2 seconds")
+  wait(10)
+  eq(sent(1, "esHud"), "", "the result stayed on screen")
+end)
+
 test("cops and robbers: roles, head start, a bust, robbers that get away win", function()
   clock = clock + 120
   car[1] = { 0, 0, tim = 0 } car[2] = { 2000, 2000, tim = 0 } car[3] = { 100, 0, tim = 0 }
@@ -499,6 +530,24 @@ test("cops and robbers needs two players and ends when every robber is caught", 
   wait(61)
   for i = 1, 16 do car[1] = { 0, 0, v = 0, tim = 500 + i * 0.25 } car[3] = { 3, 0, v = 1, tim = 500 + i * 0.25 } tick() end
   assert(all():find("Cops win!"), "cops should win: " .. all())
+end)
+
+test("the helper mod shows who's a cop and who's a robber", function()
+  clock = clock + 60
+  car[1] = { 0, 0, tim = 600 } car[3] = { 500, 0, tim = 600 }
+  esOnChat(3, "Boss", "/cnr start 3")
+  esOnChat(3, "Boss", "/cnr join cop")
+  esOnChat(1, "Alice", "/cnr join robber")
+  tick()
+  assert((sent(1, "esHud") or ""):find('"st":"join"', 1, true), "no join HUD: " .. tostring(sent(1, "esHud")))
+  wait(31)
+  eq(sent(2, "esTags"), '[{"r":"robber","v":"1-0"},{"r":"cop","v":"3-0"}]', "tags for a player who isn't playing")
+  assert(sent(1, "esHud"):find('"role":"robber"', 1, true) and sent(1, "esHud"):find('"st":"head"', 1, true), "robber HUD: " .. sent(1, "esHud"))
+  assert(sent(3, "esHud"):find('"role":"cop"', 1, true), "cop HUD: " .. sent(3, "esHud"))
+  esOnChat(3, "Boss", "/cnr stop")
+  tick()
+  eq(sent(2, "esTags"), "[]", "tags not cleared")
+  eq(sent(1, "esHud"), "", "HUD not cleared")
 end)
 
 test("speed traps: a record for everyone, slower passes only for the driver", function()

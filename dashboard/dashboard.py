@@ -4293,7 +4293,7 @@ def ntfy_send(title, message, level="info", click=None):
 # ----------------------------------------------------------------------------- in-game tools: /tp and /repair
 TOOLS_MOD = "easyserver_tools.zip"
 TOOLS_DEFAULTS = {"tp": False, "tp_cd": 60, "repair": "free", "repair_cd": 5, "suggest": True}
-TOOLS_MODSCRIPT = """-- BeamMP EasyServer: in-game tools (/tp, /repair). Loaded by BeamNG when you join a server that uses it.
+TOOLS_MODSCRIPT = """-- BeamMP EasyServer: in-game tools (/tp, /repair, games on screen). Loaded by BeamNG when you join a server that uses it.
 load("easyserverTools")
 setExtensionUnloadMode("easyserverTools", "manual")
 """
@@ -4302,7 +4302,9 @@ TOOLS_CLIENT_LUA = r"""-- BeamMP EasyServer in-game tools (client side).
 -- only moves or repairs YOUR OWN car when the server tells it to, and turns
 -- off the reset keys while the server has "repair with cooldown" or "no
 -- repairs" switched on. It also shows the server's chat commands as you type
--- "/" in the chat. It does nothing on other servers or in single player.
+-- "/" in the chat, and the server's games on screen (race checkpoints, a lap
+-- timer, cops and robbers above their cars). It does nothing on other servers
+-- or in single player.
 local M = {}
 
 -- Command suggestions in the BeamMP chat box: the server sends the commands this
@@ -4451,6 +4453,198 @@ local function clearCmds()
   if cmdList ~= "[]" then cmdList = "[]" pushCmds() end
 end
 
+-- Games on screen: the server sends this player's race / lap / cops-and-robbers state (esHud)
+-- and which cars are cops and robbers (esTags). A small panel at the top shows the timer and
+-- position; the next checkpoint is drawn on the road, and COP / ROBBER above those cars.
+local HUD_JS = [==[(function (s) {
+  var H = window.__esHud;
+  if (!H) {
+    H = window.__esHud = { s: null, at: 0, dist: -1, box: null, big: null };
+    var css = document.createElement("style");
+    css.textContent = "#es-hud{position:fixed;top:64px;left:50%;transform:translateX(-50%);z-index:2147482000;min-width:240px;" +
+      "max-width:560px;padding:8px 18px 10px;border-radius:10px;background:rgba(14,16,22,.82);border:1px solid rgba(255,255,255,.12);" +
+      "color:#eee;font:14px/1.35 'Noto Sans',sans-serif;text-align:center;pointer-events:none;box-shadow:0 6px 20px rgba(0,0,0,.45)}" +
+      "#es-hud .t{font-size:30px;font-weight:700;letter-spacing:.5px;font-variant-numeric:tabular-nums;color:#fff}" +
+      "#es-hud .l{font-size:15px;font-weight:600;margin-top:1px}#es-hud .s{color:#b8b8b8;margin-top:2px}" +
+      "#es-hud .bar{height:6px;border-radius:3px;background:rgba(255,255,255,.15);margin-top:6px;overflow:hidden}" +
+      "#es-hud .bar i{display:block;height:100%;width:0}" +
+      "#es-hud.cop .t{color:#5aa2ff}#es-hud.robber .t{color:#ff5a5a}#es-hud.out .t{color:#9a9a9a}" +
+      "#es-big{position:fixed;top:30%;left:50%;transform:translate(-50%,-50%);z-index:2147482000;pointer-events:none;" +
+      "font:800 120px/1 'Noto Sans',sans-serif;color:#fff;text-shadow:0 4px 18px rgba(0,0,0,.7)}";
+    document.head.appendChild(css);
+    var el = function (id) { var d = document.createElement("div"); d.id = id; d.style.display = "none"; document.body.appendChild(d); return d; };
+    H.box = el("es-hud"); H.big = el("es-big");
+    var pad = function (n, w) { n = String(n); while (n.length < w) n = "0" + n; return n; };
+    H.time = function (ms) {
+      ms = Math.max(0, Math.floor(ms));
+      var m = Math.floor(ms / 60000), sec = Math.floor(ms / 1000) % 60;
+      return m + ":" + pad(sec, 2) + "." + pad(ms % 1000, 3);
+    };
+    H.clock = function (sec) { sec = Math.max(0, Math.ceil(sec)); return Math.floor(sec / 60) + ":" + pad(sec % 60, 2); };
+    H.m = function () { return H.dist >= 0 ? " · " + Math.round(H.dist) + " m" : ""; };
+    H.row = function (cls, text) { var d = document.createElement("div"); d.className = cls; d.textContent = text; H.box.appendChild(d); return d; };
+    H.cp = function (s) {
+      if (!s.cp) return "";
+      if (s.cpn === 0) return "Start line" + H.m();
+      return (s.fin ? (s.last ? "Finish line" : "Lap line") : "Checkpoint " + s.cpn + "/" + (s.cps - 1)) + H.m();
+    };
+    H.draw = function () {
+      var s = H.s, now = Date.now(), dt = (now - H.at) / 1000;
+      if (!s) { H.big.style.display = "none"; H.box.style.display = "none"; return; }
+      H.box.textContent = ""; H.box.className = ""; H.big.style.display = "none";
+      var left = Math.max(0, (s.left || 0) - dt), go = (s.go || 0) - dt;
+      if (s.k === "race") {
+        if (s.st === "join") {
+          H.row("l", "Race on " + s.track + " · " + s.laps + (s.laps === 1 ? " lap" : " laps"));
+          H.row("s", "Starts in " + H.clock(left) + " - drive to the start line" + H.m());
+        } else if (s.st === "countdown") {
+          H.row("l", "Race on " + s.track);
+          H.row("s", "Get ready" + H.m());
+          H.big.style.display = "block"; H.big.textContent = go > 0 ? String(Math.ceil(go)) : "GO!";
+        } else if (s.st === "done") {
+          H.row("t", H.time(s.ms));
+          H.row("l", "Finished P" + s.pos + (s.of > 1 ? "/" + s.of : "") + " · " + s.track);
+        } else {
+          H.row("t", H.time((s.ms || 0) + dt * 1000));
+          H.row("l", "Lap " + s.lap + "/" + s.laps + (s.of > 1 ? " · P" + s.pos + "/" + s.of : ""));
+          H.row("s", H.cp(s));
+          if (dt < 1.2 && s.lap === 1 && (s.ms || 0) < 1500) { H.big.style.display = "block"; H.big.textContent = "GO!"; }
+        }
+      } else if (s.k === "lap") {
+        H.row("t", H.time((s.ms || 0) + dt * 1000));
+        H.row("l", s.track + (s.best ? " · Best " + H.time(s.best) : ""));
+        H.row("s", H.cp(s));
+      } else if (s.k === "cnr") {
+        if (s.st === "join") {
+          H.row("l", "Cops and robbers");
+          H.row("s", "Starts in " + H.clock(left));
+        } else {
+          H.box.className = s.role;
+          H.row("t", s.role === "cop" ? "COP" : s.role === "robber" ? "ROBBER" : "OUT");
+          if (s.role === "out") { H.row("s", "Busted - watch the rest of the game"); }
+          else if (s.st === "head") {
+            H.row("l", s.role === "cop" ? "You start in " + H.clock(go) : "Head start: " + H.clock(go) + " - get away!");
+          } else {
+            H.row("l", H.clock(left) + " left · " + s.free + (s.free === 1 ? " robber free" : " robbers free"));
+            if (s.who) {
+              var held = Math.min(s.need || 3, (s.held || 0) + dt);
+              H.row("s", s.role === "cop" ? "Stopping " + s.who + " - " + held.toFixed(1) + "/" + (s.need || 3) + " s"
+                                          : s.who + " is stopping you - drive away!");
+              var bar = H.row("bar", ""), fill = document.createElement("i");
+              fill.style.width = Math.round(100 * held / (s.need || 3)) + "%";
+              fill.style.background = s.role === "cop" ? "#5aa2ff" : "#ff5a5a";
+              bar.appendChild(fill);
+            }
+          }
+        }
+      }
+      H.box.style.display = H.box.childNodes.length ? "block" : "none";
+    };
+    H.set = function (s) {
+      H.s = s; H.at = Date.now();
+      if (!s) H.dist = -1;
+      H.draw();
+    };
+    window.__esHudD = function (d) { H.dist = d; };
+    setInterval(function () { H.draw(); }, 100);
+  }
+  H.set(s && typeof s === "object" ? s : null);
+})]==]
+
+local hud, hudJson, tags = nil, "null", {}
+local function pushHud()
+  pcall(function() be:queueJS(HUD_JS .. "(" .. hudJson .. ")") end)
+end
+local function num(x, lo, hi)
+  x = tonumber(x)
+  if not x or x ~= x then return nil end
+  return math.max(lo, math.min(hi, x))
+end
+local function str(x, n) return type(x) == "string" and x:sub(1, n) or nil end
+local function pt(x)
+  if type(x) ~= "table" then return nil end
+  local a, b, c = tonumber(x[1]), tonumber(x[2]), tonumber(x[3])
+  if a and b and c then return { a, b, c } end
+end
+local function onHud(data)
+  local ok, d = pcall(jsonDecode, data or "")
+  if not ok or type(d) ~= "table" or (d.k ~= "race" and d.k ~= "lap" and d.k ~= "cnr") then
+    hud, hudJson = nil, "null"
+  else
+    hud = { k = d.k, st = str(d.st, 12), track = str(d.track, 40), who = str(d.who, 40),
+      role = (d.role == "cop" or d.role == "robber" or d.role == "out") and d.role or nil,
+      laps = num(d.laps, 1, 99), lap = num(d.lap, 1, 99), pos = num(d.pos, 0, 999), of = num(d.of, 0, 999),
+      cpn = num(d.cpn, 0, 999), cps = num(d.cps, 0, 999), ms = num(d.ms, 0, 1e8), best = num(d.best, 0, 1e8),
+      left = num(d.left, 0, 7200), go = num(d.go, 0, 600), held = num(d.held, 0, 60), need = num(d.need, 1, 60),
+      free = num(d.free, 0, 999), cops = num(d.cops, 0, 999), rad = num(d.rad, 1, 100), fin = d.fin == true, last = d.last == true,
+      cp = pt(d.cp), cp2 = pt(d.cp2) }
+    hudJson = jsonEncode(hud)
+  end
+  pushHud()
+end
+local function onTags(data)
+  local ok, d = pcall(jsonDecode, data or "[]")
+  tags = {}
+  if ok and type(d) == "table" then
+    for _, x in ipairs(d) do
+      if type(x) == "table" and type(x.v) == "string" and x.v:match("^%d+%-%d+$") and (x.r == "cop" or x.r == "robber") then
+        tags[#tags + 1] = { v = x.v, r = x.r }
+      end
+    end
+  end
+end
+local function clearHud()
+  tags = {}
+  if hud then hud, hudJson = nil, "null" pushHud() end
+end
+
+local COLORS = { next = { 1, 0.78, 0.1 }, fin = { 0.25, 1, 0.45 }, start = { 0.2, 0.75, 1 } }
+local function drawMark(p, rgb, rad, strong, label)
+  local base = vec3(p[1], p[2], p[3] - 0.6)
+  local c = function(a) return ColorF(rgb[1], rgb[2], rgb[3], a) end
+  if strong then debugDrawer:drawCylinder(base, base + vec3(0, 0, 0.12), rad, c(0.2)) end
+  debugDrawer:drawCylinder(base, base + vec3(0, 0, 30), strong and 0.5 or 0.35, c(strong and 0.6 or 0.25))
+  if label then
+    debugDrawer:drawTextAdvanced(base + vec3(0, 0, 4), String(label), ColorF(1, 1, 1, 1), true, false,
+      ColorI(math.floor(rgb[1] * 160), math.floor(rgb[2] * 160), math.floor(rgb[3] * 160), 210))
+  end
+end
+
+local drawFailed, distT = false, 0
+local function drawGames(dt)
+  local mine = be:getPlayerVehicle(0)
+  local myPos = mine and vec3(mine:getPosition())
+  if hud and hud.cp then
+    local rgb = hud.cpn == 0 and COLORS.start or (hud.fin and COLORS.fin or COLORS.next)
+    local label = hud.cpn == 0 and "START" or (hud.fin and (hud.last and "FINISH" or "LAP") or ("CHECKPOINT " .. tostring(hud.cpn)))
+    drawMark(hud.cp, rgb, hud.rad or 15, true, label)
+    if hud.cp2 then drawMark(hud.cp2, COLORS.next, hud.rad or 15, false, nil) end
+    distT = distT + (dt or 0)
+    if distT >= 0.25 then
+      distT = 0
+      if myPos then
+        local d = (myPos - vec3(hud.cp[1], hud.cp[2], hud.cp[3])):length()
+        pcall(function() be:queueJS("window.__esHudD&&window.__esHudD(" .. math.floor(d) .. ")") end)
+      end
+    end
+  end
+  if #tags > 0 and MPVehicleGE and MPVehicleGE.getGameVehicleID then
+    local cam = core_camera and core_camera.getPosition and core_camera.getPosition()
+    for _, t in ipairs(tags) do
+      local gid = MPVehicleGE.getGameVehicleID(t.v)
+      local obj = gid and gid ~= -1 and be:getObjectByID(gid)
+      if obj and not (MPVehicleGE.isOwn and MPVehicleGE.isOwn(gid)) then
+        local pos = vec3(obj:getPosition()) + vec3(0, 0, 2.4)
+        if not cam or (pos - cam):length() < 400 then
+          local cop = t.r == "cop"
+          debugDrawer:drawTextAdvanced(pos, String(cop and "COP" or "ROBBER"), ColorF(1, 1, 1, 1), true, false,
+            cop and ColorI(30, 90, 230, 230) or ColorI(215, 35, 35, 230))
+        end
+      end
+    end
+  end
+end
+
 local cfg = { tp = false, repair = "free" }
 local FILTER = "easyserver_noreset"
 local RESET_ACTIONS = { "reset_physics", "reset_all_physics", "recover_vehicle", "recover_vehicle_alt",
@@ -4515,6 +4709,8 @@ local function register()
   AddEventHandler("esTpTo", onTpTo)
   AddEventHandler("esRepair", onRepair)
   AddEventHandler("esCmds", onCmds)
+  AddEventHandler("esHud", onHud)
+  AddEventHandler("esTags", onTags)
 end
 
 M.onExtensionLoaded = function() register() end
@@ -4524,9 +4720,17 @@ M.onWorldReadyState = function(state)
     if TriggerServerEvent then TriggerServerEvent("esToolsHello", "") end
   end
 end
-M.onUiReady = function() if cmdList ~= "[]" then pushCmds() end end
-M.onExtensionUnloaded = function() setBlock(false) clearCmds() end
-M.onClientEndMission = function() setBlock(false) clearCmds() end
+M.onPreRender = function(dt)
+  if drawFailed or (not hud and #tags == 0) then return end
+  local ok, err = pcall(drawGames, dt)
+  if not ok then drawFailed = true log("E", "easyserverTools", "drawing the games failed: " .. tostring(err)) end
+end
+M.onUiReady = function()
+  if cmdList ~= "[]" then pushCmds() end
+  if hud then pushHud() end
+end
+M.onExtensionUnloaded = function() setBlock(false) clearCmds() clearHud() end
+M.onClientEndMission = function() setBlock(false) clearCmds() clearHud() end
 
 return M
 """
@@ -4578,11 +4782,24 @@ def tools_wanted(d):
     return bool(d["tp"] or d["repair"] != "free" or d.get("suggest", True))
 
 
+def games_want_mod(inst):
+    """Races, cops and robbers and lap times are drawn on screen by the same mod."""
+    sd = inst.STATS_DIR
+    if re.search(r"^mode=on\s*$", shared_read(os.path.join(sd, "laps.txt"), 4096), re.M):
+        return True
+    on = {"race": True, "cnr": True}           # the plugin's defaults when games.txt doesn't say
+    for line in shared_read(os.path.join(sd, "games.txt"), 4096).splitlines():
+        k, _, v = line.partition("=")
+        if k in on:
+            on[k] = v.strip() == "on"
+    return any(on.values())
+
+
 def ensure_tools_mod(inst=None):
-    """Put the client mod in place when a tool is on, keep it up to date, remove it when everything is off.
+    """Put the client mod in place when a tool or a game is on, keep it up to date, remove it when everything is off.
     Returns "added", "updated", "removed" or ""."""
     inst = inst or I()
-    want = tools_wanted(read_tools(inst))
+    want = tools_wanted(read_tools(inst)) or games_want_mod(inst)
     path = os.path.join(inst.CLIENT_DIR, TOOLS_MOD)
     if not want:
         if os.path.exists(path):
@@ -10468,7 +10685,8 @@ class Handler(BaseHTTPRequestHandler):
                 cfg["radius"] = r
             write_laps_cfg(cfg)
             _STATUS_CACHE["t"] = 0
-            return self.send(200, {"ok": True, "note": "Saved - the game picks it up within 10 seconds." if cfg["on"] else "Saved - lap times are off."})
+            return self.send(200, {"ok": True, "note": ("Saved - the game picks it up within 10 seconds." if cfg["on"] else "Saved - lap times are off.")
+                                   + self._games_mod_note()})
         tid = str(b.get("id") or "")
         lines = read_track_lines()
         mine = [l for l in lines if l.split("\t", 1)[0] == tid]
@@ -10504,6 +10722,22 @@ class Handler(BaseHTTPRequestHandler):
         _STATUS_CACHE["t"] = 0
         self.send(200, {"ok": True, "note": note})
 
+    def _games_mod_note(self):
+        """Games and lap times are drawn on screen by the helper mod: add or remove it to match."""
+        try:
+            how = ensure_tools_mod()
+        except OSError as e:
+            sys.stderr.write("helper mod: %s\n" % short_err(e))
+            return ""
+        if how not in ("added", "removed"):
+            return ""
+        refresh_mod_desc()
+        APP.config_changed()
+        if how == "added":
+            return (" Players download a tiny helper mod (%s) when they join - it shows checkpoints, a timer and cops and robbers"
+                    " on screen." % fmt_bytes(len(tools_mod_bytes())))
+        return " The helper mod was removed."
+
     # ---------- games: races, cops and robbers, speed traps, badges, seasons, live map, weekly recap
     def get_games(self, q):
         self.send(200, games_summary())
@@ -10535,7 +10769,7 @@ class Handler(BaseHTTPRequestHandler):
                         return self.fail(400, "Pick a value from the list")
                     cfg[k] = v
             write_games_cfg(cfg)
-            return self.send(200, {"ok": True, "note": "Saved - the game picks it up within 10 seconds."})
+            return self.send(200, {"ok": True, "note": "Saved - the game picks it up within 10 seconds." + self._games_mod_note()})
         tid = str(b.get("id") or "")
         lines = [l for l in shared_read(laps_file("traps.tsv"), 256 * 1024).splitlines() if TRAP_RE.match(l)]
         mine = [l for l in lines if l.split("\t", 1)[0] == tid]
