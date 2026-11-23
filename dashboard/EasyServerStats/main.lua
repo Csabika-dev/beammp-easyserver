@@ -2076,7 +2076,8 @@ function G.readCfg(now)
   if now - G.cfgRead < 10 then return end
   G.cfgRead = now
   local c = { race = true, race_who = "everyone", cnr = true, cnr_who = "everyone", cnr_minutes = 10, cnr_catch = 10,
-              cnr_hold = 3, cnr_busted = "out", traps = true, badges = true, seasons = false }
+              cnr_hold = 3, cnr_busted = "out", traps = true, badges = true, seasons = false,
+              champ = false, champ_points = "f1", champ_name = "" }
   local f = io.open(G.F.cfg, "r")
   if f then
     for line in f:lines() do
@@ -2084,6 +2085,9 @@ function G.readCfg(now)
       if k == "race" or k == "cnr" or k == "traps" or k == "badges" or k == "seasons" then c[k] = v == "on"
       elseif k == "race_who" or k == "cnr_who" then c[k] = v == "admins" and "admins" or "everyone"
       elseif k == "cnr_busted" then c[k] = v == "cop" and "cop" or "out"
+      elseif k == "champ" then c.champ = v == "on"
+      elseif k == "champ_points" then c[k] = v == "simple" and "simple" or "f1"
+      elseif k == "champ_name" then c[k] = v:gsub("%c", ""):sub(1, 60)
       elseif k == "cnr_minutes" then c[k] = math.max(3, math.min(60, math.floor(tonumber(v) or 10)))
       elseif k == "cnr_catch" then c[k] = math.max(4, math.min(30, tonumber(v) or 10))
       elseif k == "cnr_hold" then c[k] = math.max(1, math.min(10, tonumber(v) or 3)) end
@@ -2462,6 +2466,86 @@ function G.raceEnd(r)
   end
   for _, n in ipairs(dnf) do G.bump(n, "races") end
   G.saveStats()
+  if starters >= 2 then G.champAdd(fin, dnf) end
+end
+
+-- ------------------------------------------------------------------ championship
+-- While one is on (switched on and named on the dashboard's Games page), every race with 2 or more
+-- drivers gives points by finishing position. champ.tsv: "#rounds <TAB> n", then
+-- name <TAB> points <TAB> races <TAB> wins <TAB> podiums. It is read again before every change, so
+-- a new championship started on the dashboard (which empties the file) is never overwritten.
+G.F.champ = DIR .. "champ.tsv"
+G.POINTS = { f1 = { 25, 18, 15, 12, 10, 8, 6, 4, 2, 1 }, simple = { 10, 8, 6, 5, 4, 3, 2, 1 } }
+
+function G.champRead()
+  local t, rounds = {}, 0
+  local f = io.open(G.F.champ, "r")
+  if not f then return t, 0 end
+  for line in f:lines() do
+    local p = {}
+    for x in (line .. "\t"):gmatch("([^\t]*)\t") do p[#p + 1] = x end
+    if p[1] == "#rounds" then rounds = tonumber(p[2]) or 0
+    elseif p[1] and p[1] ~= "" then
+      t[#t + 1] = { name = p[1], pts = tonumber(p[2]) or 0, races = tonumber(p[3]) or 0, wins = tonumber(p[4]) or 0, pod = tonumber(p[5]) or 0 }
+    end
+  end
+  f:close()
+  return t, rounds
+end
+
+function G.champSort(t)
+  table.sort(t, function(a, b)
+    if a.pts ~= b.pts then return a.pts > b.pts end
+    if a.wins ~= b.wins then return a.wins > b.wins end
+    return a.name:lower() < b.name:lower()
+  end)
+  return t
+end
+
+function G.champAdd(fin, dnf)
+  if not G.cfg.champ then return end
+  local t, rounds = G.champRead()
+  local by = {}
+  for _, r in ipairs(t) do by[r.name:lower()] = r end
+  local function row(name)
+    local r = by[name:lower()]
+    if not r then r = { name = name, pts = 0, races = 0, wins = 0, pod = 0 } t[#t + 1] = r by[name:lower()] = r end
+    r.races = r.races + 1
+    return r
+  end
+  local scale, got = G.POINTS[G.cfg.champ_points] or G.POINTS.f1, {}
+  for i, e in ipairs(fin) do
+    local r, p = row(e.name), scale[i] or 0
+    r.pts = r.pts + p
+    if i == 1 then r.wins = r.wins + 1 end
+    if i <= 3 then r.pod = r.pod + 1 end
+    if p > 0 then got[#got + 1] = e.name .. " +" .. p end
+  end
+  for _, n in ipairs(dnf) do row(n) end
+  G.champSort(t)
+  local f = io.open(G.F.champ .. ".tmp", "w")
+  if not f then return end
+  f:write("#rounds\t" .. (rounds + 1) .. "\n")
+  for _, r in ipairs(t) do f:write(table.concat({ r.name, r.pts, r.races, r.wins, r.pod }, "\t") .. "\n") end
+  f:close()
+  os.remove(G.F.champ)
+  os.rename(G.F.champ .. ".tmp", G.F.champ)
+  if #got > 0 then say(-1, "Championship points: " .. table.concat(got, ", ") .. ". Leader: " .. t[1].name .. " " .. t[1].pts .. ".") end
+end
+
+function G.champCmd(id, name)
+  if not G.cfg.champ then say(id, "There's no championship on this server right now.") return 1 end
+  local t, rounds = G.champRead()
+  G.champSort(t)
+  local title = G.cfg.champ_name ~= "" and G.cfg.champ_name or "Championship"
+  if #t == 0 then say(id, title .. " - no races yet. Every race with 2 or more drivers gives points.") return 1 end
+  local top = {}
+  for i = 1, math.min(5, #t) do top[#top + 1] = i .. ") " .. t[i].name .. " " .. t[i].pts end
+  say(id, title .. " after " .. rounds .. " race" .. (rounds == 1 and "" or "s") .. ": " .. table.concat(top, "   "))
+  for i, r in ipairs(t) do
+    if r.name:lower() == name:lower() and i > 5 then say(id, "You are in place " .. i .. " with " .. r.pts .. " points.") end
+  end
+  return 1
 end
 
 -- ------------------------------------------------------------------ cops and robbers
@@ -3180,6 +3264,7 @@ function esOnChat(id, name, message)
     if cmd == "trap" or cmd == "traps" then return G.trapCmd(id, nm, arg) end
     if cmd == "badges" or cmd == "badge" then return G.badgesCmd(id, nm, arg) end
     if cmd == "season" then return G.seasonCmd(id) end
+    if cmd == "champ" or cmd == "championship" then return G.champCmd(id, nm) end
     -- no teleporting out of a race or a chase
     if cmd == "tp" or cmd == "tpaccept" then
       local mover = id
@@ -3217,6 +3302,7 @@ function sug.list(id)
   if G.cfg.traps then add("trap", "", "Speed trap records") end
   if G.cfg.badges then add("badges", "player", "Your badges") end
   if G.cfg.seasons then add("season", "", "This season and last season's winners") end
+  if G.cfg.champ then add("champ", "", "Championship standings") end
   local n = MP.GetPlayerName(id)
   if n and isAdmin(tostring(n):lower()) then add("track", "new name", "Admin: make a race track") end
   return out

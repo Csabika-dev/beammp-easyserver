@@ -664,6 +664,33 @@ test("the game chat in the server's language", function()
   tick()
   eq(sent(2, "esLang"), "{}", "the mod wasn't told to go back to English")
 end)
+
+test("a championship: points by place, kept between races, /champ", function()
+  write("games.txt", "race=on\ncnr=off\ntraps=off\nbadges=off\nseasons=off\nchamp=on\nchamp_name=Winter Cup\nchamp_points=f1\n")
+  write("champ.tsv", "#rounds\t1\nBoss\t25\t1\t1\t1\nBob\t18\t1\t0\t1\n")
+  clock = clock + 20
+  chats = {}
+  esOnChat(2, "Bob", "/champ")
+  assert(table.concat(to(2), " "):find("Winter Cup after 1 race: 1) Boss 25   2) Bob 18", 1, true), "/champ: " .. table.concat(to(2), " "))
+  car[2] = { -15, 0, tim = 0 } car[3] = { -15, 5, tim = 0 }
+  esOnChat(3, "Boss", "/race ring 1")
+  esOnChat(2, "Bob", "/race join")
+  wait(37)
+  chats = {}
+  local route = { { 20, 0 }, { 150, 0 }, { 290, 0 }, { 310, 0 }, { 300, 150 }, { 300, 290 }, { 300, 310 }, { 150, 150 }, { 60, 60 }, { 5, -5 }, { -20, -5 } }
+  for i, p in ipairs(route) do
+    car[2] = { p[1], p[2], v = 30, tim = 100 + i * 2 } car[3] = { p[1], p[2] + 2, v = 20, tim = 100 + i * 3 }
+    tick()
+  end
+  assert(all():find("Championship points: Bob +25, Boss +18. Leader: Bob 43.", 1, true), "points not announced: " .. all())
+  local t = read("champ.tsv")
+  eq(t, "#rounds\t2\nBob\t43\t2\t1\t2\nBoss\t43\t2\t1\t2\n", "standings")
+  write("games.txt", "race=on\ncnr=off\ntraps=off\nbadges=off\nseasons=off\nchamp=off\n")
+  clock = clock + 20
+  chats = {}
+  esOnChat(2, "Bob", "/champ")
+  eq(to(2)[1], "There's no championship on this server right now.")
+end)
 os.time = realTime
 
 _print(string.format("%d passed, %d failed", passed, failed))

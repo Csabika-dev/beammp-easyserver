@@ -1904,7 +1904,29 @@
   "· {} km/h{}": "· {} km/h{}",
   "Language of the game chat": "A játék chatjének nyelve",
   "What the server says in the chat - races, votes, warnings, the /help list - and the text on players' screens. Your own messages below are sent exactly as you write them.": "Amit a szerver a chatbe ír - versenyek, szavazások, figyelmeztetések, a /help lista -, és a játékosok képernyőjén megjelenő szöveg. A lenti saját üzeneteid pontosan úgy mennek ki, ahogy megírod őket.",
-  "Saved - the game chat switches within 30 seconds.": "Mentve - a játék chatje 30 másodpercen belül átvált."
+  "Saved - the game chat switches within 30 seconds.": "Mentve - a játék chatje 30 másodpercen belül átvált.",
+  "Championship": "Bajnokság",
+  "End it": "Lezárás",
+  "End {}? Its leader is kept as the winner.": "Lezárod: {}? Az éllovas lesz a győztes.",
+  "Name, like Winter Cup": "Név, pl. Téli Kupa",
+  "No championship is running right now.": "Most nem fut bajnokság.",
+  "No points yet": "Még nincs pont",
+  "Past championships": "Korábbi bajnokságok",
+  "Podiums": "Dobogók",
+  "Points": "Pontok",
+  "Standings": "Állás",
+  "Start a championship": "Bajnokság indítása",
+  "Start a new championship": "Új bajnokság indítása",
+  "Start {}? {} ends now and its leader is kept as the winner.": "Indul: {}? {} most véget ér, és az éllovasa lesz a győztes.",
+  "The current one": "A mostani",
+  "The first race with 2 or more drivers gives the first points.": "Az első legalább 2 versenyzős futam adja az első pontokat.",
+  "While a championship is on, every race with 2 or more drivers gives points by finishing place ({}). The points are announced after each race, and players see the standings with /champ.": "Amíg bajnokság fut, minden legalább 2 versenyzős futam pontot ad a helyezés szerint ({}). A pontokat minden verseny után kihirdeti a szerver, a játékosok a /champ paranccsal látják az állást.",
+  "a new championship": "egy új bajnokság",
+  "championship standings": "bajnoki állás",
+  "the championship": "a bajnokság",
+  "{} pts": "{} pont",
+  "{} races": "{} verseny",
+  "{} · ended {}": "{} · véget ért: {}"
  },
  "game": {
   "Map voting is turned off on this server.": "A pályaszavazás ki van kapcsolva ezen a szerveren.",
@@ -2245,6 +2267,13 @@
   "START": "RAJT",
   "FINISH": "CÉL",
   "LAP": "KÖR",
-  "CHECKPOINT {}": "{}. ELLENŐRZŐPONT"
+  "CHECKPOINT {}": "{}. ELLENŐRZŐPONT",
+  "Championship": "Bajnokság",
+  "Championship points: {}. Leader: {} {}.": "Bajnoki pontok: {}. Az élen: {} {}.",
+  "There's no championship on this server right now.": "Ezen a szerveren most nincs bajnokság.",
+  "{} - no races yet. Every race with 2 or more drivers gives points.": "{} - még nem volt verseny. Minden legalább 2 versenyzős futam pontot ér.",
+  "{} after {} race{}: {}": "{1} - {2} verseny után: {4}",
+  "You are in place {} with {} points.": "{}. helyen állsz, {} ponttal.",
+  "Championship standings": "Bajnoki állás"
  }
 }

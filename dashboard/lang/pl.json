@@ -1904,7 +1904,29 @@
   "· {} km/h{}": "· {} km/h{}",
   "Language of the game chat": "Język czatu w grze",
   "What the server says in the chat - races, votes, warnings, the /help list - and the text on players' screens. Your own messages below are sent exactly as you write them.": "To, co serwer pisze na czacie - wyścigi, głosowania, ostrzeżenia, lista /help - oraz tekst na ekranach graczy. Twoje własne wiadomości poniżej są wysyłane dokładnie tak, jak je napiszesz.",
-  "Saved - the game chat switches within 30 seconds.": "Zapisano - czat w grze zmieni się w ciągu 30 sekund."
+  "Saved - the game chat switches within 30 seconds.": "Zapisano - czat w grze zmieni się w ciągu 30 sekund.",
+  "Championship": "Mistrzostwa",
+  "End it": "Zakończ",
+  "End {}? Its leader is kept as the winner.": "Zakończyć {}? Lider zostaje zwycięzcą.",
+  "Name, like Winter Cup": "Nazwa, np. Puchar Zimowy",
+  "No championship is running right now.": "Teraz nie trwają żadne mistrzostwa.",
+  "No points yet": "Jeszcze bez punktów",
+  "Past championships": "Poprzednie mistrzostwa",
+  "Podiums": "Podia",
+  "Points": "Punkty",
+  "Standings": "Klasyfikacja",
+  "Start a championship": "Rozpocznij mistrzostwa",
+  "Start a new championship": "Rozpocznij nowe mistrzostwa",
+  "Start {}? {} ends now and its leader is kept as the winner.": "Rozpocząć {}? {} kończą się teraz, a lider zostaje zwycięzcą.",
+  "The current one": "Obecne",
+  "The first race with 2 or more drivers gives the first points.": "Pierwszy wyścig z 2 lub więcej kierowcami da pierwsze punkty.",
+  "While a championship is on, every race with 2 or more drivers gives points by finishing place ({}). The points are announced after each race, and players see the standings with /champ.": "Podczas mistrzostw każdy wyścig z 2 lub więcej kierowcami daje punkty za miejsce ({}). Punkty są ogłaszane po każdym wyścigu, a gracze widzą klasyfikację przez /champ.",
+  "a new championship": "nowe mistrzostwa",
+  "championship standings": "klasyfikacja mistrzostw",
+  "the championship": "mistrzostwa",
+  "{} pts": "{} pkt",
+  "{} races": "{} wyścigów",
+  "{} · ended {}": "{} · zakończone {}"
  },
  "game": {
   "Map voting is turned off on this server.": "Głosowanie na mapę jest wyłączone na tym serwerze.",
@@ -2245,6 +2267,13 @@
   "START": "START",
   "FINISH": "META",
   "LAP": "OKRĄŻENIE",
-  "CHECKPOINT {}": "PUNKT KONTROLNY {}"
+  "CHECKPOINT {}": "PUNKT KONTROLNY {}",
+  "Championship": "Mistrzostwa",
+  "Championship points: {}. Leader: {} {}.": "Punkty mistrzostw: {}. Prowadzi: {} {}.",
+  "There's no championship on this server right now.": "Na tym serwerze nie ma teraz mistrzostw.",
+  "{} - no races yet. Every race with 2 or more drivers gives points.": "{} - jeszcze bez wyścigów. Każdy wyścig z 2 lub więcej kierowcami daje punkty.",
+  "{} after {} race{}: {}": "{1} po {2} wyśc.: {4}",
+  "You are in place {} with {} points.": "Jesteś na miejscu {} z {} pkt.",
+  "Championship standings": "Klasyfikacja mistrzostw"
  }
 }

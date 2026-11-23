@@ -1752,7 +1752,8 @@ def laps_summary(limit=10, only_map=None):
 # ----------------------------------------------------------------------------- games
 # The plugin runs races, cops and robbers, speed traps, badges and seasons in the game. Here: which
 # are on and their rules (games.txt), the results and leaderboards, the live map, and a weekly recap.
-GAME_SWITCHES = ("race", "cnr", "traps", "badges", "seasons")
+GAME_SWITCHES = ("race", "cnr", "traps", "badges", "seasons", "champ")
+CHAMP_POINTS = {"f1": (25, 18, 15, 12, 10, 8, 6, 4, 2, 1), "simple": (10, 8, 6, 5, 4, 3, 2, 1)}
 CNR_MINUTES = (3, 5, 10, 15, 20, 30)
 CNR_CATCH = (6, 8, 10, 15, 20)
 CNR_HOLD = (2, 3, 5)
@@ -1771,7 +1772,8 @@ LIVEMAP_ASK = 20            # the plugin keeps writing positions this long after
 
 def read_games_cfg():
     d = {"race": True, "race_who": "everyone", "cnr": True, "cnr_who": "everyone", "cnr_minutes": 10, "cnr_catch": 10,
-         "cnr_hold": 3, "cnr_busted": "out", "traps": True, "badges": True, "seasons": False}
+         "cnr_hold": 3, "cnr_busted": "out", "traps": True, "badges": True, "seasons": False,
+         "champ": False, "champ_name": "", "champ_points": "f1", "champ_started": 0}
     for line in shared_read(laps_file("games.txt"), 4096).splitlines():
         k, _, v = line.partition("=")
         v = v.strip()
@@ -1781,16 +1783,57 @@ def read_games_cfg():
             d[k] = "admins" if v == "admins" else "everyone"
         elif k == "cnr_busted":
             d[k] = "cop" if v == "cop" else "out"
-        elif k in ("cnr_minutes", "cnr_catch", "cnr_hold") and v.isdigit():
+        elif k in ("cnr_minutes", "cnr_catch", "cnr_hold", "champ_started") and v.isdigit():
             d[k] = int(v)
+        elif k == "champ_name":
+            d[k] = v[:60]
+        elif k == "champ_points":
+            d[k] = "simple" if v == "simple" else "f1"
     return d
 
 
 def write_games_cfg(d):
     lines = ["%s=%s" % (k, "on" if d[k] else "off") for k in GAME_SWITCHES]
     lines += ["race_who=%s" % d["race_who"], "cnr_who=%s" % d["cnr_who"], "cnr_busted=%s" % d["cnr_busted"],
-              "cnr_minutes=%d" % d["cnr_minutes"], "cnr_catch=%d" % d["cnr_catch"], "cnr_hold=%d" % d["cnr_hold"]]
+              "cnr_minutes=%d" % d["cnr_minutes"], "cnr_catch=%d" % d["cnr_catch"], "cnr_hold=%d" % d["cnr_hold"],
+              "champ_name=%s" % re.sub(r"[\x00-\x1f]", "", d["champ_name"])[:60], "champ_points=%s" % d["champ_points"],
+              "champ_started=%d" % d["champ_started"]]
     shared_write(laps_file("games.txt"), "# Managed by the dashboard (Games page)\n" + "\n".join(lines) + "\n")
+
+
+def read_champ():
+    """The championship standings the plugin keeps (champ.tsv), best first, and how many races counted."""
+    rows, rounds = [], 0
+    for line in shared_read(laps_file("champ.tsv"), 512 * 1024).splitlines():
+        p = line.split("\t")
+        if len(p) == 2 and p[0] == "#rounds" and p[1].isdigit():
+            rounds = int(p[1])
+        elif len(p) == 5 and p[0] and not p[0].startswith("#") and all(x.isdigit() for x in p[1:]):
+            rows.append({"name": p[0][:64], "points": int(p[1]), "races": int(p[2]), "wins": int(p[3]), "podiums": int(p[4])})
+    rows.sort(key=lambda r: (-r["points"], -r["wins"], r["name"].lower()))
+    return rows, rounds
+
+
+def read_champ_history():
+    """Finished championships, newest first: name <TAB> winner <TAB> points <TAB> races <TAB> started <TAB> ended."""
+    out = []
+    for line in shared_read(laps_file("champs.tsv"), 256 * 1024).splitlines():
+        p = line.split("\t")
+        if len(p) == 6 and all(x.isdigit() for x in p[2:]):
+            out.append({"name": p[0][:60], "winner": p[1][:64], "points": int(p[2]), "races": int(p[3]), "started": int(p[4]), "ended": int(p[5])})
+    return out[::-1][:20]
+
+
+def end_champ(cfg):
+    """Keep the finished championship's winner (if it had a race) and empty the standings."""
+    rows, rounds = read_champ()
+    if rows and rounds:
+        clean = lambda x: re.sub(r"[\t\r\n]", " ", str(x))
+        old = shared_read(laps_file("champs.tsv"), 256 * 1024)
+        shared_write(laps_file("champs.tsv"), old + "%s\t%s\t%d\t%d\t%d\t%d\n" % (
+            clean(cfg["champ_name"] or "Championship"), clean(rows[0]["name"]), rows[0]["points"], rounds, cfg["champ_started"], now()))
+    shared_write(laps_file("champ.tsv"), "")
+    return rows[0]["name"] if rows and rounds else None
 
 
 def read_game_counts(season=False):
@@ -1929,7 +1972,8 @@ def games_summary():
                 plugin=os.path.exists(os.path.join(I().STATS_DIR, "main.lua")), races=races, cnr_games=cnr,
                 wins=board("wins"), busts=board("busts"), escapes=board("escapes"), trap_boards=traps, badge_list=badge_list,
                 badge_leaders=top_owners, recent_badges=recent_badges, season_archive=read_seasons(), season=season_info(),
-                players_with_badges=len(owners))
+                players_with_badges=len(owners), champ_table=read_champ()[0][:50], champ_rounds=read_champ()[1],
+                champ_history=read_champ_history(), champ_scales={k: list(v) for k, v in CHAMP_POINTS.items()})
 
 
 def game_counts_for(name):
@@ -10823,6 +10867,14 @@ class Handler(BaseHTTPRequestHandler):
             for k in GAME_SWITCHES:
                 if k in b:
                     cfg[k] = bool(b[k])
+            if "champ_points" in b:
+                if b["champ_points"] not in CHAMP_POINTS:
+                    return self.fail(400, "Pick a points system from the list")
+                cfg["champ_points"] = b["champ_points"]
+            if "champ_name" in b:
+                cfg["champ_name"] = re.sub(r"[\x00-\x1f]", "", str(b["champ_name"] or "")).strip()[:60]
+            if cfg["champ"] and not cfg["champ_started"]:
+                cfg["champ_started"] = now()
             for k in ("race_who", "cnr_who"):
                 if k in b:
                     if b[k] not in ("everyone", "admins"):
@@ -10843,6 +10895,21 @@ class Handler(BaseHTTPRequestHandler):
                     cfg[k] = v
             write_games_cfg(cfg)
             return self.send(200, {"ok": True, "note": "Saved - the game picks it up within 10 seconds." + self._games_mod_note()})
+        if act in ("champ_new", "champ_end"):
+            cfg = read_games_cfg()
+            winner = end_champ(cfg)
+            note = ("%s won %s. " % (winner, cfg["champ_name"] or "the championship")) if winner else ""
+            if act == "champ_new":
+                name = re.sub(r"[\x00-\x1f]", "", str(b.get("name") or "")).strip()[:60]
+                if not name:
+                    return self.fail(400, "Give the championship a name")
+                cfg.update(champ=True, champ_name=name, champ_started=now())
+                note += "%s has started - every race with 2 or more drivers counts." % name
+            else:
+                cfg.update(champ=False, champ_started=0)
+                note += "Championship ended."
+            write_games_cfg(cfg)
+            return self.send(200, {"ok": True, "note": note})
         tid = str(b.get("id") or "")
         lines = [l for l in shared_read(laps_file("traps.tsv"), 256 * 1024).splitlines() if TRAP_RE.match(l)]
         mine = [l for l in lines if l.split("\t", 1)[0] == tid]

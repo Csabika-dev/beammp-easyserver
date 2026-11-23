@@ -192,6 +192,41 @@ function Races({ d }) {
   </div>);
 }
 
+function Championship({ d, canEdit, again }) {
+  const [start, setStart] = useState(false);
+  const act = async body => { try { const r = await L.api("/api/games", { json: body }); L.toast(r.note, 6000); setStart(false); again(); } catch (e) { L.toast(e.message, 6000); } };
+  const begin = () => {
+    const name = document.getElementById("ch_name").value.trim();
+    if (d.champ && d.champ_rounds > 0 && !confirm(`Start ${name || "a new championship"}? ${d.champ_name || "The current one"} ends now and its leader is kept as the winner.`)) return;
+    act({ action: "champ_new", name });
+  };
+  const points = async e => { try { const r = await L.api("/api/games", { json: { champ_points: e.target.value } }); L.toast(r.note, 6000); again(); } catch (x) { L.toast(x.message, 6000); } };
+  const scale = d.champ_scales[d.champ_points] || [];
+  return (<div className="card">
+    <div className="row"><h2 style={{ margin: 0 }}>{d.champ && d.champ_name ? d.champ_name : "Championship"}</h2><span className="spacer" />
+      <span className={"pill " + (d.champ ? "good" : "")}><span className="dot" />{d.champ ? (d.champ_rounds === 1 ? "1 race" : `${d.champ_rounds} races`) : "Off"}</span></div>
+    <p className="small muted">{`While a championship is on, every race with 2 or more drivers gives points by finishing place (${scale.join("-")}). The points are announced after each race, and players see the standings with /champ.`}</p>
+    {d.champ && (d.champ_table.length ? <div className="card tight"><table><thead><tr><th colSpan={2}>{"Standings"}</th><th className="num">{"Races"}</th><th className="num">{"Wins"}</th><th className="num">{"Podiums"}</th><th className="num">{"Points"}</th></tr></thead>
+      <tbody>{d.champ_table.map((r, i) => <tr key={r.name}><td className="num muted" style={{ width: 34 }}>{i + 1}</td><td><Who name={r.name} /></td>
+        <td className="num">{r.races}</td><td className="num">{r.wins}</td><td className="num">{r.podiums}</td><td className="num"><b>{r.points}</b></td></tr>)}</tbody></table></div>
+      : <Empty title="No points yet">{"The first race with 2 or more drivers gives the first points."}</Empty>)}
+    {!d.champ && !canEdit && <p className="small muted">{"No championship is running right now."}</p>}
+    {canEdit && <div className="row" style={{ gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+      {start ? <>
+        <input id="ch_name" placeholder="Name, like Winter Cup" maxLength={60} style={{ width: 220 }} autoFocus onKeyDown={e => e.key === "Enter" && begin()} />
+        <button className="btn primary sm" onClick={begin}>Start</button><button className="btn sm ghost" onClick={() => setStart(false)}>Cancel</button></>
+        : <button className={"btn sm" + (d.champ ? "" : " primary")} onClick={() => setStart(true)}>{d.champ ? "Start a new championship" : "Start a championship"}</button>}
+      {d.champ && !start && <button className="btn sm ghost" onClick={() => { if (confirm(`End ${d.champ_name || "the championship"}? Its leader is kept as the winner.`)) act({ action: "champ_end" }); }}>End it</button>}
+      <span className="spacer" />
+      <label className="small" htmlFor="ch_pts">{"Points"}</label>
+      <select id="ch_pts" defaultValue={d.champ_points} onChange={points} style={{ width: "auto" }}>
+        <option value="f1">{"25-18-15-12-10-8-6-4-2-1 (top 10)"}</option><option value="simple">{"10-8-6-5-4-3-2-1 (top 8)"}</option></select></div>}
+    {d.champ_history.length > 0 && <details className="small" style={{ marginTop: 12 }}><summary>{"Past championships"}</summary>
+      <table style={{ marginTop: 6 }}><tbody>{d.champ_history.map((h, i) => <tr key={i}><td><b>{h.name}</b><div className="muted">{`${h.races === 1 ? "1 race" : h.races + " races"} · ended ${L.ago(h.ended)}`}</div></td>
+        <td>{"🏆 "}<Who name={h.winner} /></td><td className="num">{`${h.points} pts`}</td></tr>)}</tbody></table></details>}
+  </div>);
+}
+
 function CopsAndRobbers({ d }) {
   return (<div className="card">
     <div className="row"><h2 style={{ margin: 0 }}>Cops and robbers</h2><span className="spacer" /><span className={"pill " + (d.cnr ? "good" : "")}><span className="dot" />{d.cnr ? "On" : "Off"}</span></div>
@@ -299,6 +334,7 @@ const HOWTO = [
   ["/race Canyon run 3", "start a race on a track, 3 laps"], ["/race join", "take part in the race that's starting"],
   ["/cnr start", "start cops and robbers"], ["/cnr join cop", "join, and ask to be a cop (or robber)"],
   ["/laps", "best lap times"], ["/trap", "speed trap records"], ["/badges", "your badges"], ["/season", "this season and last season's winners"],
+  ["/champ", "championship standings"],
 ];
 
 export function Games({ reload }) {
@@ -315,6 +351,7 @@ export function Games({ reload }) {
       <p className="small muted" style={{ margin: "6px 0 0" }}>{"Admins make tracks with /track new and speed traps with /trap new. Everyone sees the list with /help."}</p></details>
     {canEdit && <Rules d={d} again={retry} />}
     <Races d={d} />
+    {(d.champ || canEdit || d.champ_history.length > 0) && <Championship d={d} canEdit={canEdit} again={retry} />}
     <CopsAndRobbers d={d} />
     <LapTimes key={"l" + reload} canEdit={canEdit} />
     <Traps d={d} canEdit={canEdit} again={retry} />

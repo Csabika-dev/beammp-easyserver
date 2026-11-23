@@ -19,7 +19,7 @@ PLUGIN = os.path.join(ROOT, "dashboard", "EasyServerStats", "main.lua")
 LANG = os.path.join(ROOT, "dashboard", "lang")
 
 # Text that reaches the chat through a variable instead of straight inside say(...)
-EXTRA = ["left the game", "left the server", "Your badges", "{}'s badges", "a race", "cops and robbers",
+EXTRA = ["left the game", "left the server", "Your badges", "{}'s badges", "a race", "cops and robbers", "Championship",
          "north", "north-east", "east", "south-east", "south", "south-west", "west", "north-west"]
 # The helper mod's on-screen text lives in the dashboard (GAME_HUD_TEXT), which sends it to the mod.
 DASHBOARD = os.path.join(ROOT, "dashboard", "dashboard.py")

@@ -80,6 +80,36 @@ class Games(unittest.TestCase):
         boss = self.owner.call("/api/players/profile?name=Boss")[1]
         self.assertEqual(next(h for h in boss["history"] if h["ev"] == "bust")["me"], "cop")
 
+    def test_championship(self):
+        for f in ("games.txt", "champ.tsv", "champs.tsv"):
+            self.addCleanup(lambda f=f: os.path.exists(self.stats(f)) and os.remove(self.stats(f)))
+        d = self.owner.call("/api/games")[1]
+        self.assertFalse(d["champ"])
+        self.assertEqual(d["champ_scales"]["f1"][:3], [25, 18, 15])
+        self.assertEqual(self.owner.call("/api/games", {"action": "champ_new", "name": "  "})[0], 400)
+        self.assertEqual(self.owner.call("/api/games", {"champ_points": "golf"})[0], 400)
+        st, r, _ = self.owner.call("/api/games", {"action": "champ_new", "name": "Winter\tCup"})
+        self.assertEqual(st, 200, r)
+        txt = self.read("games.txt")
+        self.assertIn("champ=on\n", txt)
+        self.assertIn("champ_name=WinterCup\n", txt)
+        self.write("champ.tsv", "#rounds\t3\nBoss\t50\t3\t1\t3\nBob\t61\t3\t2\t3\nbad line\n")
+        d = self.owner.call("/api/games")[1]
+        self.assertEqual(d["champ_rounds"], 3)
+        self.assertEqual([(x["name"], x["points"]) for x in d["champ_table"]], [("Bob", 61), ("Boss", 50)])
+        self.assertEqual(self.owner.call("/api/games", {"champ_points": "simple"})[0], 200)
+        self.assertIn("champ_points=simple\n", self.read("games.txt"))
+        self.assertIn("champ=on\n", self.read("games.txt"))
+        st, r, _ = self.owner.call("/api/games", {"action": "champ_new", "name": "Spring Cup"})
+        self.assertIn("Bob won WinterCup", r["note"])
+        self.assertEqual(self.read("champ.tsv"), "")
+        d = self.owner.call("/api/games")[1]
+        self.assertEqual((d["champ_name"], d["champ_table"]), ("Spring Cup", []))
+        self.assertEqual([(h["name"], h["winner"], h["points"], h["races"]) for h in d["champ_history"]], [("WinterCup", "Bob", 61, 3)])
+        self.owner.call("/api/games", {"action": "champ_end"})
+        self.assertIn("champ=off\n", self.read("games.txt"))
+        self.assertEqual(len(self.owner.call("/api/games")[1]["champ_history"]), 1)     # no races, so nobody to keep
+
     def test_speed_traps(self):
         t = int(time.time())
         self.write("traps.tsv", "aa1\tStraight\t/levels/gridmap_v2/info.json\t1000.00,0.00,0.00\nbb2\tHill\t\t5,5,0\n")

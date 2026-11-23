@@ -1904,7 +1904,29 @@
   "· {} km/h{}": "· {} km/h{}",
   "Language of the game chat": "Idioma del chat del juego",
   "What the server says in the chat - races, votes, warnings, the /help list - and the text on players' screens. Your own messages below are sent exactly as you write them.": "Lo que el servidor dice en el chat - carreras, votaciones, avisos, la lista de /help - y el texto en las pantallas de los jugadores. Tus propios mensajes de abajo se envían tal como los escribes.",
-  "Saved - the game chat switches within 30 seconds.": "Guardado - el chat del juego cambia en menos de 30 segundos."
+  "Saved - the game chat switches within 30 seconds.": "Guardado - el chat del juego cambia en menos de 30 segundos.",
+  "Championship": "Campeonato",
+  "End it": "Terminarlo",
+  "End {}? Its leader is kept as the winner.": "¿Terminar {}? Su líder queda como ganador.",
+  "Name, like Winter Cup": "Nombre, p. ej. Copa de Invierno",
+  "No championship is running right now.": "Ahora mismo no hay ningún campeonato.",
+  "No points yet": "Aún no hay puntos",
+  "Past championships": "Campeonatos anteriores",
+  "Podiums": "Podios",
+  "Points": "Puntos",
+  "Standings": "Clasificación",
+  "Start a championship": "Empezar un campeonato",
+  "Start a new championship": "Empezar un campeonato nuevo",
+  "Start {}? {} ends now and its leader is kept as the winner.": "¿Empezar {}? {} termina ahora y su líder queda como ganador.",
+  "The current one": "El actual",
+  "The first race with 2 or more drivers gives the first points.": "La primera carrera con 2 o más pilotos da los primeros puntos.",
+  "While a championship is on, every race with 2 or more drivers gives points by finishing place ({}). The points are announced after each race, and players see the standings with /champ.": "Mientras haya un campeonato, cada carrera con 2 o más pilotos da puntos según la posición ({}). Los puntos se anuncian tras cada carrera y los jugadores ven la clasificación con /champ.",
+  "a new championship": "un campeonato nuevo",
+  "championship standings": "clasificación del campeonato",
+  "the championship": "el campeonato",
+  "{} pts": "{} pts",
+  "{} races": "{} carreras",
+  "{} · ended {}": "{} · terminó {}"
  },
  "game": {
   "Map voting is turned off on this server.": "La votación de mapa está desactivada en este servidor.",
@@ -2245,6 +2267,13 @@
   "START": "SALIDA",
   "FINISH": "META",
   "LAP": "VUELTA",
-  "CHECKPOINT {}": "PUNTO DE CONTROL {}"
+  "CHECKPOINT {}": "PUNTO DE CONTROL {}",
+  "Championship": "Campeonato",
+  "Championship points: {}. Leader: {} {}.": "Puntos del campeonato: {}. Líder: {} {}.",
+  "There's no championship on this server right now.": "Ahora mismo no hay campeonato en este servidor.",
+  "{} - no races yet. Every race with 2 or more drivers gives points.": "{} - aún no hay carreras. Cada carrera con 2 o más pilotos da puntos.",
+  "{} after {} race{}: {}": "{1} tras {2} carrera(s): {4}",
+  "You are in place {} with {} points.": "Vas en el puesto {} con {} puntos.",
+  "Championship standings": "Clasificación del campeonato"
  }
 }
