@@ -1854,7 +1854,6 @@
   "Race on {}: P{} of {}": "Wyścig na {}: P{} z {}",
   "Race wins this season": "Wygrane wyścigi w tym sezonie",
   "Races": "Wyścigi",
-  "Races, cops and robbers, speed traps and badges - all started by players in the chat. Results show up here.": "Wyścigi, policjanci i złodzieje, fotoradary i odznaki - wszystko uruchamiają gracze na czacie. Wyniki pojawiają się tutaj.",
   "Racing": "Ściga się",
   "Robber": "Złodziej",
   "Robbers won": "Wygrali złodzieje",
@@ -1926,7 +1925,22 @@
   "the championship": "mistrzostwa",
   "{} pts": "{} pkt",
   "{} races": "{} wyścigów",
-  "{} · ended {}": "{} · zakończone {}"
+  "{} · ended {}": "{} · zakończone {}",
+  "Clear every drift score on {}?": "Usunąć wszystkie wyniki driftu na {}?",
+  "Clear scores": "Wyczyść wyniki",
+  "Drift": "Drift",
+  "Drift scores on 1 other map": "Wyniki driftu na 1 innej mapie",
+  "Drift scores on {} other maps": "Wyniki driftu na innych mapach: {}",
+  "Drift scoring": "Punktacja driftu",
+  "Go sideways in the game - scores of 50 points and more count.": "Jedź bokiem w grze - liczą się wyniki od 50 punktów.",
+  "No drift scores on this map": "Brak wyników driftu na tej mapie",
+  "Players get points for every second they slide sideways - more for a bigger angle and more speed. The score shows on screen; straighten up and it's banked, hit something and it's lost. A new record for the map is announced to everyone, and /drift shows the best. Nothing counts during a race or cops and robbers.": "Gracze dostają punkty za każdą sekundę jazdy bokiem - więcej za większy kąt i większą prędkość. Wynik widać na ekranie; po wyprostowaniu jest zapisany, po uderzeniu w coś przepada. Nowy rekord mapy jest ogłaszany wszystkim, a /drift pokazuje najlepszych. W trakcie wyścigu lub policjantów i złodziei nic się nie liczy.",
+  "Points for sliding sideways, shown on screen, with a leaderboard for each map": "Punkty za jazdę bokiem, na ekranie, z tabelą wyników dla każdej mapy",
+  "Races, cops and robbers, speed traps, drifting and badges - all started by players in the chat. Results show up here.": "Wyścigi, policjanci i złodzieje, fotoradary, drift i odznaki - wszystko uruchamiane przez graczy na czacie. Wyniki pojawiają się tutaj.",
+  "This map": "Ta mapa",
+  "Turn drift scoring on under Game rules.": "Włącz punktację driftu w Zasadach gry.",
+  "best drift scores on this map": "najlepsze wyniki driftu na tej mapie",
+  "this map": "ta mapa"
  },
  "game": {
   "Map voting is turned off on this server.": "Głosowanie na mapę jest wyłączone na tym serwerze.",
@@ -2274,6 +2288,16 @@
   "{} - no races yet. Every race with 2 or more drivers gives points.": "{} - jeszcze bez wyścigów. Każdy wyścig z 2 lub więcej kierowcami daje punkty.",
   "{} after {} race{}: {}": "{1} po {2} wyśc.: {4}",
   "You are in place {} with {} points.": "Jesteś na miejscu {} z {} pkt.",
-  "Championship standings": "Klasyfikacja mistrzostw"
+  "Championship standings": "Klasyfikacja mistrzostw",
+  "{} set a new drift record: {} points!": "{} ustanawia nowy rekord driftu: {} pkt!",
+  "New personal best drift: {} points.": "Nowy osobisty rekord driftu: {} pkt.",
+  "Drift scoring is turned off on this server.": "Punktacja driftu jest wyłączona na tym serwerze.",
+  "No drift scores on this map yet. Go sideways - the score shows on screen.": "Na tej mapie nie ma jeszcze wyników driftu. Jedź bokiem - wynik pojawi się na ekranie.",
+  "Best drifts here: {}": "Najlepsze drifty tutaj: {}",
+  "Your best: {} points, place {}.": "Twój najlepszy: {} pkt, miejsce {}.",
+  "Best drift scores on this map": "Najlepsze wyniki driftu na tej mapie",
+  "DRIFT": "DRIFT",
+  "DRIFT LOST": "DRIFT STRACONY",
+  "Angle {}° · {} s": "Kąt {}° · {} s"
  }
 }

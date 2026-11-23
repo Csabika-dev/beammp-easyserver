@@ -2077,12 +2077,12 @@ function G.readCfg(now)
   G.cfgRead = now
   local c = { race = true, race_who = "everyone", cnr = true, cnr_who = "everyone", cnr_minutes = 10, cnr_catch = 10,
               cnr_hold = 3, cnr_busted = "out", traps = true, badges = true, seasons = false,
-              champ = false, champ_points = "f1", champ_name = "" }
+              champ = false, champ_points = "f1", champ_name = "", drift = false }
   local f = io.open(G.F.cfg, "r")
   if f then
     for line in f:lines() do
       local k, v = line:match("^([%w_]+)=(.-)%s*$")
-      if k == "race" or k == "cnr" or k == "traps" or k == "badges" or k == "seasons" then c[k] = v == "on"
+      if k == "race" or k == "cnr" or k == "traps" or k == "badges" or k == "seasons" or k == "drift" then c[k] = v == "on"
       elseif k == "race_who" or k == "cnr_who" then c[k] = v == "admins" and "admins" or "everyone"
       elseif k == "cnr_busted" then c[k] = v == "cop" and "cop" or "out"
       elseif k == "champ" then c.champ = v == "on"
@@ -3213,7 +3213,95 @@ end
 G.helloBefore = esToolsHello
 function esToolsHello(id)
   G.helloBefore(id)
-  if type(id) == "number" then G.hudSent[id], G.tagsSent[id], G.langSent[id] = nil, nil, nil end
+  if type(id) == "number" then G.hudSent[id], G.tagsSent[id], G.langSent[id], G.driftSent[id] = nil, nil, nil, nil end
+end
+
+-- ------------------------------------------------------------------ drift scoring
+-- The helper mod scores drifts on the player's own PC, where the car's angle and speed are known
+-- every frame: points for every second sideways, more for a bigger angle and more speed. A drift
+-- ends when the car straightens up for a moment (banked and sent here) or hits something (lost).
+-- The server only accepts scores a real drift could give, at most one every 2 seconds, and none
+-- during a race or a chase. drift.tsv: best per player per map:
+--   map <TAB> name <TAB> points <TAB> car <TAB> unix time
+G.F.drift = DIR .. "drift.tsv"
+G.driftSent, G.driftAt = {}, {}
+G.DRIFT_RATE = 1000          -- most points a second of drifting can give (angle 100 at 200 km/h is 900)
+
+function G.driftRead()
+  local rows = {}
+  local f = io.open(G.F.drift, "r")
+  if not f then return rows end
+  for line in f:lines() do
+    local m, n, s, car, t = line:match("^([^\t]*)\t([^\t]+)\t(%d+)\t([^\t]*)\t(%d+)$")
+    if m then rows[#rows + 1] = { map = m, name = n, score = tonumber(s), car = car, t = tonumber(t) } end
+  end
+  f:close()
+  return rows
+end
+
+function G.driftTop(rows, map)
+  local out = {}
+  for _, r in ipairs(rows) do if r.map == map then out[#out + 1] = r end end
+  table.sort(out, function(a, b) return a.score > b.score end)
+  return out
+end
+
+function esDrift(pid, data)
+  pid = tonumber(pid)
+  if not pid or not G.cfg.drift or G.inGame(pid) then return end
+  local now = os.time()
+  if G.driftAt[pid] and now - G.driftAt[pid] < 2 then return end
+  G.driftAt[pid] = now
+  local s, secs = tostring(data or ""):match('^{"s":(%d+),"t":([%d.]+)}$')
+  s, secs = tonumber(s), tonumber(secs)
+  if not s or not secs or secs < 1 or secs > 120 or s < 1 or s > secs * G.DRIFT_RATE then return end
+  local name = G.pname(pid)
+  if name == "" then return end
+  local vs, car = MP.GetPlayerVehicles(pid), ""
+  if type(vs) == "table" then for vid, _ in pairs(vs) do car = carName(pid, vid) break end end
+  local map, rows = currentMap(), G.driftRead()
+  local top = G.driftTop(rows, map)
+  local mine
+  for _, r in ipairs(rows) do if r.map == map and r.name:lower() == name:lower() then mine = r end end
+  if mine and mine.score >= s then return end
+  if mine then mine.score, mine.car, mine.t = s, car, now
+  else rows[#rows + 1] = { map = map, name = name, score = s, car = car, t = now } end
+  local f = io.open(G.F.drift .. ".tmp", "w")
+  if not f then return end
+  for _, r in ipairs(rows) do f:write(table.concat({ r.map, r.name, r.score, r.car, r.t }, "\t") .. "\n") end
+  f:close()
+  os.remove(G.F.drift)
+  os.rename(G.F.drift .. ".tmp", G.F.drift)
+  event("drift", string.format(',"name":"%s","score":%d,"map":"%s"', jsonEscape(name), s, jsonEscape(map)))
+  if not top[1] or s > top[1].score then
+    say(-1, name .. " set a new drift record: " .. s .. " points!")
+  else
+    say(pid, "New personal best drift: " .. s .. " points.")
+  end
+end
+
+function G.driftCmd(id, name)
+  if not G.cfg.drift then say(id, "Drift scoring is turned off on this server.") return 1 end
+  local top = G.driftTop(G.driftRead(), currentMap())
+  if #top == 0 then say(id, "No drift scores on this map yet. Go sideways - the score shows on screen.") return 1 end
+  local out = {}
+  for i = 1, math.min(5, #top) do out[#out + 1] = i .. ") " .. top[i].name .. " " .. top[i].score end
+  say(id, "Best drifts here: " .. table.concat(out, "   "))
+  for i, r in ipairs(top) do
+    if r.name:lower() == name:lower() and i > 5 then say(id, "Your best: " .. r.score .. " points, place " .. i .. ".") end
+  end
+  return 1
+end
+
+function G.driftTick()
+  if not MP.TriggerClientEvent then return end
+  for pid, _ in pairs(players()) do
+    local w = (G.cfg.drift and not G.inGame(pid)) and "1" or "0"
+    if G.driftSent[pid] ~= w then
+      G.driftSent[pid] = w
+      MP.TriggerClientEvent(pid, "esDriftCfg", w)
+    end
+  end
 end
 
 -- ------------------------------------------------------------------ the timer
@@ -3247,6 +3335,7 @@ function esGameTick(fromPlayer)
   G.cnrTick(now)
   G.trapTick(now)
   G.hudTick(now)
+  G.driftTick()
   if wantMap and now ~= G.mapWrote then G.mapWrote = now G.writeMap(now) end
   if G.ticks % 240 == 0 then G.minute(now) end
 end
@@ -3265,6 +3354,7 @@ function esOnChat(id, name, message)
     if cmd == "badges" or cmd == "badge" then return G.badgesCmd(id, nm, arg) end
     if cmd == "season" then return G.seasonCmd(id) end
     if cmd == "champ" or cmd == "championship" then return G.champCmd(id, nm) end
+    if cmd == "drift" or cmd == "drifts" then return G.driftCmd(id, nm) end
     -- no teleporting out of a race or a chase
     if cmd == "tp" or cmd == "tpaccept" then
       local mover = id
@@ -3286,7 +3376,7 @@ function esMsgLeft(id)
   end
   G.cnrDrop(id, "left the server")
   G.lastRace[id] = nil
-  G.hudSent[id], G.tagsSent[id], G.langSent[id] = nil, nil, nil
+  G.hudSent[id], G.tagsSent[id], G.langSent[id], G.driftSent[id], G.driftAt[id] = nil, nil, nil, nil, nil
   if G.doneHud then G.doneHud[id] = nil end
 end
 
@@ -3303,6 +3393,7 @@ function sug.list(id)
   if G.cfg.badges then add("badges", "player", "Your badges") end
   if G.cfg.seasons then add("season", "", "This season and last season's winners") end
   if G.cfg.champ then add("champ", "", "Championship standings") end
+  if G.cfg.drift then add("drift", "", "Best drift scores on this map") end
   local n = MP.GetPlayerName(id)
   if n and isAdmin(tostring(n):lower()) then add("track", "new name", "Admin: make a race track") end
   return out
@@ -3334,6 +3425,7 @@ MP.CreateEventTimer("esToolsTick", 15000)
 MP.RegisterEvent("esLapTick", "esLapTick")
 MP.CreateEventTimer("esLapTick", 250)
 MP.RegisterEvent("esGameTick", "esGameTick")
+MP.RegisterEvent("esDrift", "esDrift")
 MP.CreateEventTimer("esGameTick", 250)
 
 event("start")

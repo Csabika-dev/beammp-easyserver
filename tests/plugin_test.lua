@@ -691,6 +691,47 @@ test("a championship: points by place, kept between races, /champ", function()
   esOnChat(2, "Bob", "/champ")
   eq(to(2)[1], "There's no championship on this server right now.")
 end)
+
+test("drift scores: records, personal bests, and scores no drift could give are refused", function()
+  write("games.txt", "race=on\ncnr=off\ntraps=off\nbadges=off\nseasons=off\ndrift=off\n")
+  clock = clock + 20
+  chats = {}
+  esDrift(2, '{"s":5000,"t":10.5}')
+  eq(read("drift.tsv"), "", "scored while drift is off")
+  esOnChat(2, "Bob", "/drift")
+  eq(to(2)[1], "Drift scoring is turned off on this server.")
+  write("games.txt", "race=on\ncnr=off\ntraps=off\nbadges=off\nseasons=off\ndrift=on\n")
+  clock = clock + 20
+  tick()
+  eq(sent(2, "esDriftCfg"), "1", "the mod wasn't told to score drifts")
+  chats = {}
+  esDrift(2, '{"s":5000,"t":10.5}')
+  assert(all():find("Bob set a new drift record: 5000 points!", 1, true), "record not announced: " .. all())
+  assert(read("drift.tsv"):find("\tBob\t5000\tpickup\t", 1, true), "not saved: " .. read("drift.tsv"))
+  esDrift(2, '{"s":9000,"t":10}')                  -- 2 seconds haven't passed
+  clock = clock + 3
+  esDrift(2, '{"s":99999,"t":10}')                 -- 10 000 a second: no car does that
+  esDrift(3, '{"s":5000,"t":0.5}')                 -- too short
+  esDrift(3, "garbage")
+  clock = clock + 3
+  esDrift(3, '{"s":1200,"t":4}')
+  clock = clock + 3
+  chats = {}
+  esDrift(3, '{"s":3000,"t":6}')
+  eq(to(3)[1], "New personal best drift: 3000 points.")
+  eq(#to(-1), 0, "a personal best isn't for everyone")
+  clock = clock + 3
+  esDrift(3, '{"s":2000,"t":6}')                   -- worse than his best: nothing changes
+  local t = read("drift.tsv")
+  assert(t:find("\tBob\t5000\t", 1, true) and t:find("\tBoss\t3000\t", 1, true) and not t:find("9000") and not t:find("99999"), t)
+  chats = {}
+  esOnChat(1, "Alice", "/drift")
+  eq(to(1)[1], "Best drifts here: 1) Bob 5000   2) Boss 3000")
+  write("games.txt", "race=on\ncnr=off\ntraps=off\nbadges=off\nseasons=off\ndrift=off\n")
+  clock = clock + 20
+  tick()
+  eq(sent(2, "esDriftCfg"), "0", "the mod wasn't told to stop")
+end)
 os.time = realTime
 
 _print(string.format("%d passed, %d failed", passed, failed))

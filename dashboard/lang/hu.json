@@ -1854,7 +1854,6 @@
   "Race on {}: P{} of {}": "Verseny a(z) {} pályán: {}. hely / {}",
   "Race wins this season": "Versenygyőzelmek ebben a szezonban",
   "Races": "Versenyek",
-  "Races, cops and robbers, speed traps and badges - all started by players in the chat. Results show up here.": "Versenyek, rendőrök és rablók, traffipaxok és kitűzők - mindet a játékosok indítják a chatben. Az eredmények itt jelennek meg.",
   "Racing": "Versenyez",
   "Robber": "Rabló",
   "Robbers won": "A rablók nyertek",
@@ -1926,7 +1925,22 @@
   "the championship": "a bajnokság",
   "{} pts": "{} pont",
   "{} races": "{} verseny",
-  "{} · ended {}": "{} · véget ért: {}"
+  "{} · ended {}": "{} · véget ért: {}",
+  "Clear every drift score on {}?": "Törlöd az összes drift pontszámot itt: {}?",
+  "Clear scores": "Pontszámok törlése",
+  "Drift": "Drift",
+  "Drift scores on 1 other map": "Drift pontszámok 1 másik pályán",
+  "Drift scores on {} other maps": "Drift pontszámok {} másik pályán",
+  "Drift scoring": "Drift pontozás",
+  "Go sideways in the game - scores of 50 points and more count.": "Csússz keresztbe a játékban - az 50 pont feletti eredmények számítanak.",
+  "No drift scores on this map": "Ezen a pályán nincs drift pontszám",
+  "Players get points for every second they slide sideways - more for a bigger angle and more speed. The score shows on screen; straighten up and it's banked, hit something and it's lost. A new record for the map is announced to everyone, and /drift shows the best. Nothing counts during a race or cops and robbers.": "A játékosok pontot kapnak minden másodpercért, amíg keresztben csúsznak - nagyobb szögért és nagyobb sebességért többet. A pontszám a képernyőn látszik; ha kiegyenesedsz, a pont megmarad, ha nekimész valaminek, elveszik. A pálya új rekordját mindenki látja, a /drift megmutatja a legjobbakat. Verseny és rendőrös-rablós alatt semmi sem számít.",
+  "Points for sliding sideways, shown on screen, with a leaderboard for each map": "Pontok a keresztbe csúszásért, a képernyőn, pályánkénti ranglistával",
+  "Races, cops and robbers, speed traps, drifting and badges - all started by players in the chat. Results show up here.": "Versenyek, rendőrök és rablók, traffipaxok, drift és jelvények - mindet a játékosok indítják a chatben. Az eredmények itt jelennek meg.",
+  "This map": "Ez a pálya",
+  "Turn drift scoring on under Game rules.": "Kapcsold be a drift pontozást a Játékszabályoknál.",
+  "best drift scores on this map": "a legjobb drift pontszámok ezen a pályán",
+  "this map": "ez a pálya"
  },
  "game": {
   "Map voting is turned off on this server.": "A pályaszavazás ki van kapcsolva ezen a szerveren.",
@@ -2274,6 +2288,16 @@
   "{} - no races yet. Every race with 2 or more drivers gives points.": "{} - még nem volt verseny. Minden legalább 2 versenyzős futam pontot ér.",
   "{} after {} race{}: {}": "{1} - {2} verseny után: {4}",
   "You are in place {} with {} points.": "{}. helyen állsz, {} ponttal.",
-  "Championship standings": "Bajnoki állás"
+  "Championship standings": "Bajnoki állás",
+  "{} set a new drift record: {} points!": "{} új drift rekordot állított fel: {} pont!",
+  "New personal best drift: {} points.": "Új egyéni drift csúcs: {} pont.",
+  "Drift scoring is turned off on this server.": "A drift pontozás ki van kapcsolva ezen a szerveren.",
+  "No drift scores on this map yet. Go sideways - the score shows on screen.": "Ezen a pályán még nincs drift pontszám. Csússz keresztbe - a pontszám megjelenik a képernyőn.",
+  "Best drifts here: {}": "A legjobb driftek itt: {}",
+  "Your best: {} points, place {}.": "A legjobbad: {} pont, {}. hely.",
+  "Best drift scores on this map": "A legjobb drift pontszámok ezen a pályán",
+  "DRIFT": "DRIFT",
+  "DRIFT LOST": "DRIFT ELVESZETT",
+  "Angle {}° · {} s": "Szög {}° · {} mp"
  }
 }

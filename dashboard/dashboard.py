@@ -1752,7 +1752,7 @@ def laps_summary(limit=10, only_map=None):
 # ----------------------------------------------------------------------------- games
 # The plugin runs races, cops and robbers, speed traps, badges and seasons in the game. Here: which
 # are on and their rules (games.txt), the results and leaderboards, the live map, and a weekly recap.
-GAME_SWITCHES = ("race", "cnr", "traps", "badges", "seasons", "champ")
+GAME_SWITCHES = ("race", "cnr", "traps", "badges", "seasons", "champ", "drift")
 CHAMP_POINTS = {"f1": (25, 18, 15, 12, 10, 8, 6, 4, 2, 1), "simple": (10, 8, 6, 5, 4, 3, 2, 1)}
 CNR_MINUTES = (3, 5, 10, 15, 20, 30)
 CNR_CATCH = (6, 8, 10, 15, 20)
@@ -1773,7 +1773,7 @@ LIVEMAP_ASK = 20            # the plugin keeps writing positions this long after
 def read_games_cfg():
     d = {"race": True, "race_who": "everyone", "cnr": True, "cnr_who": "everyone", "cnr_minutes": 10, "cnr_catch": 10,
          "cnr_hold": 3, "cnr_busted": "out", "traps": True, "badges": True, "seasons": False,
-         "champ": False, "champ_name": "", "champ_points": "f1", "champ_started": 0}
+         "champ": False, "champ_name": "", "champ_points": "f1", "champ_started": 0, "drift": False}
     for line in shared_read(laps_file("games.txt"), 4096).splitlines():
         k, _, v = line.partition("=")
         v = v.strip()
@@ -1834,6 +1834,33 @@ def end_champ(cfg):
             clean(cfg["champ_name"] or "Championship"), clean(rows[0]["name"]), rows[0]["points"], rounds, cfg["champ_started"], now()))
     shared_write(laps_file("champ.tsv"), "")
     return rows[0]["name"] if rows and rounds else None
+
+
+def read_drift():
+    """Best drift per player per map (drift.tsv, kept by the plugin): [{"raw_map", "name", "score", "car", "t"}]"""
+    out = []
+    for line in shared_read(laps_file("drift.tsv"), 2 * 1024 * 1024).splitlines():
+        p = line.split("\t")
+        if len(p) == 5 and p[1] and p[2].isdigit() and p[4].isdigit():
+            out.append({"raw_map": p[0], "name": p[1][:64], "score": int(p[2]), "car": p[3][:40], "t": int(p[4])})
+    return out
+
+
+def write_drift(rows):
+    clean = lambda x: re.sub(r"[\t\r\n]", " ", str(x))
+    shared_write(laps_file("drift.tsv"), "".join("%s\t%s\t%d\t%s\t%d\n" % (clean(r["raw_map"]), clean(r["name"]), r["score"], clean(r["car"]), r["t"])
+                                                for r in rows))
+
+
+def drift_boards():
+    """One leaderboard per map, the map with the best drift first."""
+    by = {}
+    for r in read_drift():
+        by.setdefault(r["raw_map"], []).append(r)
+    out = [{"id": m, "map": map_name(m) if m else "", "drivers": len(rows),
+            "top": [{k: r[k] for k in ("name", "score", "car", "t")} for r in sorted(rows, key=lambda r: -r["score"])[:10]]}
+           for m, rows in by.items()]
+    return sorted(out, key=lambda b: -b["top"][0]["score"])
 
 
 def read_game_counts(season=False):
@@ -1973,7 +2000,8 @@ def games_summary():
                 wins=board("wins"), busts=board("busts"), escapes=board("escapes"), trap_boards=traps, badge_list=badge_list,
                 badge_leaders=top_owners, recent_badges=recent_badges, season_archive=read_seasons(), season=season_info(),
                 players_with_badges=len(owners), champ_table=read_champ()[0][:50], champ_rounds=read_champ()[1],
-                champ_history=read_champ_history(), champ_scales={k: list(v) for k, v in CHAMP_POINTS.items()})
+                champ_history=read_champ_history(), champ_scales={k: list(v) for k, v in CHAMP_POINTS.items()},
+                drift_boards=drift_boards())
 
 
 def game_counts_for(name):
@@ -4719,6 +4747,89 @@ local function drawGames(dt)
   end
 end
 
+-- Drift scoring, when the server has it on (esDriftCfg): points for every second the car slides
+-- sideways - more for a bigger angle and more speed. Straighten up for 1.5 s and the drift is banked
+-- and sent to the server for the leaderboard; hit something and it's lost.
+local DRIFT_JS = [==[(function (st, pts, ang, sec) {
+  var D = window.__esDrift;
+  if (!D) {
+    D = window.__esDrift = { el: null, hideAt: 0 };
+    var css = document.createElement("style");
+    css.textContent = "#es-drift{position:fixed;bottom:20%;left:50%;transform:translateX(-50%);z-index:2147482000;pointer-events:none;" +
+      "text-align:center;font:700 15px/1.2 'Noto Sans',sans-serif;color:#fff;text-shadow:0 2px 10px rgba(0,0,0,.85)}" +
+      "#es-drift .p{font-size:46px;font-weight:800;font-variant-numeric:tabular-nums}#es-drift .k{color:#ffb070;letter-spacing:2px}" +
+      "#es-drift .s{color:#d0d0d0}#es-drift.done .p{color:#5dff8a}#es-drift.lost .p{color:#ff5a5a;text-decoration:line-through}";
+    document.head.appendChild(css);
+    D.el = document.createElement("div"); D.el.id = "es-drift"; D.el.style.display = "none"; document.body.appendChild(D.el);
+    setInterval(function () { if (D.hideAt && Date.now() > D.hideAt) { D.el.style.display = "none"; D.hideAt = 0; } }, 200);
+  }
+  var t = function (k) {
+    var a = arguments, i = 1, L = window.__esLang || {};
+    return String(L[k] || k).replace(/\{(\d*)\}/g, function (_, d) { var v = d ? a[+d] : a[i++]; return v == null ? "" : String(v); });
+  };
+  if (st === "off") { D.el.style.display = "none"; D.hideAt = 0; return; }
+  D.el.className = st; D.el.textContent = "";
+  var row = function (c, x) { var d = document.createElement("div"); d.className = c; d.textContent = x; D.el.appendChild(d); };
+  row("k", t(st === "lost" ? "DRIFT LOST" : "DRIFT"));
+  row("p", (st === "done" ? "+" : "") + Math.floor(pts));
+  if (st === "on") row("s", t("Angle {}° · {} s", Math.round(ang), Number(sec).toFixed(1)));
+  D.el.style.display = "block";
+  D.hideAt = Date.now() + (st === "on" ? 1500 : 2500);
+})]==]
+local drift = { on = false, active = false, pts = 0, secs = 0, calm = 0, ang = 0, kmh = 0, push = 0, failed = false }
+local function driftPush(st)
+  pcall(function() be:queueJS(DRIFT_JS .. string.format('("%s",%d,%d,%.2f)', st, math.floor(drift.pts), math.floor(drift.ang), drift.secs)) end)
+end
+local function driftEnd(lost)
+  if drift.pts >= 50 then
+    if not lost and TriggerServerEvent then
+      TriggerServerEvent("esDrift", string.format('{"s":%d,"t":%.2f}', math.floor(drift.pts), drift.secs))
+    end
+    driftPush(lost and "lost" or "done")
+  end
+  drift.active, drift.pts, drift.secs, drift.calm = false, 0, 0, 0
+end
+
+-- cfg and myVehicle are set up below; driftStep only runs once the server has said drift is on
+local myVehicle
+local function driftStep(dt)
+  if not dt or dt <= 0 or dt > 0.25 then return end           -- paused, or a hitch: skip the frame
+  local v = myVehicle and myVehicle()
+  if not v or (hud and (hud.k == "race" or hud.k == "cnr")) then
+    if drift.active then driftEnd(true) end
+    return
+  end
+  local vel, dir = vec3(v:getVelocity()), vec3(v:getDirectionVector())
+  local kmh = vel:length() * 3.6
+  local lv, ld = math.sqrt(vel.x ^ 2 + vel.y ^ 2), math.sqrt(dir.x ^ 2 + dir.y ^ 2)
+  local ang = 0
+  if lv > 1 and ld > 0.1 then
+    ang = math.deg(math.acos(math.max(-1, math.min(1, (vel.x * dir.x + vel.y * dir.y) / (lv * ld)))))
+  end
+  local braked = (drift.kmh - kmh) / dt                       -- km/h lost per second
+  drift.kmh = kmh
+  if drift.active and braked > 150 then driftEnd(true) return end  -- that was a wall, not the brakes
+  if kmh >= 25 and ang >= 12 and ang <= 120 then
+    drift.active, drift.calm, drift.ang = true, 0, ang
+    drift.secs = drift.secs + dt
+    drift.pts = drift.pts + dt * (math.min(ang, 90) - 10) * math.min(kmh, 200) / 20
+  elseif drift.active then
+    drift.calm = drift.calm + dt
+    if drift.calm >= 1.5 then driftEnd(false) return end
+  end
+  if drift.active then
+    drift.push = drift.push + dt
+    if drift.push >= 0.1 then drift.push = 0 driftPush("on") end
+  end
+end
+local function onDriftCfg(data)
+  drift.on = data == "1"
+  if not drift.on then
+    if drift.active then driftEnd(true) end
+    driftPush("off")
+  end
+end
+
 local cfg = { tp = false, repair = "free" }
 local FILTER = "easyserver_noreset"
 local RESET_ACTIONS = { "reset_physics", "reset_all_physics", "recover_vehicle", "recover_vehicle_alt",
@@ -4735,7 +4846,7 @@ local function setBlock(on)
   end)
 end
 
-local function myVehicle()
+function myVehicle()
   local v = be:getPlayerVehicle(0)
   if v and MPVehicleGE and MPVehicleGE.isOwn and not MPVehicleGE.isOwn(v:getID()) then return nil end
   return v
@@ -4786,6 +4897,7 @@ local function register()
   AddEventHandler("esHud", onHud)
   AddEventHandler("esTags", onTags)
   AddEventHandler("esLang", onLang)
+  AddEventHandler("esDriftCfg", onDriftCfg)
 end
 
 M.onExtensionLoaded = function() register() end
@@ -4795,7 +4907,11 @@ M.onWorldReadyState = function(state)
     if TriggerServerEvent then TriggerServerEvent("esToolsHello", "") end
   end
 end
-M.onPreRender = function(dt)
+M.onPreRender = function(dt, dtSim)
+  if drift.on and not drift.failed then
+    local ok, err = pcall(driftStep, type(dtSim) == "number" and dtSim or dt)
+    if not ok then drift.failed = true log("E", "easyserverTools", "drift scoring failed: " .. tostring(err)) end
+  end
   if drawFailed or (not hud and #tags == 0) then return end
   local ok, err = pcall(drawGames, dt)
   if not ok then drawFailed = true log("E", "easyserverTools", "drawing the games failed: " .. tostring(err)) end
@@ -4805,8 +4921,8 @@ M.onUiReady = function()
   if langJson ~= "{}" then pushLang() end
   if hud then pushHud() end
 end
-M.onExtensionUnloaded = function() setBlock(false) clearCmds() clearHud() end
-M.onClientEndMission = function() setBlock(false) clearCmds() clearHud() end
+M.onExtensionUnloaded = function() setBlock(false) clearCmds() clearHud() onDriftCfg("0") end
+M.onClientEndMission = function() setBlock(false) clearCmds() clearHud() onDriftCfg("0") end
 
 return M
 """
@@ -4868,6 +4984,7 @@ GAME_HUD_TEXT = (
     "Cops and robbers", "Starts in {}", "COP", "ROBBER", "OUT", "Busted - watch the rest of the game",
     "You start in {}", "Head start: {} - get away!", "{} left", "{} robber free", "{} robbers free",
     "Stopping {} - {}/{} s", "{} is stopping you - drive away!", "GO!", "START", "FINISH", "LAP", "CHECKPOINT {}",
+    "DRIFT", "DRIFT LOST", "Angle {}° · {} s",
 )
 
 
@@ -4903,7 +5020,7 @@ def games_want_mod(inst):
     sd = inst.STATS_DIR
     if re.search(r"^mode=on\s*$", shared_read(os.path.join(sd, "laps.txt"), 4096), re.M):
         return True
-    on = {"race": True, "cnr": True}           # the plugin's defaults when games.txt doesn't say
+    on = {"race": True, "cnr": True, "drift": False}   # the plugin's defaults when games.txt doesn't say
     for line in shared_read(os.path.join(sd, "games.txt"), 4096).splitlines():
         k, _, v = line.partition("=")
         if k in on:
@@ -10910,6 +11027,14 @@ class Handler(BaseHTTPRequestHandler):
                 note += "Championship ended."
             write_games_cfg(cfg)
             return self.send(200, {"ok": True, "note": note})
+        if act in ("clear_drift", "remove_drift"):
+            m, who = str(b.get("map") or ""), str(b.get("name") or "").lower()
+            rows = read_drift()
+            keep = [r for r in rows if r["raw_map"] != m or (act == "remove_drift" and r["name"].lower() != who)]
+            if len(keep) == len(rows):
+                return self.fail(404, "That drift score is already gone")
+            write_drift(keep)
+            return self.send(200, {"ok": True, "note": "Drift scores cleared." if act == "clear_drift" else "Drift score removed."})
         tid = str(b.get("id") or "")
         lines = [l for l in shared_read(laps_file("traps.tsv"), 256 * 1024).splitlines() if TRAP_RE.match(l)]
         mine = [l for l in lines if l.split("\t", 1)[0] == tid]

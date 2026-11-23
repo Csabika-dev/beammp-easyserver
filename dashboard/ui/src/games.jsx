@@ -134,7 +134,7 @@ function LiveMap() {
 function Rules({ d, again }) {
   const sel = id => document.getElementById(id).value;
   const save = async () => {
-    const body = { race: chk("g_race"), cnr: chk("g_cnr"), traps: chk("g_traps"), badges: chk("g_badges"), seasons: chk("g_seasons"),
+    const body = { race: chk("g_race"), cnr: chk("g_cnr"), traps: chk("g_traps"), badges: chk("g_badges"), seasons: chk("g_seasons"), drift: chk("g_drift"),
       race_who: sel("g_rwho"), cnr_who: sel("g_cwho"), cnr_minutes: Number(sel("g_min")), cnr_catch: Number(sel("g_catch")),
       cnr_hold: Number(sel("g_hold")), cnr_busted: sel("g_busted") };
     if (body.seasons && !d.seasons && !confirm("With seasons on, lap times, speed trap records and win counts start from zero on the 1st of every month. The winners are kept and get a badge. Turn seasons on?")) return;
@@ -152,6 +152,7 @@ function Rules({ d, again }) {
       <Toggle id="g_traps" on={d.traps} title="Speed traps">{"Admins put one up with /trap new; everyone sees the fastest with /trap"}</Toggle>
       <Toggle id="g_badges" on={d.badges} title="Badges">{"Earned for laps, wins, busts, distance and more - announced in the chat"}</Toggle>
       <Toggle id="g_seasons" on={d.seasons} title="Monthly seasons">{"Times and win counts start again every month; the winners are kept"}</Toggle>
+      <Toggle id="g_drift" on={d.drift} title="Drift scoring">{"Points for sliding sideways, shown on screen, with a leaderboard for each map"}</Toggle>
     </div>
     <details className="small" style={{ margin: "8px 0 4px" }}><summary>{"Cops and robbers rules"}</summary>
       <div className="grid g2" style={{ gap: 10, marginTop: 10 }}>
@@ -246,6 +247,28 @@ function CopsAndRobbers({ d }) {
   </div>);
 }
 
+function Drift({ d, canEdit, again }) {
+  const [open, setOpen] = useState(null);
+  const act = async body => { try { const r = await L.api("/api/games", { json: body }); L.toast(r.note, 6000); again(); } catch (e) { L.toast(e.message, 6000); } };
+  const here = d.drift_boards.filter(b => !b.map || b.map === d.map), other = d.drift_boards.filter(b => b.map && b.map !== d.map);
+  const Card = ({ b }) => <div className="card tight laptrack">
+    <div className="row" style={{ padding: "12px 14px 6px" }}><div><b>{b.map || "This map"}</b><div className="small muted">{b.drivers === 1 ? "1 driver" : `${b.drivers} drivers`}</div></div>
+      <span className="spacer" />{canEdit && <button className="btn sm ghost" aria-expanded={open === b.id} onClick={() => setOpen(open === b.id ? null : b.id)}>Manage</button>}</div>
+    {open === b.id && <div className="row" style={{ padding: "0 14px 10px", gap: 6 }}>
+      <button className="btn sm" onClick={() => { if (confirm(`Clear every drift score on ${b.map || "this map"}?`)) act({ action: "clear_drift", map: b.id }); }}>Clear scores</button></div>}
+    <table><tbody>{b.top.map((r, i) => <tr key={r.name}><td className="num muted" style={{ width: 34 }}>{i + 1}</td><td><Who name={r.name} /></td>
+      <td className="num mono">{r.score.toLocaleString()}</td><td className="small muted">{r.car}</td>
+      {canEdit && open === b.id && <td className="num"><button className="btn sm ghost" onClick={() => act({ action: "remove_drift", map: b.id, name: r.name })}>Remove</button></td>}</tr>)}</tbody></table></div>;
+  return (<div className="card">
+    <div className="row"><h2 style={{ margin: 0 }}>{"Drift"}</h2><span className="spacer" /><span className={"pill " + (d.drift ? "good" : "")}><span className="dot" />{d.drift ? "On" : "Off"}</span></div>
+    <p className="small muted">{"Players get points for every second they slide sideways - more for a bigger angle and more speed. The score shows on screen; straighten up and it's banked, hit something and it's lost. A new record for the map is announced to everyone, and /drift shows the best. Nothing counts during a race or cops and robbers."}</p>
+    {here.length ? <div className="grid g2" style={{ gap: 12 }}>{here.map(b => <Card key={b.id} b={b} />)}</div>
+      : <Empty title="No drift scores on this map">{d.drift ? "Go sideways in the game - scores of 50 points and more count." : "Turn drift scoring on under Game rules."}</Empty>}
+    {other.length > 0 && <details className="small" style={{ marginTop: 12 }}><summary>{other.length === 1 ? "Drift scores on 1 other map" : `Drift scores on ${other.length} other maps`}</summary>
+      <div className="grid g2" style={{ gap: 12, marginTop: 8 }}>{other.map(b => <Card key={b.id} b={b} />)}</div></details>}
+  </div>);
+}
+
 function Traps({ d, canEdit, again }) {
   const [open, setOpen] = useState(null);
   const act = async body => { try { const r = await L.api("/api/games", { json: body }); L.toast(r.note, 6000); again(); } catch (e) { L.toast(e.message, 6000); } };
@@ -334,7 +357,7 @@ const HOWTO = [
   ["/race Canyon run 3", "start a race on a track, 3 laps"], ["/race join", "take part in the race that's starting"],
   ["/cnr start", "start cops and robbers"], ["/cnr join cop", "join, and ask to be a cop (or robber)"],
   ["/laps", "best lap times"], ["/trap", "speed trap records"], ["/badges", "your badges"], ["/season", "this season and last season's winners"],
-  ["/champ", "championship standings"],
+  ["/champ", "championship standings"], ["/drift", "best drift scores on this map"],
 ];
 
 export function Games({ reload }) {
@@ -343,7 +366,7 @@ export function Games({ reload }) {
   const canEdit = canEditGames();
   return (<>
     <h1>{"Games"}</h1>
-    <p className="muted" style={{ marginTop: -6 }}>{"Races, cops and robbers, speed traps and badges - all started by players in the chat. Results show up here."}</p>
+    <p className="muted" style={{ marginTop: -6 }}>{"Races, cops and robbers, speed traps, drifting and badges - all started by players in the chat. Results show up here."}</p>
     {!d.plugin && <div className="issue warning"><span className="ic">⚠</span><span>{"The EasyServer plugin isn't on this server yet - run the installer again."}</span></div>}
     <LiveMap />
     <details className="card howto"><summary><b>{"Commands for players"}</b></summary>
@@ -355,6 +378,7 @@ export function Games({ reload }) {
     <CopsAndRobbers d={d} />
     <LapTimes key={"l" + reload} canEdit={canEdit} />
     <Traps d={d} canEdit={canEdit} again={retry} />
+    {(d.drift || d.drift_boards.length > 0) && <Drift d={d} canEdit={canEdit} again={retry} />}
     <Badges d={d} />
     <Seasons d={d} />
     {canEdit && <Recap />}

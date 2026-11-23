@@ -110,6 +110,24 @@ class Games(unittest.TestCase):
         self.assertIn("champ=off\n", self.read("games.txt"))
         self.assertEqual(len(self.owner.call("/api/games")[1]["champ_history"]), 1)     # no races, so nobody to keep
 
+    def test_drift_boards(self):
+        t = int(time.time())
+        self.write("drift.tsv", "/levels/gridmap_v2/info.json\tBob\t5000\tpickup\t%d\n/levels/gridmap_v2/info.json\tBoss\t7000\tsunburst2\t%d\n"
+                                "/levels/utah/info.json\tAlice\t900\tetk800\t%d\nbroken\n" % (t, t, t))
+        d = self.owner.call("/api/games")[1]
+        self.assertFalse(d["drift"])
+        grid = next(b for b in d["drift_boards"] if b["map"] == "gridmap_v2")
+        self.assertEqual([(r["name"], r["score"]) for r in grid["top"]], [("Boss", 7000), ("Bob", 5000)])
+        st, r, _ = self.owner.call("/api/games", {"action": "remove_drift", "map": grid["id"], "name": "boss"})
+        self.assertEqual(st, 200, r)
+        self.assertNotIn("Boss", self.read("drift.tsv"))
+        self.assertEqual(self.owner.call("/api/games", {"action": "remove_drift", "map": grid["id"], "name": "boss"})[0], 404)
+        self.owner.call("/api/games", {"action": "clear_drift", "map": grid["id"]})
+        self.assertEqual(self.read("drift.tsv").count("\n"), 1)
+        self.addCleanup(lambda: os.path.exists(self.stats("games.txt")) and os.remove(self.stats("games.txt")))
+        self.owner.call("/api/games", {"drift": True})
+        self.assertIn("drift=on\n", self.read("games.txt"))
+
     def test_speed_traps(self):
         t = int(time.time())
         self.write("traps.tsv", "aa1\tStraight\t/levels/gridmap_v2/info.json\t1000.00,0.00,0.00\nbb2\tHill\t\t5,5,0\n")
