@@ -11,12 +11,13 @@ import { Config } from "./config.jsx";
 import { Settings } from "./settings.jsx";
 import { cacheGet, cachedApi, cacheClear, prefetch, PageWait } from "./ui.jsx";
 import { Checklist, QuickSearch } from "./extras.jsx";
+import { Games } from "./games.jsx";
 
 // What each page asks for first: fetched quietly in the background after logging in, so pages open without waiting
 const PREFETCH = ["/api/overview", "/api/config", "/api/allowlist", "/api/mapvote", "/api/restarts", "/api/vehicles", "/api/tools", "/api/preset", "/api/timed",
   "/api/config/history", "/api/templates", "/api/rotation", "/api/messages", "/api/events", "/api/moderation", "/api/extras", "/api/joinalerts",
   "/api/mods", "/api/mods/updates", "/api/plugins", "/api/players", "/api/bans", "/api/updates", "/api/notifications", "/api/settings", "/api/supporter",
-  "/api/phoneapp", "/api/ntfy", "/api/discordbot", "/api/integrations", "/api/statuspage", "/api/users", "/api/devices", "/api/guard", "/api/backups", "/api/resources", "/api/laps", "/api/checklist", "/api/resources?range=day"];
+  "/api/phoneapp", "/api/ntfy", "/api/discordbot", "/api/integrations", "/api/statuspage", "/api/users", "/api/devices", "/api/guard", "/api/backups", "/api/resources", "/api/laps", "/api/checklist", "/api/resources?range=day", "/api/games"];
 
 const S = () => L.state();
 const Icon = ({ n }) => <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" dangerouslySetInnerHTML={{ __html: L.I[n] }} />;
@@ -219,7 +220,7 @@ function Shell({ tab, reload, unread, onLang, logout }) {
   // dashboard's own setup. Someone who may only see some pages gets only those; empty groups go.
   const mine = L.myTabs(), has = new Map(mine);
   const group = keys => keys.filter(k => has.has(k)).map(k => [k, has.get(k)]);
-  const GROUPS = [[null, group(["overview"])], ["Server", group(["config", "mods", "players"])], ["Keep an eye on", group(["network", "logs", "notifications"])]];
+  const GROUPS = [[null, group(["overview"])], ["Server", group(["config", "mods", "players", "games"])], ["Keep an eye on", group(["network", "logs", "notifications"])]];
   const corner = group(["servers", "updates", "settings"]);
   const navs = [...GROUPS.flatMap(g => g[1]), ...corner].map(navBtn);   // the phone bar: one row in the same order
   // A page slides in once when you open it. After that, parts that finish loading or refresh
@@ -362,7 +363,7 @@ function Overview({ reload }) {
 }
 
 // Pages drawn by React; the rest are still in legacy.js
-const PAGES = { overview: Overview, servers: Servers, updates: Updates, logs: Logs, notifications: Notifications, network: Health, players: Players, mods: Mods, config: Config, settings: Settings };
+const PAGES = { overview: Overview, servers: Servers, updates: Updates, logs: Logs, notifications: Notifications, network: Health, players: Players, games: Games, mods: Mods, config: Config, settings: Settings };
 
 /* ------------------------------------------------------------------ the app */
 export function App() {
