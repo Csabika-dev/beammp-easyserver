@@ -1749,9 +1749,339 @@ def laps_summary(limit=10, only_map=None):
     return out
 
 
+# ----------------------------------------------------------------------------- games
+# The plugin runs races, cops and robbers, speed traps, badges and seasons in the game. Here: which
+# are on and their rules (games.txt), the results and leaderboards, the live map, and a weekly recap.
+GAME_SWITCHES = ("race", "cnr", "traps", "badges", "seasons")
+CNR_MINUTES = (3, 5, 10, 15, 20, 30)
+CNR_CATCH = (6, 8, 10, 15, 20)
+CNR_HOLD = (2, 3, 5)
+GAME_COUNTS = ("laps", "races", "wins", "busts", "escapes", "cnr")
+BADGES = [
+    ("first_lap", "First lap", "Set a lap time"), ("laps_25", "Lap regular", "Drive 25 timed laps"),
+    ("record", "Record breaker", "Set a track record"), ("race_win", "Race winner", "Win a race against other players"),
+    ("race_5", "Champion", "Win 5 races"), ("sheriff", "Sheriff", "Bust 5 robbers"),
+    ("getaway", "Getaway driver", "Stay free as a robber until the time runs out"), ("speed_demon", "Speed demon", "Set a speed trap record"),
+    ("flat_out", "Flat out", "Drive 200 km/h"), ("km_100", "100 km club", "Drive 100 km"), ("km_1000", "Road tripper", "Drive 1000 km"),
+    ("night_owl", "Night owl", "Drive between 2 and 5 in the morning"), ("season_champ", "Season champion", "Win a season leaderboard"),
+]
+TRAP_RE = re.compile(r"^([\w\-]+)\t([^\t]+)\t([^\t]*)\t(-?[\d.]+),(-?[\d.]+),(-?[\d.]+)$")
+LIVEMAP_ASK = 20            # the plugin keeps writing positions this long after the last look
+
+
+def read_games_cfg():
+    d = {"race": True, "race_who": "everyone", "cnr": True, "cnr_who": "everyone", "cnr_minutes": 10, "cnr_catch": 10,
+         "cnr_hold": 3, "cnr_busted": "out", "traps": True, "badges": True, "seasons": False}
+    for line in shared_read(laps_file("games.txt"), 4096).splitlines():
+        k, _, v = line.partition("=")
+        v = v.strip()
+        if k in GAME_SWITCHES:
+            d[k] = v == "on"
+        elif k in ("race_who", "cnr_who"):
+            d[k] = "admins" if v == "admins" else "everyone"
+        elif k == "cnr_busted":
+            d[k] = "cop" if v == "cop" else "out"
+        elif k in ("cnr_minutes", "cnr_catch", "cnr_hold") and v.isdigit():
+            d[k] = int(v)
+    return d
+
+
+def write_games_cfg(d):
+    lines = ["%s=%s" % (k, "on" if d[k] else "off") for k in GAME_SWITCHES]
+    lines += ["race_who=%s" % d["race_who"], "cnr_who=%s" % d["cnr_who"], "cnr_busted=%s" % d["cnr_busted"],
+              "cnr_minutes=%d" % d["cnr_minutes"], "cnr_catch=%d" % d["cnr_catch"], "cnr_hold=%d" % d["cnr_hold"]]
+    shared_write(laps_file("games.txt"), "# Managed by the dashboard (Games page)\n" + "\n".join(lines) + "\n")
+
+
+def read_game_counts(season=False):
+    out = []
+    for line in shared_read(laps_file("seasonstats.tsv" if season else "gamestats.tsv"), 2 * 1024 * 1024).splitlines():
+        p = line.split("\t")
+        if len(p) == 7 and p[0] and all(x.isdigit() for x in p[1:]):
+            out.append(dict(zip(("name",) + GAME_COUNTS, [p[0][:64]] + [int(x) for x in p[1:]])))
+    return out
+
+
+def read_badges():
+    """{lower-case name: {"name", "badges": {badge id: unix time}}}"""
+    out = {}
+    for line in shared_read(laps_file("badges.tsv"), 2 * 1024 * 1024).splitlines():
+        p = line.split("\t")
+        if len(p) == 3 and p[2].isdigit() and re.fullmatch(r"\w+", p[1]):
+            me = out.setdefault(p[0].lower(), {"name": p[0][:64], "badges": {}})
+            me["badges"].setdefault(p[1], int(p[2]))
+    return out
+
+
+def read_traps():
+    out = []
+    for line in shared_read(laps_file("traps.tsv"), 256 * 1024).splitlines():
+        m = TRAP_RE.match(line)
+        if m:
+            tid, name, mp, x, y, z = m.groups()
+            out.append({"id": tid, "name": name[:40], "map": map_name(mp) if mp else "", "raw_map": mp, "x": float(x), "y": float(y)})
+    return out
+
+
+def read_trap_speeds():
+    out = {}
+    for line in shared_read(laps_file("trapspeeds.tsv"), 2 * 1024 * 1024).splitlines():
+        p = line.split("\t")
+        if len(p) == 5 and p[4].isdigit():
+            try:
+                out.setdefault(p[0], []).append({"name": p[1][:64], "kmh": float(p[2]), "car": p[3][:40], "t": int(p[4])})
+            except ValueError:
+                continue
+    for rows in out.values():
+        rows.sort(key=lambda r: -r["kmh"])
+    return out
+
+
+def write_trap_speeds(speeds):
+    clean = lambda x: re.sub(r"[\t\r\n]", " ", str(x))
+    shared_write(laps_file("trapspeeds.tsv"), "".join("%s\t%s\t%.1f\t%s\t%d\n" % (tid, clean(r["name"]), r["kmh"], clean(r["car"]), r["t"])
+                                                      for tid, rows in speeds.items() for r in rows))
+
+
+SEASON_CATS = {"lap": "Fastest lap", "trap": "Speed trap", "wins": "Most race wins", "busts": "Most busts", "escapes": "Most escapes"}
+
+
+def read_seasons():
+    """Past seasons, newest first: [{"season", "winners": [{"cat", "what", "name", "value", "shown"}]}]"""
+    by = {}
+    for line in shared_read(laps_file("seasons.tsv"), 512 * 1024).splitlines():
+        p = line.split("\t")
+        if len(p) != 5 or not re.fullmatch(r"\d{4}-\d\d", p[0]) or p[1] not in SEASON_CATS:
+            continue
+        try:
+            v = float(p[4])
+        except ValueError:
+            continue
+        shown = fmt_lap(int(v)) if p[1] == "lap" else ("%d km/h" % v) if p[1] == "trap" else str(int(v))
+        by.setdefault(p[0], []).append({"cat": p[1], "label": SEASON_CATS[p[1]], "what": p[2][:40], "name": p[3][:64], "shown": shown})
+    return [{"season": s, "winners": by[s]} for s in sorted(by, reverse=True)]
+
+
+def season_info():
+    cur = shared_read(laps_file("season.txt"), 64).strip()[:7]
+    lt = time.localtime()
+    nxt = time.mktime((lt.tm_year + (lt.tm_mon == 12), lt.tm_mon % 12 + 1, 1, 0, 0, 0, 0, 0, -1))
+    return {"season": cur if re.fullmatch(r"\d{4}-\d\d", cur) else time.strftime("%Y-%m"), "days_left": max(0, int((nxt - now() + 86399) // 86400))}
+
+
+def track_shapes(only_map):
+    """Tracks on this map with their points, for the live map."""
+    out = []
+    for line in read_track_lines():
+        tid, name, mp, kind, pts = TRACK_RE.match(line).groups()
+        if mp and only_map and map_name(mp) != only_map:
+            continue
+        xy = []
+        for p in pts.split(";"):
+            try:
+                x, y, _z = (float(v) for v in p.split(","))
+                xy.append([round(x, 1), round(y, 1)])
+            except ValueError:
+                continue
+        if len(xy) >= 2:
+            out.append({"name": name[:40], "kind": "sprint" if kind == "sprint" else "loop", "pts": xy})
+    return out
+
+
+def games_summary():
+    cfg = read_games_cfg()
+    t_now = now()
+    evs = [e for e in read_events(t_now - 120 * 86400) if e.get("ev") in ("race", "cnr", "badge", "trap", "season")]
+    races, cnr, recent_badges = [], [], []
+    for e in reversed(evs):
+        ev = e["ev"]
+        if ev == "race" and len(races) < 15 and isinstance(e.get("results"), list):
+            res = []
+            for r in e["results"][:12]:
+                if isinstance(r, dict) and isinstance(r.get("ms"), int):
+                    item = {"name": str(r.get("name"))[:64], "time": fmt_lap(r["ms"])}
+                    if res:
+                        item["gap"] = "+%.3f" % ((r["ms"] - res[0]["ms"]) / 1000.0)
+                    item["ms"] = r["ms"]
+                    res.append(item)
+            races.append({"t": e["t"], "track": str(e.get("track"))[:40], "laps": int(e.get("laps") or 1), "results": res,
+                          "dnf": [str(x)[:64] for x in (e.get("dnf") or [])[:12]], "by": str(e.get("by") or "")[:64]})
+        elif ev == "cnr" and len(cnr) < 10:
+            names = lambda k: [str(x)[:64] for x in (e.get(k) or [])[:30] if isinstance(x, str)]
+            busts = [{"cop": str(b.get("cop"))[:64], "robber": str(b.get("robber"))[:64]} for b in (e.get("busts") or [])[:40] if isinstance(b, dict)]
+            cnr.append({"t": e["t"], "winner": "cops" if e.get("winner") == "cops" else "robbers", "seconds": int(e.get("seconds") or 0),
+                        "cops": names("cops"), "robbers": names("robbers"), "escaped": names("escaped"), "busts": busts})
+        elif ev == "badge" and len(recent_badges) < 12:
+            recent_badges.append({"t": e["t"], "name": str(e.get("name"))[:64], "badge": str(e.get("badge"))[:20]})
+    season = read_game_counts(season=True)
+    board = lambda k: [{"name": r["name"], "n": r[k]} for r in sorted(season, key=lambda r: -r[k]) if r[k] > 0][:10]
+    owners = read_badges()
+    badge_list = [{"id": b[0], "title": b[1], "how": b[2], "owners": sum(1 for o in owners.values() if b[0] in o["badges"])} for b in BADGES]
+    top_owners = sorted(({"name": o["name"], "n": len(o["badges"])} for o in owners.values()), key=lambda r: -r["n"])[:10]
+    speeds = read_trap_speeds()
+    g = toml_parse(APP.read_config_text())[0].get("General", {})
+    here = map_name(g.get("Map")) or ""
+    traps = [dict(t, drivers=len(speeds.get(t["id"], [])), top=[dict(r, shown="%d km/h" % r["kmh"]) for r in speeds.get(t["id"], [])[:10]])
+             for t in read_traps()]
+    for t in traps:
+        t.pop("raw_map", None)
+    return dict(cfg, minutes=list(CNR_MINUTES), catches=list(CNR_CATCH), holds=list(CNR_HOLD), map=here,
+                plugin=os.path.exists(os.path.join(I().STATS_DIR, "main.lua")), races=races, cnr_games=cnr,
+                wins=board("wins"), busts=board("busts"), escapes=board("escapes"), trap_boards=traps, badge_list=badge_list,
+                badge_leaders=top_owners, recent_badges=recent_badges, season_archive=read_seasons(), season=season_info(),
+                players_with_badges=len(owners))
+
+
+def game_counts_for(name):
+    lname = name.lower()
+    out = {"all": None, "season": None}
+    for k, season in (("all", False), ("season", True)):
+        out[k] = next((r for r in read_game_counts(season) if r["name"].lower() == lname), None)
+    b = read_badges().get(lname)
+    titles = dict((x[0], x[1]) for x in BADGES)
+    out["badges"] = [{"id": k, "title": titles.get(k, k), "t": v} for k, v in sorted((b or {}).get("badges", {}).items(), key=lambda kv: kv[1])
+                     if k in titles]
+    return out
+
+
+def live_map():
+    """Ask the plugin for positions (for the next LIVEMAP_ASK seconds) and return the newest it wrote."""
+    inst = I()
+    t = now()
+    if t - getattr(inst, "livemap_asked", 0) >= 5:
+        inst.livemap_asked = t
+        shared_write(laps_file("livemap.txt"), "until=%d\n" % (t + LIVEMAP_ASK))
+    g = toml_parse(APP.read_config_text())[0].get("General", {})
+    here = map_name(g.get("Map")) or ""
+    d = read_json(laps_file("livemap.json"), None)
+    fresh = isinstance(d, dict) and isinstance(d.get("t"), int) and t - d["t"] <= 5
+    cars = []
+    for c in (d.get("cars") if fresh and isinstance(d.get("cars"), list) else [])[:200]:
+        if not isinstance(c, dict):
+            continue
+        try:
+            cars.append({"n": str(c.get("n"))[:64], "x": float(c["x"]), "y": float(c["y"]), "v": int(c.get("v") or 0),
+                         "car": str(c.get("car") or "")[:40], "role": c.get("role") if c.get("role") in ("cop", "robber", "out", "race") else ""})
+        except (KeyError, TypeError, ValueError):
+            continue
+    traps = [{"name": x["name"], "x": x["x"], "y": x["y"]} for x in read_traps() if not x["map"] or x["map"] == here]
+    game = {}
+    if fresh:
+        if isinstance(d.get("race"), dict):
+            game["race"] = {"track": str(d["race"].get("track"))[:40], "laps": int(d["race"].get("laps") or 1), "state": str(d["race"].get("state"))[:12]}
+        if isinstance(d.get("cnr"), dict):
+            game["cnr"] = {"state": str(d["cnr"].get("state"))[:8], "left": int(d["cnr"].get("left") or 0)}
+    return {"t": t, "fresh": fresh, "map": here, "cars": cars, "tracks": track_shapes(here), "traps": traps, "game": game,
+            "running": inst.server.status()["state"] == "running",
+            "plugin": os.path.exists(os.path.join(inst.STATS_DIR, "main.lua"))}
+
+
+# ----------------------------------------------------------------------------- weekly recap
+RECAP_DAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+
+
+def recap_cfg(inst=None):
+    v = (inst or I()).meta.get("recap")
+    d = {"on": False, "day": 6, "hour": 19}
+    if isinstance(v, dict):
+        d["on"] = bool(v.get("on"))
+        if isinstance(v.get("day"), int) and 0 <= v["day"] <= 6:
+            d["day"] = v["day"]
+        if isinstance(v.get("hour"), int) and 0 <= v["hour"] <= 23:
+            d["hour"] = v["hour"]
+    return d
+
+
+def fmt_hours(sec):
+    h = sec / 3600.0
+    return ("%d h" % round(h)) if h >= 10 else ("%.1f h" % h) if h >= 1 else ("%d min" % max(1, round(sec / 60.0)))
+
+
+def weekly_recap(t_end=None):
+    """The week in one Discord post: who played, records, races, chases, badges. None if nobody played."""
+    t_end = t_end or now()
+    t0 = t_end - 7 * 86400
+    evs = read_events(t_end - 365 * 86400)
+    sessions, _ = event_sessions(evs, t_end)
+    week = [(n, max(a, t0), min(b, t_end)) for n, a, b in sessions if b >= t0 and a <= t_end]
+    if not week:
+        return None
+    esc = discord_escape
+    first = {}
+    for n, a, b in sessions:
+        first[n.lower()] = min(first.get(n.lower(), a), a)
+    per = {}
+    days = {}
+    for n, a, b in week:
+        per[n] = per.get(n, 0) + (b - a)
+        days.setdefault(time.strftime("%A", time.localtime(a)), set()).add(n.lower())
+    new = sum(1 for n in set(x.lower() for x, _, _ in week) if first.get(n, 0) >= t0)
+    total = sum(per.values())
+    lines = ["👥 %d player%s%s · %s played%s" % (
+        len(per), "" if len(per) == 1 else "s", (", %d new" % new) if new else "", fmt_hours(total),
+        (" · busiest day: %s" % max(days, key=lambda d: len(days[d]))) if days else "")]
+    top = sorted(per.items(), key=lambda kv: -kv[1])[:3]
+    lines.append("🏆 Most time on the server: " + ", ".join("%s %s" % (esc(n), fmt_hours(s)) for n, s in top))
+    wk = [e for e in evs if e["t"] >= t0]
+    recs = {}
+    for e in wk:
+        if e.get("ev") == "lap" and e.get("record") is True and isinstance(e.get("ms"), int):
+            recs[str(e.get("track"))[:40]] = (str(e.get("name"))[:64], e["ms"])
+    if recs:
+        lines.append("🏁 New lap records: " + "; ".join("%s – %s %s" % (esc(t), esc(n), fmt_lap(ms)) for t, (n, ms) in list(recs.items())[:6]))
+    races = [e for e in wk if e.get("ev") == "race" and isinstance(e.get("results"), list) and e["results"]]
+    if races:
+        wins = {}
+        for e in races:
+            if len(e["results"]) + len(e.get("dnf") or []) >= 2:
+                w = str(e["results"][0].get("name"))[:64]
+                wins[w] = wins.get(w, 0) + 1
+        lines.append("🏎️ %d race%s%s" % (len(races), "" if len(races) == 1 else "s",
+                                        (" – wins: " + ", ".join("%s %d" % (esc(n), k) for n, k in sorted(wins.items(), key=lambda kv: -kv[1])[:4])) if wins else ""))
+    chases = [e for e in wk if e.get("ev") == "cnr"]
+    if chases:
+        busts, gone = {}, {}
+        for e in chases:
+            for b in e.get("busts") or []:
+                if isinstance(b, dict):
+                    c = str(b.get("cop"))[:64]
+                    busts[c] = busts.get(c, 0) + 1
+            for n in e.get("escaped") or []:
+                gone[str(n)[:64]] = gone.get(str(n)[:64], 0) + 1
+        bits = []
+        if busts:
+            n, k = max(busts.items(), key=lambda kv: kv[1])
+            bits.append("most busts: %s (%d)" % (esc(n), k))
+        if gone:
+            bits.append("got away: " + ", ".join(esc(n) for n in list(gone)[:4]))
+        lines.append("🚓 Cops and robbers: %d game%s%s" % (len(chases), "" if len(chases) == 1 else "s", (" – " + ", ".join(bits)) if bits else ""))
+    traps = {}
+    for e in wk:
+        if e.get("ev") == "trap" and e.get("record") is True:
+            traps[str(e.get("trap"))[:40]] = (str(e.get("name"))[:64], e.get("kmh") or 0)
+    if traps:
+        lines.append("📸 Speed trap records: " + "; ".join("%s – %s %d km/h" % (esc(t), esc(n), v) for t, (n, v) in list(traps.items())[:5]))
+    nb = sum(1 for e in wk if e.get("ev") == "badge")
+    if nb:
+        lines.append("🏅 %d badge%s earned" % (nb, "" if nb == 1 else "s"))
+    title = "The week on %s (%s – %s)" % (server_name() or I().name, time.strftime("%d %b", time.localtime(t0 + 1)), time.strftime("%d %b", time.localtime(t_end)))
+    return title, "\n".join(lines)
+
+
+def recap_channels():
+    out = []
+    if webhook_parts()[0]:
+        out.append("Discord")
+    if APP.settings.get("telegram_enabled") and APP.secrets.has("TELEGRAM_TOKEN") and APP.settings.get("telegram_chat"):
+        out.append("Telegram")
+    if APP.settings.get("webhook_enabled") and APP.secrets.has("CUSTOM_WEBHOOK"):
+        out.append("webhook")
+    return out
+
 # ----------------------------------------------------------------------------- player profiles
 NOTES_MAX = 50
-PROFILE_EVENTS = ("kick", "ban", "unban", "mute", "report", "votekick", "vehblock", "vehspam", "refused", "denied", "lap")
+PROFILE_EVENTS = ("kick", "ban", "unban", "mute", "report", "votekick", "vehblock", "vehspam", "refused", "denied", "lap",
+                  "racepos", "bust", "badge", "trap")
 
 
 def player_profile(name):
@@ -1774,15 +2104,20 @@ def player_profile(name):
                 reports_by += 1
             if target.lower() != lname:
                 continue
+        elif ev == "bust":
+            if lname not in (who.lower(), target.lower()):
+                continue
         elif who.lower() != lname:
             continue
         item = {"t": e["t"], "ev": ev}
-        for k in ("by", "reason", "minutes", "until", "jbm", "track", "ms", "car", "record", "why"):
+        if ev == "bust":
+            item.update({"cop": who[:64], "robber": target[:64], "me": "cop" if who.lower() == lname else "robber"})
+        for k in ("by", "reason", "minutes", "until", "jbm", "track", "ms", "car", "record", "why", "pos", "of", "title", "trap", "kmh"):
             if k in e:
                 item[k] = e[k]
         if ev == "report":
             item["by"] = who
-        if ev == "lap" and isinstance(e.get("ms"), int):
+        if ev in ("lap", "racepos") and isinstance(e.get("ms"), int):
             item["time"] = fmt_lap(e["ms"])
         hist.append(item)
     hist.reverse()
@@ -1811,7 +2146,7 @@ def player_profile(name):
         "sessions": len(mine), "seconds": int(sum(b - a for a, b in mine)),
         "seconds_30d": int(sum(b - max(a, d30) for a, b in mine if b >= d30)),
         "ban": ban, "history": hist[:100], "reports_by": reports_by, "laps": laps, "records": rec,
-        "notes": player_notes().get(lname, []),
+        "notes": player_notes().get(lname, []), "games": game_counts_for(real),
     }
 
 
@@ -6675,7 +7010,7 @@ VIEWER_WRITE = {"/api/logout", "/api/notifications/read", "/api/logs/explain", "
                 "/api/me/discord/link", "/api/me/discord/unlink"}
 OWNER_WRITE = {"/api/roles", "/api/teaminvite", "/api/discordlogin", "/api/plugins/fetch", "/api/plugins/upload", "/api/plugins/install", "/api/plugins/toggle", "/api/plugins/remove", "/api/plugins/adopt", "/api/users", "/api/password", "/api/2fa/begin", "/api/2fa/confirm", "/api/2fa/disable", "/api/remote",
                "/api/authkey", "/api/import", "/api/backups/restore", "/api/power/helper", "/api/servers/delete", "/api/statuspage", "/api/supporter"}
-ADMIN_GET = {"/api/export", "/api/backups/download", "/api/phoneapp", "/api/ntfy", "/api/power/offline",
+ADMIN_GET = {"/api/recap", "/api/export", "/api/backups/download", "/api/phoneapp", "/api/ntfy", "/api/power/offline",
              "/api/health/report", "/api/health/saved", "/api/users", "/api/activity", "/api/modpack", "/api/integrations", "/api/statuspage"}
 
 
@@ -6768,6 +7103,7 @@ _PG_EXACT = {
     "/api/players/act": "players", "/api/players/clear": "players", "/api/bans/add": "players", "/api/bans/remove": "players",
     "/api/allowlist": "players", "/api/chat": "players", "/api/reports": "players", "/api/reports/close": "players",
     "/api/players/profile": "players", "/api/players/note": "players", "/api/laps": "config",
+    "/api/games": "config", "/api/recap": "config",
     "/api/server/action": "server", "/api/maintenance": "server", "/api/restarts": "server",
     "/api/map": "map", "/api/rotation": "map", "/api/mapvote": "map", "/api/events": "map", "/api/events/stop": "map",
     "/api/modbrowser/install": "mods", "/api/modpack/code": "mods", "/api/modpack": "mods",
@@ -7258,6 +7594,7 @@ ACTION_LABELS = {
     "/api/timed": "Changed timed announcements", "/api/tools": "Changed the in-game tools (/tp, /repair)", "/api/vehicles": "Changed the vehicle rules", "/api/vehicles/preset": "Vehicle rules preset: {preset}", "/api/vehicles/block": "Blocked/allowed vehicle {jbm}", "/api/plugins/install": "Installed a server plugin", "/api/plugins/toggle": "Turned a server plugin on/off: {id}", "/api/plugins/remove": "Removed the server plugin {id}", "/api/modpack/code": "Installed mods from a mod pack code", "/api/mods/light": "Light mode for map mods: {on}", "/api/maintenance": "Maintenance mode {state}", "/api/preset": "Applied the preset {preset}", "/api/servers/clone": "Cloned a server",
     "/api/config/restore": "Restored an older config", "/api/statuspage": "Changed the status page", "/api/joinalerts": "Changed join alerts",
     "/api/laps": "Lap times: {action}", "/api/players/note": "Wrote a note about {name}",
+    "/api/games": "Games: {action}", "/api/recap": "Changed the weekly recap",
     "/api/updates/install": "Installed a BeamMP update", "/api/duckdns": "Changed DuckDNS", "/api/integrations": "Changed notification integrations",
 }
 SAFE_FIELDS = ("action", "name", "player", "map", "state", "preset", "minutes", "reason", "enabled", "role", "on")
@@ -8397,6 +8734,20 @@ class App:
         for k in [k for k in warned if int(k.rsplit("@", 1)[1]) < t - 3600]:
             warned.pop(k, None)
 
+    def _recap_tick(self, inst):
+        """The weekly recap (Games page), once a week at the hour the owner picked."""
+        cfg = recap_cfg(inst)
+        if not cfg["on"]:
+            return
+        lt = time.localtime()
+        week = time.strftime("%G-W%V", lt)
+        if lt.tm_wday != cfg["day"] or lt.tm_hour < cfg["hour"] or inst.meta.get("recap_week") == week:
+            return
+        set_server_meta(inst.id, recap_week=week)        # once a week, even if posting fails
+        r = weekly_recap()
+        if r and broadcast(r[0], r[1]):
+            set_server_meta(inst.id, recap_last=now())
+
     def _bridge_flag(self, inst, S):
         want = "on" if (self.settings.get("discord_bridge") and
                         (self.settings.get("discord_bridge_server") or "main") == inst.id and webhook_parts()[0]) else "off"
@@ -8426,6 +8777,10 @@ class App:
             self._event_tick(inst, S)
         except Exception as e:
             sys.stderr.write("events %s: %s\n" % (inst.id, short_err(e)))
+        try:
+            self._recap_tick(inst)
+        except Exception as e:
+            sys.stderr.write("weekly recap %s: %s\n" % (inst.id, short_err(e)))
         try:
             self._rotation_tick(inst, S)
         except Exception as e:
@@ -10148,6 +10503,95 @@ class Handler(BaseHTTPRequestHandler):
             return self.fail(400, "Unknown action")
         _STATUS_CACHE["t"] = 0
         self.send(200, {"ok": True, "note": note})
+
+    # ---------- games: races, cops and robbers, speed traps, badges, seasons, live map, weekly recap
+    def get_games(self, q):
+        self.send(200, games_summary())
+
+    def post_games(self, q):
+        b = self.body_json()
+        act = b.get("action")
+        if not act:
+            cfg = read_games_cfg()
+            for k in GAME_SWITCHES:
+                if k in b:
+                    cfg[k] = bool(b[k])
+            for k in ("race_who", "cnr_who"):
+                if k in b:
+                    if b[k] not in ("everyone", "admins"):
+                        return self.fail(400, "Pick who can start games from the list")
+                    cfg[k] = b[k]
+            if "cnr_busted" in b:
+                if b["cnr_busted"] not in ("out", "cop"):
+                    return self.fail(400, "Pick what happens to a busted robber from the list")
+                cfg["cnr_busted"] = b["cnr_busted"]
+            for k, allowed in (("cnr_minutes", CNR_MINUTES), ("cnr_catch", CNR_CATCH), ("cnr_hold", CNR_HOLD)):
+                if k in b:
+                    try:
+                        v = int(b[k])
+                    except (TypeError, ValueError):
+                        v = -1
+                    if v not in allowed:
+                        return self.fail(400, "Pick a value from the list")
+                    cfg[k] = v
+            write_games_cfg(cfg)
+            return self.send(200, {"ok": True, "note": "Saved - the game picks it up within 10 seconds."})
+        tid = str(b.get("id") or "")
+        lines = [l for l in shared_read(laps_file("traps.tsv"), 256 * 1024).splitlines() if TRAP_RE.match(l)]
+        mine = [l for l in lines if l.split("\t", 1)[0] == tid]
+        if not mine:
+            return self.fail(404, "That speed trap doesn't exist any more")
+        speeds = read_trap_speeds()
+        if act == "delete_trap":
+            shared_write(laps_file("traps.tsv"), "".join(l + "\n" for l in lines if l is not mine[0]))
+            speeds.pop(tid, None)
+            note = "Speed trap and its speeds deleted."
+        elif act == "clear_trap":
+            speeds.pop(tid, None)
+            note = "Speeds cleared."
+        elif act == "remove_speed":
+            who = str(b.get("name") or "").lower()
+            speeds[tid] = [r for r in speeds.get(tid, []) if r["name"].lower() != who]
+            note = "Speed removed."
+        else:
+            return self.fail(400, "Unknown action")
+        write_trap_speeds(speeds)
+        self.send(200, {"ok": True, "note": note})
+
+    def get_livemap(self, q):
+        self.send(200, live_map())
+
+    def get_recap(self, q):
+        cfg = recap_cfg()
+        r = weekly_recap()
+        self.send(200, dict(cfg, days=list(RECAP_DAYS), channels=recap_channels(), last=I().meta.get("recap_last"),
+                            preview={"title": r[0], "text": r[1]} if r else None))
+
+    def post_recap(self, q):
+        b = self.body_json()
+        if b.get("send"):
+            r = weekly_recap()
+            if not r:
+                return self.fail(400, "Nobody played this week, so there's nothing to post")
+            where = broadcast(r[0], r[1])
+            if not where:
+                return self.fail(400, "There's no channel to post to - set up the Discord webhook, Telegram or a custom webhook in Settings first")
+            set_server_meta(I().id, recap_last=now())
+            return self.send(200, {"ok": True, "note": "Posted to " + " and ".join(where) + "."})
+        cfg = recap_cfg()
+        if "on" in b:
+            cfg["on"] = bool(b["on"])
+        for k, hi in (("day", 6), ("hour", 23)):
+            if k in b:
+                try:
+                    v = int(b[k])
+                except (TypeError, ValueError):
+                    v = -1
+                if not 0 <= v <= hi:
+                    return self.fail(400, "Pick a day and an hour from the lists")
+                cfg[k] = v
+        set_server_meta(I().id, recap=cfg)
+        self.send(200, {"ok": True, "note": ("Saved - it's posted every %s at %02d:00." % (RECAP_DAYS[cfg["day"]], cfg["hour"])) if cfg["on"] else "Saved - the weekly recap is off."})
 
     # ---------- player profiles
     def get_players_profile(self, q):
