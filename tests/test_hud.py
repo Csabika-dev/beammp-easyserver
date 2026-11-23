@@ -34,7 +34,7 @@ class HelperMod(unittest.TestCase):
     def test_lua_parses(self):
         for name, text in self.files().items():
             r = subprocess.run([LUA, "-e", "assert(load(io.read('a'), '%s'))" % name], input=text,
-                               capture_output=True, text=True, timeout=30)
+                               capture_output=True, text=True, encoding="utf-8", timeout=30)
             self.assertEqual(r.returncode, 0, name + ": " + r.stderr)
 
     @unittest.skipUnless(NODE, "no Node.js installed")
@@ -42,7 +42,7 @@ class HelperMod(unittest.TestCase):
         parts = re.findall(r"\[==\[(.*?)\]==\]", D.TOOLS_CLIENT_LUA, re.S)
         self.assertGreaterEqual(len(parts), 2)
         code = "const p = JSON.parse(require('fs').readFileSync(0, 'utf8')); for (const s of p) new Function('return ' + s);"
-        r = subprocess.run([NODE, "-e", code], input=json.dumps(parts), capture_output=True, text=True, timeout=30)
+        r = subprocess.run([NODE, "-e", code], input=json.dumps(parts), capture_output=True, text=True, encoding="utf-8", timeout=30)
         self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_games_want_the_mod(self):

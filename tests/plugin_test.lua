@@ -2,6 +2,7 @@
 -- Run: lua5.3 tests/plugin_test.lua <path to main.lua> <empty temp folder>
 local MAIN, DIR = arg[1], arg[2]
 assert(MAIN and DIR, "usage: lua plugin_test.lua main.lua tmpdir")
+DIR = DIR:gsub("\\", "/")          -- Windows paths: the folder is pasted into Lua source below
 if DIR:sub(-1) ~= "/" then DIR = DIR .. "/" end
 
 local function write(name, text) local f = assert(io.open(DIR .. name, "w")) f:write(text) f:close() end

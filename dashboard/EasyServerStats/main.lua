@@ -2332,6 +2332,7 @@ function G.raceTick(now)
   end
   -- racing
   local t, rad = r.track, lap.radius
+  local fins = {}                        -- finished in this look: places go by time, not by who was checked first
   for pid, e in pairs(r.ent) do
     if not e.done then
       local c = G.carOf(pid, e.vid)
@@ -2344,10 +2345,7 @@ function G.raceTick(now)
           e.lap = e.lap + 1
           if e.lap >= r.laps then
             e.done, e.ms = true, math.floor((at - e.start) * 1000 + 0.5)
-            r.finished = (r.finished or 0) + 1
-            e.pos = r.finished
-            r.firstT = r.firstT or now
-            say(-1, string.format("%s finishes P%d in %s", e.name, r.finished, fmtLap(e.ms)))
+            fins[#fins + 1] = e
           else
             e.idx = 2
             say(pid, string.format("Lap %d/%d - P%d", e.lap + 1, r.laps, G.racePos(r, pid)))
@@ -2357,6 +2355,13 @@ function G.raceTick(now)
         end
       end
     end
+  end
+  table.sort(fins, function(a, b) return a.ms < b.ms end)
+  for _, e in ipairs(fins) do
+    r.finished = (r.finished or 0) + 1
+    e.pos = r.finished
+    r.firstT = r.firstT or now
+    say(-1, string.format("%s finishes P%d in %s", e.name, r.finished, fmtLap(e.ms)))
   end
   local left = 0
   for _, e in pairs(r.ent) do if not e.done then left = left + 1 end end
