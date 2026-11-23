@@ -52,6 +52,8 @@ class UpdateMods(unittest.TestCase):
                                     notifier=types.SimpleNamespace(add=lambda *a: notes.append(a)))
         p1 = mock.patch.object(D, "online_names", lambda: list(players))
         p2 = mock.patch.dict(D.INSTANCES, {"main": inst}, clear=True)
+        before = getattr(D._TL, "inst", None)       # mod_auto_update switches the current server: put it back
+        self.addCleanup(lambda: setattr(D._TL, "inst", before) if before is not None else D._TL.__dict__.pop("inst", None))
         p1.start(), p2.start()
         self.addCleanup(p1.stop)
         self.addCleanup(p2.stop)
