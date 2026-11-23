@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import * as L from "./legacy.js";
 import { useApi } from "./pages.jsx";
 import { Empty, PageWait } from "./ui.jsx";
-import { LapTimes, ProfileHost, Who } from "./extras.jsx";
+import { ProfileHost, Who } from "./extras.jsx";
 
 const S = () => L.state();
 const pad2 = n => String(n).padStart(2, "0");
@@ -14,11 +14,6 @@ export function canModerate() {
   return (r ? r.role : S().SESSION.role) !== "viewer";
 }
 
-function canEditLaps() {
-  const r = L.myRole();
-  if (r && r.perms) return r.perms.includes("config");
-  return ["owner", "admin"].includes((r ? r.role : S().SESSION.role) || "owner");
-}
 
 /* ---------------- bar chart (players per day, busiest hours) */
 function BarChart({ values, labels, tip, title, h = 190, labelsMax = 8 }) {
@@ -257,7 +252,6 @@ export function Players({ reload }) {
           : <tr><td colSpan={3} className="muted">No sessions yet</td></tr>}</tbody></table></div>
     </div>
     <Records d={d} />
-    <LapTimes key={"l" + reload} canEdit={canEditLaps()} />
     <MapStats key={"s" + reload} />
     <ProfileHost onBan={onBan} />
   </>);
