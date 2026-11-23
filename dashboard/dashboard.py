@@ -4483,10 +4483,14 @@ local HUD_JS = [==[(function (s) {
     H.clock = function (sec) { sec = Math.max(0, Math.ceil(sec)); return Math.floor(sec / 60) + ":" + pad(sec % 60, 2); };
     H.m = function () { return H.dist >= 0 ? " · " + Math.round(H.dist) + " m" : ""; };
     H.row = function (cls, text) { var d = document.createElement("div"); d.className = cls; d.textContent = text; H.box.appendChild(d); return d; };
+    H.t = function (k) {                // the server's language (event esLang); {} and {1} like the chat
+      var a = arguments, i = 1, L = window.__esLang || {};
+      return String(L[k] || k).replace(/\{(\d*)\}/g, function (_, d) { var v = d ? a[+d] : a[i++]; return v == null ? "" : String(v); });
+    };
     H.cp = function (s) {
       if (!s.cp) return "";
-      if (s.cpn === 0) return "Start line" + H.m();
-      return (s.fin ? (s.last ? "Finish line" : "Lap line") : "Checkpoint " + s.cpn + "/" + (s.cps - 1)) + H.m();
+      if (s.cpn === 0) return H.t("Start line") + H.m();
+      return (s.fin ? H.t(s.last ? "Finish line" : "Lap line") : H.t("Checkpoint {}/{}", s.cpn, s.cps - 1)) + H.m();
     };
     H.draw = function () {
       var s = H.s, now = Date.now(), dt = (now - H.at) / 1000;
@@ -4495,41 +4499,41 @@ local HUD_JS = [==[(function (s) {
       var left = Math.max(0, (s.left || 0) - dt), go = (s.go || 0) - dt;
       if (s.k === "race") {
         if (s.st === "join") {
-          H.row("l", "Race on " + s.track + " · " + s.laps + (s.laps === 1 ? " lap" : " laps"));
-          H.row("s", "Starts in " + H.clock(left) + " - drive to the start line" + H.m());
+          H.row("l", H.t(s.laps === 1 ? "Race on {} · {} lap" : "Race on {} · {} laps", s.track, s.laps));
+          H.row("s", H.t("Starts in {} - drive to the start line", H.clock(left)) + H.m());
         } else if (s.st === "countdown") {
-          H.row("l", "Race on " + s.track);
-          H.row("s", "Get ready" + H.m());
-          H.big.style.display = "block"; H.big.textContent = go > 0 ? String(Math.ceil(go)) : "GO!";
+          H.row("l", H.t("Race on {}", s.track));
+          H.row("s", H.t("Get ready") + H.m());
+          H.big.style.display = "block"; H.big.textContent = go > 0 ? String(Math.ceil(go)) : H.t("GO!");
         } else if (s.st === "done") {
           H.row("t", H.time(s.ms));
-          H.row("l", "Finished P" + s.pos + (s.of > 1 ? "/" + s.of : "") + " · " + s.track);
+          H.row("l", H.t("Finished P{}", s.pos) + (s.of > 1 ? "/" + s.of : "") + " · " + s.track);
         } else {
           H.row("t", H.time((s.ms || 0) + dt * 1000));
-          H.row("l", "Lap " + s.lap + "/" + s.laps + (s.of > 1 ? " · P" + s.pos + "/" + s.of : ""));
+          H.row("l", H.t("Lap {}/{}", s.lap, s.laps) + (s.of > 1 ? " · P" + s.pos + "/" + s.of : ""));
           H.row("s", H.cp(s));
-          if (dt < 1.2 && s.lap === 1 && (s.ms || 0) < 1500) { H.big.style.display = "block"; H.big.textContent = "GO!"; }
+          if (dt < 1.2 && s.lap === 1 && (s.ms || 0) < 1500) { H.big.style.display = "block"; H.big.textContent = H.t("GO!"); }
         }
       } else if (s.k === "lap") {
         H.row("t", H.time((s.ms || 0) + dt * 1000));
-        H.row("l", s.track + (s.best ? " · Best " + H.time(s.best) : ""));
+        H.row("l", s.track + (s.best ? " · " + H.t("Best {}", H.time(s.best)) : ""));
         H.row("s", H.cp(s));
       } else if (s.k === "cnr") {
         if (s.st === "join") {
-          H.row("l", "Cops and robbers");
-          H.row("s", "Starts in " + H.clock(left));
+          H.row("l", H.t("Cops and robbers"));
+          H.row("s", H.t("Starts in {}", H.clock(left)));
         } else {
           H.box.className = s.role;
-          H.row("t", s.role === "cop" ? "COP" : s.role === "robber" ? "ROBBER" : "OUT");
-          if (s.role === "out") { H.row("s", "Busted - watch the rest of the game"); }
+          H.row("t", H.t(s.role === "cop" ? "COP" : s.role === "robber" ? "ROBBER" : "OUT"));
+          if (s.role === "out") { H.row("s", H.t("Busted - watch the rest of the game")); }
           else if (s.st === "head") {
-            H.row("l", s.role === "cop" ? "You start in " + H.clock(go) : "Head start: " + H.clock(go) + " - get away!");
+            H.row("l", H.t(s.role === "cop" ? "You start in {}" : "Head start: {} - get away!", H.clock(go)));
           } else {
-            H.row("l", H.clock(left) + " left · " + s.free + (s.free === 1 ? " robber free" : " robbers free"));
+            H.row("l", H.t("{} left", H.clock(left)) + " · " + H.t(s.free === 1 ? "{} robber free" : "{} robbers free", s.free));
             if (s.who) {
               var held = Math.min(s.need || 3, (s.held || 0) + dt);
-              H.row("s", s.role === "cop" ? "Stopping " + s.who + " - " + held.toFixed(1) + "/" + (s.need || 3) + " s"
-                                          : s.who + " is stopping you - drive away!");
+              H.row("s", s.role === "cop" ? H.t("Stopping {} - {}/{} s", s.who, held.toFixed(1), s.need || 3)
+                                          : H.t("{} is stopping you - drive away!", s.who));
               var bar = H.row("bar", ""), fill = document.createElement("i");
               fill.style.width = Math.round(100 * held / (s.need || 3)) + "%";
               fill.style.background = s.role === "cop" ? "#5aa2ff" : "#ff5a5a";
@@ -4598,6 +4602,32 @@ local function clearHud()
   if hud then hud, hudJson = nil, "null" pushHud() end
 end
 
+-- The on-screen words in the server's language: { English = translation }, {} and {1} like the chat.
+local lang, langJson = {}, "{}"
+local function pushLang()
+  pcall(function() be:queueJS("window.__esLang=" .. langJson .. ";window.__esHud&&window.__esHud.draw()") end)
+end
+local function onLang(data)
+  local ok, d = pcall(jsonDecode, data or "{}")
+  lang = {}
+  if ok and type(d) == "table" then
+    local n = 0
+    for k, v in pairs(d) do
+      if type(k) == "string" and type(v) == "string" and #k <= 120 and #v <= 200 and n < 200 then lang[k] = v n = n + 1 end
+    end
+  end
+  langJson = jsonEncode(lang)
+  if langJson == "[]" or langJson == "" then langJson = "{}" end
+  pushLang()
+end
+local function L(key, ...)
+  local args, i = { ... }, 0
+  return (tostring(lang[key] or key):gsub("{(%d*)}", function(d)
+    if d == "" then i = i + 1 d = i else d = tonumber(d) end
+    return tostring(args[d] or "")
+  end))
+end
+
 local COLORS = { next = { 1, 0.78, 0.1 }, fin = { 0.25, 1, 0.45 }, start = { 0.2, 0.75, 1 } }
 local function drawMark(p, rgb, rad, strong, label)
   local base = vec3(p[1], p[2], p[3] - 0.6)
@@ -4616,7 +4646,7 @@ local function drawGames(dt)
   local myPos = mine and vec3(mine:getPosition())
   if hud and hud.cp then
     local rgb = hud.cpn == 0 and COLORS.start or (hud.fin and COLORS.fin or COLORS.next)
-    local label = hud.cpn == 0 and "START" or (hud.fin and (hud.last and "FINISH" or "LAP") or ("CHECKPOINT " .. tostring(hud.cpn)))
+    local label = hud.cpn == 0 and L("START") or (hud.fin and L(hud.last and "FINISH" or "LAP") or L("CHECKPOINT {}", hud.cpn))
     drawMark(hud.cp, rgb, hud.rad or 15, true, label)
     if hud.cp2 then drawMark(hud.cp2, COLORS.next, hud.rad or 15, false, nil) end
     distT = distT + (dt or 0)
@@ -4637,7 +4667,7 @@ local function drawGames(dt)
         local pos = vec3(obj:getPosition()) + vec3(0, 0, 2.4)
         if not cam or (pos - cam):length() < 400 then
           local cop = t.r == "cop"
-          debugDrawer:drawTextAdvanced(pos, String(cop and "COP" or "ROBBER"), ColorF(1, 1, 1, 1), true, false,
+          debugDrawer:drawTextAdvanced(pos, String(L(cop and "COP" or "ROBBER")), ColorF(1, 1, 1, 1), true, false,
             cop and ColorI(30, 90, 230, 230) or ColorI(215, 35, 35, 230))
         end
       end
@@ -4711,6 +4741,7 @@ local function register()
   AddEventHandler("esCmds", onCmds)
   AddEventHandler("esHud", onHud)
   AddEventHandler("esTags", onTags)
+  AddEventHandler("esLang", onLang)
 end
 
 M.onExtensionLoaded = function() register() end
@@ -4727,6 +4758,7 @@ M.onPreRender = function(dt)
 end
 M.onUiReady = function()
   if cmdList ~= "[]" then pushCmds() end
+  if langJson ~= "{}" then pushLang() end
   if hud then pushHud() end
 end
 M.onExtensionUnloaded = function() setBlock(false) clearCmds() clearHud() end
@@ -4780,6 +4812,46 @@ def write_tools(d, inst=None):
 
 def tools_wanted(d):
     return bool(d["tp"] or d["repair"] != "free" or d.get("suggest", True))
+
+
+# ----------------------------------------------------------------------------- game chat language
+# What the plugin says in the chat (and the helper mod shows on screen), in the language the owner picks
+# (Config -> Welcome message & announcements). The translations are the "game" part of lang/xx.json;
+# the plugin reads chatlang.tsv: English <TAB> translation [<TAB> hud]. tools/game_i18n.py lists them.
+GAME_HUD_TEXT = (
+    "Race on {} · {} lap", "Race on {} · {} laps", "Starts in {} - drive to the start line", "Race on {}", "Get ready",
+    "Finished P{}", "Lap {}/{}", "Start line", "Finish line", "Lap line", "Checkpoint {}/{}", "Best {}",
+    "Cops and robbers", "Starts in {}", "COP", "ROBBER", "OUT", "Busted - watch the rest of the game",
+    "You start in {}", "Head start: {} - get away!", "{} left", "{} robber free", "{} robbers free",
+    "Stopping {} - {}/{} s", "{} is stopping you - drive away!", "GO!", "START", "FINISH", "LAP", "CHECKPOINT {}",
+)
+
+
+def chat_lang_text(code):
+    """chatlang.tsv for a language code ("" = English: empty)."""
+    if not code or not re.fullmatch(r"[a-z]{2}(?:-[a-z]{2})?", code):
+        return ""
+    try:
+        with open(os.path.join(LANG_DIR, code + ".json"), encoding="utf-8") as f:
+            game = json.load(f).get("game") or {}
+    except (OSError, ValueError):
+        return ""
+    clean = lambda x: re.sub(r"[\t\r\n]+", " ", str(x)).strip()
+    hud = set(GAME_HUD_TEXT)
+    lines = []
+    for en, tr in game.items():
+        if isinstance(tr, str) and clean(tr) and clean(en):
+            lines.append("%s\t%s%s" % (clean(en), clean(tr), "\thud" if en in hud else ""))
+    return "".join(l + "\n" for l in lines)
+
+
+def ensure_chat_lang(inst=None):
+    """Keep the plugin's chatlang.tsv in step with the chosen language (and with updated translations)."""
+    inst = inst or I()
+    path = os.path.join(inst.STATS_DIR, "chatlang.tsv")
+    want = chat_lang_text(inst.meta.get("chat_lang") or "")
+    if shared_read(path, 1024 * 1024) != want:
+        shared_write(path, want)
 
 
 def games_want_mod(inst):
@@ -8979,6 +9051,7 @@ class App:
             try:
                 if not map_timeline(inst):
                     record_map(inst, current_map())
+                ensure_chat_lang(inst)           # picks up translations that came with a dashboard update
                 if not online_names():           # never pull mods away under players' feet
                     moved = light_sync(inst)
                     how = ensure_tools_mod(inst)
@@ -11201,10 +11274,19 @@ class Handler(BaseHTTPRequestHandler):
     # ---------- welcome message + announcements
     def get_messages(self, q):
         self.send(200, dict(read_messages(), every_choices=list(MSG_EVERY),
-                            plugin=os.path.exists(os.path.join(I().STATS_DIR, "main.lua"))))
+                            plugin=os.path.exists(os.path.join(I().STATS_DIR, "main.lua")),
+                            chat_lang=I().meta.get("chat_lang") or "", languages=lang_index()))
 
     def post_messages(self, q):
         b = self.body_json()
+        if "chat_lang" in b:
+            code = str(b["chat_lang"] or "")
+            if code and code not in {x["code"] for x in lang_index()}:
+                return self.fail(400, "Pick a language from the list")
+            set_server_meta(I().id, chat_lang=code or None)
+            ensure_chat_lang()
+            if len(b) == 1:
+                return self.send(200, {"ok": True, "note": "Saved - the game chat switches within 30 seconds."})
         d = read_messages()
         for k in ("welcome", "announce"):
             if k in b:

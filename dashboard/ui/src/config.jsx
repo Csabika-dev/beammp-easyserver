@@ -266,6 +266,12 @@ function Messages() {
   const save = () => post("/api/messages", { welcome: chk("ms_welcome"), welcome_text: val("ms_wtext"), announce: chk("ms_announce"), every: Number(val("ms_every")), messages: val("ms_list") }, undefined, again);
   return (<div className="card" style={{ marginTop: 16 }} key={v}>
     <Head title="Welcome message & announcements" on={ms.welcome || ms.announce} pill={ms.welcome && ms.announce ? "Both on" : ms.welcome ? "Welcome on" : ms.announce ? "Announcements on" : "Off"} />
+    <label className="f" style={{ marginTop: 0 }}><span>{"Language of the game chat"}</span>
+      <select id="ms_lang" style={{ maxWidth: 260 }} defaultValue={ms.chat_lang} onChange={e => post("/api/messages", { chat_lang: e.target.value }, undefined, again)}>
+        <option value="">English</option>
+        {ms.languages.map(l => <option key={l.code} value={l.code}>{l.name}</option>)}
+      </select></label>
+    <p className="small muted" style={{ marginTop: 4 }}>{"What the server says in the chat - races, votes, warnings, the /help list - and the text on players' screens. Your own messages below are sent exactly as you write them."}</p>
     <p className="small muted">Use <Mono>{"{name}"}</Mono> for the player's name and <Mono>{"{players}"}</Mono> for how many are online. Works right away, no restart needed.{!ms.plugin && <> <b>Start the server once</b> so the stats plugin is installed.</>}</p>
     <Toggle id="ms_welcome" on={ms.welcome} title="Greet players when they join">Only the new player sees it. One line per chat message (up to 5)</Toggle>
     <textarea id="ms_wtext" rows={2} spellCheck={false} style={{ minHeight: 60 }} defaultValue={ms.welcome_text.join("\n")} />

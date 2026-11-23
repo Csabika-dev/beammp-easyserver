@@ -624,6 +624,46 @@ test("games can be switched off, and a player can't fake the game timer", functi
   for _ = 1, 50 do esGameTick(1, "") end
   eq(read("livemap.json"), "", "a player's fake timer did work")
 end)
+test("the game chat in the server's language", function()
+  write("games.txt", "race=on\ncnr=off\ntraps=off\nbadges=off\nseasons=off\n")
+  write("chatlang.tsv", "Races are turned off on this server.\tVersenyek kikapcsolva.\n" ..
+    "Commands on this server:\tParancsok:\n" ..
+    "Ask to teleport to a player\tTeleport kérése\n" ..
+    "player\tjátékos\n" ..
+    "Unknown command /{} - did you mean /{}? Type /help to see all commands.\tTalán /{2}? Nem ismerem: /{1}\n" ..
+    "Start a race: /race <track> [laps]. {}\tVerseny: /race <pálya>. {}\n" ..
+    "Tracks here: {}.\tPályák: {}.\n" ..
+    "GO!\tRAJT!\thud\n" ..
+    "{} left\tmég {}\thud\n")
+  clock = clock + 40
+  esOnChat(2, "Bob", "/race")
+  local t = table.concat(to(2), " | ")
+  assert(t:find("Verseny: /race <pálya>. Pályák: Ring", 1, true), "a message with a translated piece: " .. t)
+  assert(t:find("Also: /race join", 1, true), "a message with no translation stays English: " .. t)
+  chats = {}
+  esOnChat(2, "Bob", "/hepl")
+  eq(to(2)[1], "Talán /help? Nem ismerem: /hepl", "the translation can change the order")
+  chats = {}
+  esOnChat(2, "Bob", "/help")
+  t = table.concat(to(2), " | ")
+  assert(t:find("Parancsok:", 1, true) and t:find("/tp játékos  -  Teleport kérése", 1, true), "/help: " .. t)
+  tick()
+  local lang = sent(2, "esLang")
+  assert(lang and lang:find('"GO!":"RAJT!"', 1, true) and lang:find('"{} left":"még {}"', 1, true), "on-screen text: " .. tostring(lang))
+  assert(not lang:find("Parancsok", 1, true), "chat text sent to the mod")
+  write("games.txt", "race=off\ncnr=off\ntraps=off\nbadges=off\nseasons=off\n")
+  clock = clock + 20
+  chats = {}
+  esOnChat(2, "Bob", "/race")
+  eq(to(2)[1], "Versenyek kikapcsolva.")
+  os.remove(DIR .. "chatlang.tsv")
+  clock = clock + 31
+  chats = {}
+  esOnChat(2, "Bob", "/race")
+  eq(to(2)[1], "Races are turned off on this server.", "back to English")
+  tick()
+  eq(sent(2, "esLang"), "{}", "the mod wasn't told to go back to English")
+end)
 os.time = realTime
 
 _print(string.format("%d passed, %d failed", passed, failed))

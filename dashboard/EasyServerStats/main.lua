@@ -181,7 +181,66 @@ local function readVote()
   return on and #maps > 0, maps
 end
 
-local function say(id, text) MP.SendChatMessage(id, text) end
+-- Game chat in the server's language (dashboard: Config -> Welcome message & announcements).
+--   chatlang.tsv  written by the dashboard: English <TAB> translation [<TAB> hud], one per line; missing = English
+-- {} in the English text stands for a name, a number or another message; the translation uses {} in the
+-- same order or {1}, {2}... Lines marked hud are also sent to the helper mod for the on-screen text.
+-- The owner's own text (welcome, announcements) is sent as written.
+local i18n = { at = -100, sig = "", exact = nil, pats = nil, hud = "{}" }
+
+function i18n.read(t)
+  if t - i18n.at < 30 then return end
+  i18n.at = t
+  local f = io.open(DIR .. "chatlang.tsv", "r")
+  local text = f and f:read("a") or ""
+  if f then f:close() end
+  if text == i18n.sig then return end
+  i18n.sig = text
+  local exact, pats, hud = {}, {}, {}
+  for line in text:gmatch("[^\n]+") do
+    local en, tr, mark = line:match("^([^\t]+)\t([^\t\r]+)\t?([^\t\r]*)")
+    if en then
+      if mark == "hud" then hud[#hud + 1] = '"' .. jsonEscape(en) .. '":"' .. jsonEscape(tr) .. '"' end
+      if mark == "hud" and en:find("{}", 1, true) then
+        -- on-screen only ("{} left"): too loose to match chat messages with
+      elseif en:find("{}", 1, true) then
+        local pat = (en:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%0"):gsub("{}", "(.-)"))
+        pats[#pats + 1] = { pat = "^" .. pat .. "$", tr = tr, len = #(en:gsub("{}", "")) }
+      else
+        exact[en] = tr
+      end
+    end
+  end
+  table.sort(pats, function(a, b) return a.len > b.len end)   -- the most specific message first
+  if next(exact) == nil and #pats == 0 then exact, pats = nil, nil end
+  i18n.exact, i18n.pats, i18n.hud = exact, pats, "{" .. table.concat(hud, ",") .. "}"
+end
+
+function i18n.tr(text, depth)
+  if not i18n.pats or text == "" or text:match("^[%d%s%.,:%+%-/%%]*$") then return text end
+  local pre, core, post = text:match("^(%s*)(.-)(%s*)$")
+  local hit = i18n.exact[core]
+  if hit then return pre .. hit .. post end
+  for _, p in ipairs(i18n.pats) do
+    local caps = { core:match(p.pat) }
+    if caps[1] ~= nil then
+      local n = 0
+      local out = p.tr:gsub("{(%d*)}", function(d)
+        if d == "" then n = n + 1 d = n else d = tonumber(d) end
+        local c = caps[d] or ""
+        if depth < 2 then c = i18n.tr(c, depth + 1) end      -- "for the next one", "north-east"...
+        return c
+      end)
+      return pre .. out .. post
+    end
+  end
+  return text
+end
+
+local function say(id, text)
+  i18n.read(os.time())
+  MP.SendChatMessage(id, i18n.tr(tostring(text), 0))
+end
 
 function esOnChat(id, name, message)
   if esModChat and esModChat(id, tostring(name or ""), tostring(message or "")) then return 1 end
@@ -891,7 +950,7 @@ local function runActions(t)
       actionSeq = seq
       if not first and ts > t - 120 then
         if act == "say" then
-          say(-1, text)
+          MP.SendChatMessage(-1, text)          -- the owner's own words: never translated
         elseif act == "kick" or act == "ban" then
           local pid = findPlayer(who)
           if pid and tostring(MP.GetPlayerName(pid)):lower() == who:lower() then
@@ -1019,7 +1078,7 @@ function esMsgTick(now)
     if now >= at then
       welcomeQ[pid] = nil
       if MP.GetPlayerName(pid) and MP.GetPlayerName(pid) ~= "" then
-        for _, line in ipairs(msgs.welcome_text) do say(pid, fill(line, pid)) end
+        for _, line in ipairs(msgs.welcome_text) do MP.SendChatMessage(pid, fill(line, pid)) end
       end
     end
   end
@@ -1029,7 +1088,7 @@ function esMsgTick(now)
       annNext = now + msgs.every * 60
       if anyoneOnline() then
         annIdx = annIdx % #msgs.list + 1
-        say(-1, fill(msgs.list[annIdx]))
+        MP.SendChatMessage(-1, fill(msgs.list[annIdx]))
       end
     end
   else
@@ -1252,8 +1311,10 @@ end
 
 function sug.json(list)
   local parts = {}
+  i18n.read(os.time())
   for _, x in ipairs(list) do
-    parts[#parts + 1] = string.format('{"c":"%s","a":"%s","d":"%s"}', jsonEscape(x.c), jsonEscape(x.a), jsonEscape(x.d))
+    parts[#parts + 1] = string.format('{"c":"%s","a":"%s","d":"%s"}', jsonEscape(x.c), jsonEscape(i18n.tr(x.a, 1)),
+      jsonEscape(i18n.tr(x.d, 1)))
   end
   return "[" .. table.concat(parts, ",") .. "]"
 end
@@ -1305,7 +1366,9 @@ function sug.help(id)
   else
     say(id, "Commands on this server:")
     for _, x in ipairs(list) do
-      if x.c ~= "help" then say(id, "/" .. x.c .. (x.a ~= "" and (" " .. x.a) or "") .. "  -  " .. x.d) end
+      if x.c ~= "help" then
+        say(id, "/" .. x.c .. (x.a ~= "" and (" " .. i18n.tr(x.a, 1)) or "") .. "  -  " .. i18n.tr(x.d, 1))
+      end
     end
   end
   if cfg.clear then say(id, "All cars are removed " .. (cfg.every == 24 and ("every day at " .. cfg.at) or ("every " .. cfg.every .. " hour" .. (cfg.every == 1 and "" or "s"))) .. ".") end
@@ -2917,7 +2980,7 @@ end
 -- esHud, "" clears it); everyone gets the cop and robber cars (event esTags, "[]" clears).
 -- Sent when something changes, and every 2 seconds to keep the timers in step; the mod runs the
 -- clocks itself in between. Players without the mod just ignore the events.
-G.hudSent, G.tagsSent = {}, {}
+G.hudSent, G.tagsSent, G.langSent = {}, {}, {}
 G.VOLATILE = { ms = true, left = true, held = true, go = true }
 
 function G.json(v)
@@ -3036,6 +3099,7 @@ end
 function G.hudTick(now)
   if not MP.TriggerClientEvent then return end
   local tags = G.tagsJson()
+  i18n.read(now)
   for pid, _ in pairs(players()) do
     local p = G.hudRace(pid, now) or G.hudCnr(pid, now) or G.hudLap(pid)
     local data, key = "", ""
@@ -3054,6 +3118,10 @@ function G.hudTick(now)
       G.tagsSent[pid] = tags
       MP.TriggerClientEvent(pid, "esTags", tags)
     end
+    if (G.langSent[pid] or "{}") ~= i18n.hud then      -- the on-screen text in the server's language
+      G.langSent[pid] = i18n.hud
+      MP.TriggerClientEvent(pid, "esLang", i18n.hud)
+    end
   end
 end
 
@@ -3061,7 +3129,7 @@ end
 G.helloBefore = esToolsHello
 function esToolsHello(id)
   G.helloBefore(id)
-  if type(id) == "number" then G.hudSent[id], G.tagsSent[id] = nil, nil end
+  if type(id) == "number" then G.hudSent[id], G.tagsSent[id], G.langSent[id] = nil, nil, nil end
 end
 
 -- ------------------------------------------------------------------ the timer
@@ -3133,7 +3201,7 @@ function esMsgLeft(id)
   end
   G.cnrDrop(id, "left the server")
   G.lastRace[id] = nil
-  G.hudSent[id], G.tagsSent[id] = nil, nil
+  G.hudSent[id], G.tagsSent[id], G.langSent[id] = nil, nil, nil
   if G.doneHud then G.doneHud[id] = nil end
 end
 

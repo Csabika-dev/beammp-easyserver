@@ -22,4 +22,17 @@ folder in its language menu (login screen and the bottom of the sidebar), so **a
 - Anything missing from the file, or left empty, stays in English - nothing breaks.
 - Product names (BeamMP, Discord, AuthKey, Wake-on-LAN …) and commands like `/kick` stay as they are.
 
+## In the game
+
+`game` (after `strings`) is what the server says in the game chat - races, votes, warnings, `/help` - and the
+text on players' screens, for servers whose owner picks this language (Config → Welcome message & announcements).
+It works the same way, with two extras:
+
+- A `{}` can be left out by numbering the others, like the English plural "s": `"Cleanup done - {} car{} removed."`
+  → `"Aufgeräumt - {1} Auto(s) entfernt."`.
+- Short pieces that are put into longer messages ("for the next one", "north-east", badge names) are their own lines.
+
+`python3 tools/game_i18n.py` shows how much of each language is done, `python3 tools/game_i18n.py missing de` lists
+what's missing - it reads the messages straight from the game plugin, so it is always up to date.
+
 To fix a word: open the file on GitHub, click the pencil, change the right side, and propose the change.
