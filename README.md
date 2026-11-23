@@ -170,7 +170,7 @@ beammp uninstall   remove everything (also undoes laptop mode)
 | Linux Mint 21 / 22, Pop!_OS, Zorin, elementary | ✅ official build |
 | Debian 12 / 13, LMDE 6+ | ✅ official build |
 | Fedora, Arch, openSUSE | ⚠️ best effort |
-| 64-bit x86 and ARM64 (e.g. Raspberry Pi 4/5 with 64-bit OS) | ✅ |
+| 64-bit x86 and ARM64 (e.g. Raspberry Pi 4/5 with the **64-bit** Raspberry Pi OS - 4 GB or more is best) | ✅ |
 
 #### Advanced (no questions asked)
 

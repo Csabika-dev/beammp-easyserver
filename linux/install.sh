@@ -146,11 +146,28 @@ detect_system() {
   . /etc/os-release
   OS_PRETTY="${PRETTY_NAME:-Linux}"
 
+  local pi=""
+  grep -qi "raspberry pi" /proc/device-tree/model 2>/dev/null && pi=1
   case "$(uname -m)" in
     x86_64|amd64) ARCH="x86_64";;
     aarch64|arm64) ARCH="arm64";;
-    *) die "Your CPU type ($(uname -m)) has no official BeamMP server build. Needs 64-bit x86 or ARM64.";;
+    *) if [[ -n "$pi" ]]; then
+         die "This Raspberry Pi runs a 32-bit system. The BeamMP server needs the 64-bit Raspberry Pi OS (a Pi 3, 4 or 5) - put it on the card with Raspberry Pi Imager, then run this again."
+       fi
+       die "Your CPU type ($(uname -m)) has no official BeamMP server build. Needs 64-bit x86 or ARM64.";;
   esac
+  # 32-bit Raspberry Pi OS on a Pi 4/5 runs a 64-bit kernel, so uname says aarch64 while the programs are 32-bit
+  if [[ "$ARCH" == "arm64" ]] && { [[ "$(getconf LONG_BIT 2>/dev/null)" == "32" ]] ||
+       [[ "$(dpkg --print-architecture 2>/dev/null)" == armhf ]]; }; then
+    die "This system is 32-bit (only its kernel is 64-bit). The BeamMP server needs a 64-bit system${pi:+ - on a Raspberry Pi, the 64-bit Raspberry Pi OS from Raspberry Pi Imager}."
+  fi
+  if [[ -n "$pi" ]]; then
+    local mem_mb
+    mem_mb=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+    if [[ "${mem_mb:-0}" -gt 0 && "$mem_mb" -lt 1800 ]]; then
+      warn "This Raspberry Pi has ${mem_mb} MB of memory. It runs, but keep it to a few players and small mods - 4 GB or more is better."
+    fi
+  fi
 
   PKG=""
   command -v apt-get >/dev/null && PKG="apt"
