@@ -382,6 +382,32 @@ kbd{font:600 11px/1 var(--mono);padding:3px 5px;border-radius:5px;border:1px sol
 @media (prefers-reduced-motion:no-preference){.found{animation:es-found 1.6s ease}}
 @keyframes es-found{0%,40%{box-shadow:0 0 0 3px var(--accent)}100%{box-shadow:0 0 0 0 transparent}}
 .found{outline:2px solid var(--accent);outline-offset:2px}
+
+/* ---- Games page: live map, badges, recap */
+.livemap .mapbox{position:relative;background:var(--surface-2);border-radius:10px;overflow:hidden;height:clamp(300px,58vh,560px)}
+.livemap .mapsvg{width:100%;height:100%;display:block}
+.livemap .grid line{stroke:var(--line)}
+.livemap .trk{stroke:var(--line-strong)}
+.livemap .trkstart{fill:var(--surface);stroke:var(--text-2)}
+.livemap .trap{fill:var(--warning)}
+.livemap .maplabel{fill:var(--text);paint-order:stroke;stroke:var(--surface-2);stroke-width:.3em;font-family:inherit}
+.livemap .maplabel.muted{fill:var(--text-2)}
+.livemap .carpin{cursor:default;outline:none}
+.livemap .mapscale{position:absolute;left:10px;bottom:8px;width:40%;display:flex;flex-direction:column;gap:2px}
+.livemap .mapscale span{display:block;height:4px;border:1px solid var(--muted);border-top:0}
+.livemap .maptip{position:absolute;right:10px;top:10px;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:6px 10px;box-shadow:var(--shadow)}
+.livemap .maplegend{gap:14px;margin-top:8px}
+.livemap .maplegend svg{width:14px;height:14px;flex:none}
+@media (max-width:700px){.livemap .mapbox{height:360px}}
+.howto summary{cursor:pointer}
+.badges{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px}
+.badge{display:flex;gap:10px;align-items:center;padding:9px 12px;border-radius:10px;background:var(--surface-2);min-width:0}
+.badge .bi{font-size:20px;width:26px;text-align:center;flex:none}
+.badge > span:nth-child(2){display:flex;flex-direction:column;min-width:0;flex:1}
+.badge .bn{flex:none}
+.badge.none{opacity:.6}
+.recap{background:var(--surface-2);border-radius:10px;padding:10px 14px;line-height:1.7;font-size:14px;overflow-wrap:anywhere}
+.recap b{display:block;margin-bottom:2px}
 </style>
 </head>
 <body>
