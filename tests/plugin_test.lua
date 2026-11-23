@@ -389,5 +389,192 @@ end)
 
 os.time = realTime
 
+-- ------------------------------------------------------------------ games
+local clock = realTime()
+os.time = function(t) if t then return realTime(t) end return clock end
+local car = {}            -- pid -> { x, y, v (m/s), tim }
+MP.GetPositionRaw = function(pid, vid)
+  local c = car[pid]
+  if not c then return nil end
+  return { pos = { c[1], c[2], 0 }, vel = { c.v or 0, 0, 0 }, tim = c.tim or 0 }
+end
+MP.GetPlayerVehicles = function(pid) if car[pid] then return { [0] = '{"jbm":"pickup","vcf":{}}' } end return {} end
+local function tick(n) for _ = 1, (n or 1) do esGameTick() end end
+local function wait(sec) for _ = 1, sec do clock = clock + 1 tick(4) end end
+local function all() return table.concat(to(-1), " | ") end
+players = { [1] = "Alice", [2] = "Bob", [3] = "Boss" }
+write("laps.txt", "mode=on\nradius=10\n")
+write("games.txt", "race=on\ncnr=on\ncnr_catch=10\ncnr_hold=3\ntraps=on\nbadges=on\nseasons=off\n")
+clock = clock + 20
+
+test("a race: join, countdown, checkpoints in order, results by time", function()
+  car[2] = { -15, 0, tim = 0 } car[3] = { -15, 5, tim = 0 }
+  esOnChat(3, "Boss", "/race ring 2")
+  assert(all():find("started a race on Ring, 2 laps"), "no start message: " .. all())
+  esOnChat(2, "Bob", "/race join")
+  assert(all():find("Bob joined the race"), "join not announced")
+  esOnChat(1, "Alice", "/tp bob")            -- Alice isn't racing: the race doesn't block her
+  wait(31)
+  assert(all():find("starts in 5 seconds"), "no countdown")
+  wait(6)
+  assert(all():find("GO!"), "no GO: " .. all())
+  chats = {}
+  -- two laps; Bob drives each step in 2 s of game time, Boss in 3 s
+  local route = { { 20, 0 }, { 150, 0 }, { 290, 0 }, { 310, 0 }, { 300, 150 }, { 300, 290 }, { 300, 310 }, { 150, 150 }, { 60, 60 }, { 5, -5 }, { -20, -5 } }
+  local lapRoute = {}
+  for _ = 1, 2 do for _, p in ipairs(route) do lapRoute[#lapRoute + 1] = p end end
+  for i, p in ipairs(lapRoute) do
+    car[2] = { p[1], p[2], v = 30, tim = i * 2 } car[3] = { p[1], p[2] + 2, v = 20, tim = i * 3 }
+    tick()
+  end
+  local text = all()
+  assert(text:find("Bob finishes P1"), "Bob should win: " .. text)
+  assert(text:find("Boss finishes P2"), "Boss second: " .. text)
+  assert(text:find("Race results %- Ring, 2 laps: 1%) Bob"), "no results: " .. text)
+  assert(table.concat(to(2), " "):find("Lap 2/2"), "no lap message to the driver")
+  assert(read("events.log"):find('"ev":"race","track":"Ring","laps":2,"results":[{"name":"Bob"', 1, true), "race not logged")
+  assert(read("gamestats.tsv"):find("Bob\t%d+\t1\t1\t"), "Bob's win not counted: " .. read("gamestats.tsv"))
+  assert(all():find("Bob earned a badge: Race winner"), "no winner badge")
+end)
+
+test("a cut checkpoint means no finish, and only the starter or an admin can cancel", function()
+  clock = clock + 120
+  car[1] = { -15, 0, tim = 0 }
+  esOnChat(1, "Alice", "/race ring 1")
+  esOnChat(2, "Bob", "/race cancel")
+  assert(table.concat(to(2), " "):find("Only Alice or an admin"), "Bob cancelled Alice's race")
+  wait(37)
+  chats = {}
+  local cut = { { 20, 0 }, { 150, 150 }, { 60, 60 }, { 5, -5 }, { -20, -5 } }
+  for i, p in ipairs(cut) do car[1] = { p[1], p[2], v = 30, tim = i * 2 } tick() end
+  assert(not all():find("finishes"), "a cut lap finished: " .. all())
+  esOnChat(3, "Boss", "/race cancel")
+  assert(all():find("cancelled by Boss"), "admin couldn't cancel")
+end)
+
+test("cops and robbers: roles, head start, a bust, robbers that get away win", function()
+  clock = clock + 120
+  car[1] = { 0, 0, tim = 0 } car[2] = { 2000, 2000, tim = 0 } car[3] = { 100, 0, tim = 0 }
+  esOnChat(3, "Boss", "/cnr start 5")
+  esOnChat(3, "Boss", "/cnr join cop")
+  esOnChat(1, "Alice", "/cnr join robber")
+  esOnChat(2, "Bob", "/cnr join")
+  wait(31)
+  assert(all():find("Cops: Boss%."), "Boss should be the cop: " .. all())
+  assert(table.concat(to(3), " "):find("You're a COP"), "cop not told")
+  assert(table.concat(to(1), " "):find("You're a ROBBER"), "robber not told")
+  -- during the head start nobody can be busted
+  car[3] = { 5, 0, tim = 0 }
+  for i = 1, 8 do car[1].tim = i car[3].tim = i tick() end
+  assert(not all():find("busted"), "busted during the head start")
+  esOnChat(1, "Alice", "/tp bob")
+  assert(table.concat(to(1), " "):find("No teleporting during cops and robbers"), "teleport not blocked")
+  wait(30)
+  assert(all():find("Cops, go!"), "cops never started")
+  assert(table.concat(to(3), " "):find("Nearest robber: "), "no radar for the cop")
+  -- Boss parks next to Alice for 3+ seconds of game time
+  chats = {}
+  for i = 1, 16 do car[1] = { 0, 0, v = 0, tim = 100 + i * 0.25 } car[3] = { 6, 0, v = 0, tim = 100 + i * 0.25 } tick() end
+  assert(all():find("Boss busted Alice! 1 robber left"), "no bust: " .. all())
+  -- a robber driving past fast isn't busted
+  for i = 1, 16 do car[2] = { 3000 + i * 10, 0, v = 30, tim = 200 + i * 0.25 } car[3] = { 3000 + i * 10, 4, v = 30, tim = 200 + i * 0.25 } tick() end
+  assert(not all():find("busted Bob"), "a moving robber was busted")
+  car[3] = { 0, 0, v = 0, tim = 300 }
+  wait(5 * 60)
+  local text = all()
+  assert(text:find("Robbers win! Bob got away"), "robbers should win: " .. text)
+  assert(read("events.log"):find('"ev":"bust","name":"Boss","target":"Alice"', 1, true), "bust not logged")
+  assert(read("events.log"):find('"ev":"cnr","winner":"robbers"', 1, true), "game not logged")
+  assert(text:find("Bob earned a badge: Getaway driver"), "no getaway badge")
+end)
+
+test("cops and robbers needs two players and ends when every robber is caught", function()
+  clock = clock + 60
+  esOnChat(3, "Boss", "/cnr start")
+  wait(31)
+  assert(all():find("needs at least 2 players"), "a one-player game started")
+  chats = {}
+  esOnChat(3, "Boss", "/cnr start 3")
+  esOnChat(1, "Alice", "/cnr join robber")
+  wait(61)
+  for i = 1, 16 do car[1] = { 0, 0, v = 0, tim = 500 + i * 0.25 } car[3] = { 3, 0, v = 1, tim = 500 + i * 0.25 } tick() end
+  assert(all():find("Cops win!"), "cops should win: " .. all())
+end)
+
+test("speed traps: a record for everyone, slower passes only for the driver", function()
+  clock = clock + 60
+  car[3] = { 1000, 0, tim = 0 }
+  esOnChat(3, "Boss", "/trap new Straight")
+  assert(all():find("put up a speed trap: Straight"), "trap not made")
+  esOnChat(2, "Bob", "/trap new Cheat")
+  assert(table.concat(to(2), " "):find("Only the server's admins"), "non-admin made a trap")
+  car[3] = { 0, 9000, tim = 0 }
+  chats = {}
+  car[1] = { 970, 0, v = 50, tim = 1 } tick()
+  car[1] = { 1030, 0, v = 50, tim = 2 } tick()
+  assert(all():find("Alice set a speed trap record at Straight: 180 km/h"), "no record: " .. all())
+  clock = clock + 10
+  car[2] = { 970, 3, v = 30, tim = 1 } tick()
+  car[2] = { 1030, 3, v = 30, tim = 2 } tick()
+  assert(table.concat(to(2), " "):find("Speed trap Straight: 108 km/h %(record 180 km/h by Alice%)"), "slower pass: " .. table.concat(to(2), " "))
+  assert(read("trapspeeds.tsv"):find("\tBob\t108.0\tpickup\t", 1, true), "speed not saved")
+  esOnChat(1, "Alice", "/trap")
+  assert(table.concat(to(1), " "):find("1%) Alice 180 km/h   2%) Bob 108 km/h"), "/trap list: " .. table.concat(to(1), " "))
+end)
+
+test("badges for laps and records, and /badges", function()
+  assert(read("badges.tsv"):find("Boss\tfirst_lap\t"), "no first lap badge")
+  esOnChat(3, "Boss", "/badges")
+  assert(table.concat(to(3), " "):find("Your badges %(%d+/13%):.*First lap"), "/badges: " .. table.concat(to(3), " "))
+  esOnChat(1, "Alice", "/badges bob")
+  assert(table.concat(to(1), " "):find("Bob's badges"), "other player's badges")
+end)
+
+test("the live map is written only while the dashboard asks for it", function()
+  os.remove(DIR .. "livemap.json")
+  clock = clock + 10
+  tick(4)
+  eq(read("livemap.json"), "", "map written without being asked")
+  write("livemap.txt", "until=" .. (clock + 60) .. "\n")
+  clock = clock + 4
+  tick(4)
+  local m = read("livemap.json")
+  assert(m:find('"n":"Alice"', 1, true) and m:find('"car":"pickup"', 1, true), "live map: " .. m)
+end)
+
+test("a new month ends the season: winners kept, times back to zero", function()
+  write("games.txt", "race=on\ncnr=on\ntraps=on\nbadges=on\nseasons=on\n")
+  write("season.txt", "2000-01\n")
+  clock = clock + 20
+  chats = {}
+  tick(240)
+  local arch = read("seasons.tsv")
+  assert(arch:find("2000-01\tlap\tRing\tBoss", 1, true), "lap winner not kept: " .. arch)
+  assert(arch:find("2000-01\ttrap\tStraight\tAlice", 1, true), "trap winner not kept")
+  assert(arch:find("2000-01\twins\t\tBob", 1, true), "race wins winner not kept")
+  eq(read("laptimes.tsv"), "", "lap times not reset")
+  eq(read("trapspeeds.tsv"), "", "trap speeds not reset")
+  eq(read("season.txt"), os.date("%Y-%m") .. "\n")
+  assert(all():find("Season 2000%-01 is over!"), "season end not announced")
+  assert(read("badges.tsv"):find("Boss\tseason_champ"), "no champion badge")
+  esOnChat(2, "Bob", "/season")
+  assert(table.concat(to(2), " "):find("Season 2000%-01 winners %- Ring: Boss"), "/season: " .. table.concat(to(2), " "))
+end)
+
+test("games can be switched off, and a player can't fake the game timer", function()
+  write("games.txt", "race=off\ncnr=off\ntraps=off\nbadges=off\nseasons=off\n")
+  clock = clock + 20
+  esOnChat(2, "Bob", "/race ring")
+  esOnChat(2, "Bob", "/cnr start")
+  local t = table.concat(to(2), " ")
+  assert(t:find("Races are turned off") and t:find("Cops and robbers is turned off"), "games ran while off: " .. t)
+  write("livemap.txt", "until=" .. (clock + 60) .. "\n")
+  os.remove(DIR .. "livemap.json")
+  clock = clock + 4
+  for _ = 1, 50 do esGameTick(1, "") end
+  eq(read("livemap.json"), "", "a player's fake timer did work")
+end)
+os.time = realTime
+
 _print(string.format("%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)
