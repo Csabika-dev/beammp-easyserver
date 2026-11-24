@@ -136,7 +136,7 @@ for lit, pb, pa in strings:
 html_text(re.sub(r"<style[\s\S]*?</style>", "", html_head), "head")
 
 # React (app.jsx): text between tags, the attributes people read, and quoted text that isn't code
-jsx = re.sub(r"//[^\n]*", "", jsx)
+jsx = re.sub(r"(?<![:\"'\w])//[^\n]*", "", jsx)   # (not the // in https://)
 jsx = re.sub(r"`[^`]*`", "0", jsx)   # template strings were read above
 for m in re.finditer(r"(?<![=\w])>([^<>{}]*[A-Za-z][^<>{}]*)(?=[<{])|\}([^<>{}]*[A-Za-z][^<>{}]*)(?=<)", jsx):
     t = m.group(1) or m.group(2)

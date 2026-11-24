@@ -2,6 +2,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import * as L from "./legacy.js";
 import { cacheGet, cachedApi, Empty, PageWait, Skel } from "./ui.jsx";
+import { RaspberryPi, canSetUpPi } from "./pi.jsx";
 
 const S = () => L.state();
 export const Ip = ({ children }) => <span className="ipb" title="Hidden - click to show">{children}</span>;
@@ -310,5 +311,6 @@ export function Servers({ reload }) {
     <div className="row"><div><h1>Servers</h1><p className="sub">Run several BeamMP servers on this computer. Each has its own port, mods, config, allow-list and limits. The other pages show the server picked in the Server menu.</p></div></div>
     {d.servers.map(x => <ServerCard key={x.id + ":" + reload} x={x} sys={d.system} win={d.platform === "windows"} />)}
     <AddServer key={"add" + reload} servers={d.servers} />
+    {canSetUpPi() && <RaspberryPi key={"pi" + reload} />}
   </div>);
 }
