@@ -24,6 +24,7 @@ function JobBox({ job }) {
   const card = job.kind === "card";
   const title = job.state === "failed" ? `Didn't work: ${job.error}`
     : card ? (job.state === "waiting" ? "Waiting for the Raspberry Pi to start…" : job.state === "done" ? `Found the Raspberry Pi at ${job.ip}` : "Making the SD card…")
+    : job.kind === "move" ? (job.state === "running" ? `Moving the server to ${job.ip}…` : `The server is now on ${job.ip}`)
     : job.state === "running" ? (job.kind === "install" ? `Installing EasyServer on ${job.ip}…` : `Updating ${job.ip}…`)
     : job.kind === "install" ? `EasyServer is installed on ${job.ip}` : `${job.ip} is up to date`;
   return <div className={"issue " + (job.state === "failed" ? "error" : "info")} style={{ display: "block" }}>
@@ -33,6 +34,8 @@ function JobBox({ job }) {
       <span className="small muted">{" - write it down (on a Windows PC it's shown only now)."}</span></div>}
     {job.state === "done" && job.kind === "install" && <div className="small" style={{ marginTop: 6 }}>{"Next: open its dashboard, log in, and paste your AuthKey under Config so players can find the server."}
       {job.web && <> <a href={job.web} target="_blank" rel="noopener noreferrer">{"Open it"}</a></>}</div>}
+    {job.state === "done" && job.kind === "move" && job.web && <div className="small" style={{ marginTop: 6 }}>
+      <a href={job.web} target="_blank" rel="noopener noreferrer">{"Open its dashboard"}</a></div>}
     <Log job={job} /></div>;
 }
 
@@ -141,6 +144,7 @@ export function RaspberryPi() {
   const [busy, setBusy] = useState(false);
   const [manual, setManual] = useState("");
   const [making, setMaking] = useState(false);
+  const [open, setOpen] = useState(false);
   const running = !!(d && ((d.job && d.job.state === "running") || d.scanning));
   const watching = !!(d && d.job && d.job.state === "waiting");
   useEffect(() => { if (!running && !watching) return; const t = setInterval(again, running ? 2000 : 8000); return () => clearInterval(t); }, [running, watching]);
@@ -156,12 +160,17 @@ export function RaspberryPi() {
   const known = new Set(d.pis.map(p => p.ip));
   const found = ((d.scan && d.scan.found) || []).filter(f => !known.has(f.ip));
   const job = d.job;
+  if (!open && !d.pis.length && !found.length && !job && !d.scanning && d.scan) return (<div className="card" style={{ marginTop: 16 }}>
+    <div className="row" style={{ gap: 8 }}><h2 style={{ margin: 0 }}>{"Other computers at home"}</h2><span className="spacer" />
+      <button className="btn sm" onClick={() => setOpen(true)}>{"Show"}</button></div>
+    <p className="small muted" style={{ margin: "6px 0 0" }}>{"Nothing found on your network. Want a server on a Raspberry Pi, a mini PC, a NAS or another Windows PC? Press Show to set one up."}</p>
+  </div>);
   return (<div className="card" style={{ marginTop: 16 }}>
     <div className="row"><h2 style={{ margin: 0 }}>{"Other computers at home"}</h2><span className="spacer" />
       <button className="btn sm" disabled={d.scanning} onClick={scan}>{d.scanning ? "Looking…" : "Look again"}</button></div>
     <p className="small muted">{"Run a server on another computer on your network - a Raspberry Pi 4 or 5, a mini PC or NAS with Ubuntu, Debian or OpenMediaVault, or a Windows PC. This dashboard finds it, installs EasyServer on it and keeps it up to date - no commands on it."}</p>
     {!d.ssh && <div className="issue warning"><span className="ic">⚠</span><span>{"This computer has no SSH client. On Windows: Settings → System → Optional features → add OpenSSH Client."}</span></div>}
-    {job && <JobBox job={job} />}
+    {job && job.kind !== "move" && <JobBox job={job} />}
     {d.pis.map(p => <Known key={p.ip} p={p} busy={busy} act={act} running={running} />)}
     {found.map(f => <div key={f.ip} className="card tight" style={{ marginBottom: 10, padding: "12px 14px" }}>
       <div className="row"><b>{`${KIND[f.kind] || "Computer"} found at ${f.ip}`}{f.name ? ` (${f.name})` : ""}</b><span className="spacer" />
@@ -185,5 +194,65 @@ export function RaspberryPi() {
         <span className="muted">{"Your router's page lists the devices at home and their addresses."}</span></div>
       {/^\d{1,3}(\.\d{1,3}){3}$/.test(manual) && !known.has(manual) && <Setup f={{ ip: manual, ssh: true, kind: "pc" }} busy={busy} blocked={running} act={act} />}
     </details>
+  </div>);
+}
+
+
+/* ---------------- all computers on one page: this one and every paired computer with EasyServer */
+const WHY = {
+  off: "Not answering - is it switched on?",
+  nokey: "This dashboard can't log in to it with its key, so it can't show or control its server.",
+  old: "Its EasyServer is too old to show here - press Update for it under Other computers at home.",
+};
+
+function ServerLine({ s, ip, busy, act }) {
+  const on = s.state === "running";
+  return <div className="row small" style={{ gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+    <Pill on={on}>{on ? "Running" : s.state === "stopped" ? "Stopped" : s.state}</Pill>
+    <span><b>{s.name}</b>{on ? ` · ${s.players}/${s.max} players` : ""}{on && s.map ? ` · ${s.map}` : ""}</span>
+    {act && s.id === "main" && <><span className="spacer" />
+      {on ? <><button className="btn sm" disabled={busy} onClick={() => act({ action: "restart", ip })}>{"Restart"}</button>
+        <button className="btn sm ghost" disabled={busy} onClick={() => act({ action: "stop", ip })}>{"Stop"}</button></>
+        : <button className="btn sm primary" disabled={busy} onClick={() => act({ action: "start", ip })}>{"Start"}</button>}</>}
+  </div>;
+}
+
+export function AllComputers() {
+  const [d, again] = useLoad("/api/machines");
+  const [busy, setBusy] = useState(false);
+  const moving = !!(d && d.job && d.job.kind === "move" && d.job.state === "running");
+  useEffect(() => { const t = setInterval(again, moving ? 3000 : 20000); return () => clearInterval(t); }, [moving]);
+  const ms = d ? d.machines.filter(m => m.version) : [];
+  if (!ms.length) return null;
+  const act = async body => {
+    setBusy(true);
+    try { const r = await L.api("/api/machines", { json: body }); if (r.note) L.toast(r.note, 6000); await again(); }
+    catch (e) { L.toast(e.message, 9000); }
+    finally { setBusy(false); }
+  };
+  const here = d.here.servers.find(s => s.id === (L.state().SERVER || "main")) || d.here.servers[0] || { name: "" };
+  const move = m => {
+    if (!confirm([`Move "${here.name}" to ${m.host || m.ip}?`, "",
+      "Its settings, mods, bans, stats, championships and lap times are copied there and replace the server on that computer (that computer keeps a backup of how it was). Then the server on this computer stops."].join("\n"))) return;
+    act({ action: "move", ip: m.ip, stop_here: true });
+  };
+  return (<div className="card" style={{ marginTop: 16 }}>
+    <div className="row"><h2 style={{ margin: 0 }}>{"All your computers"}</h2><span className="spacer" />
+      <button className="btn sm" onClick={again}>{"Refresh"}</button></div>
+    <p className="small muted">{"The servers on this computer and on the ones set up below. Start, stop or restart them from here, or move this server to another computer in one go."}</p>
+    {d.job && d.job.kind === "move" && <JobBox job={d.job} />}
+    <div className="card tight" style={{ marginBottom: 10, padding: "12px 14px" }}>
+      <b>{`This computer (${d.here.host})`}</b><div className="small muted">{`${d.here.ip} · EasyServer ${d.here.version}`}</div>
+      {d.here.servers.map(s => <ServerLine key={s.id} s={s} />)}
+    </div>
+    {ms.map(m => { const r = m.remote || {}; return <div key={m.ip} className="card tight" style={{ marginBottom: 10, padding: "12px 14px" }}>
+      <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+        <div><b>{m.host || m.ip}</b><div className="small muted">{`${m.ip} · EasyServer ${r.version || m.version}`}</div></div><span className="spacer" />
+        {m.online && <a className="btn sm" href={m.web || `https://${m.ip}:30815/`} target="_blank" rel="noopener noreferrer">{"Open its dashboard"}</a>}
+        {r.servers && <button className="btn sm" disabled={busy || moving} onClick={() => move(m)}>{"Move this server here"}</button>}</div>
+      {r.error ? <div className="small" style={{ marginTop: 6, color: "var(--warning)" }}>{r.detail || WHY[r.error] || ""}</div>
+        : <>{r.stale && <div className="small" style={{ marginTop: 6, color: "var(--warning)" }}>{"Its dashboard hasn't reported for a while - it may be stuck. Open it to check."}</div>}
+          {(r.servers || []).map(s => <ServerLine key={s.id} s={s} ip={m.ip} busy={busy} act={act} />)}</>}
+    </div>; })}
   </div>);
 }

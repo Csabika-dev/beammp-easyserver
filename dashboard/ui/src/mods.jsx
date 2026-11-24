@@ -7,6 +7,21 @@ import { cacheGet, cachedApi, Empty, Oops, PageWait, SkelCard } from "./ui.jsx";
 const S = () => L.state();
 const NEW_TAB = { target: "_blank", rel: "noopener noreferrer" };
 const SAFETY = { clean: ["good", "✓ safe"], warning: ["warn", "⚠ check"], unchecked: ["", "not checked yet"] };
+// How long a new player waits for the mods: the download size over the upload speed (or the mod download limit).
+function JoinTime({ d }) {
+  if (!d.download) return null;
+  const up = (d.upload_mbit || 0) * 1000, lim = d.limit_kbps || 0;
+  const kbps = up && lim ? Math.min(up, lim) : up || lim;
+  if (!kbps) return <div className="small muted" style={{ marginTop: 4 }}>{"Enter your upload speed on the Settings page (Computer load) to see how long joining takes."}</div>;
+  const secs = d.download * 8 / (kbps * 1000), min = Math.round(secs / 60);
+  const t = secs < 90 ? `${Math.max(1, Math.round(secs))} seconds` : min === 1 ? "1 minute" : `${min} minutes`;
+  const on = d.mods.filter(m => m.enabled).sort((a, b) => b.size - a.size), top = on.slice(0, 3);
+  const share = Math.round(top.reduce((a, m) => a + m.size, 0) / d.download * 100);
+  return <div className="small" style={{ marginTop: 4 }}>
+    {`A new player waits about ${t} for it${lim && (!up || lim < up) ? " (with your mod download limit)" : ""} - longer if several join at once or their internet is slower.`}
+    {on.length > 3 && share >= 50 && <>{" "}{`${top.map(m => m.name.replace(/\.zip$/i, "")).join(", ")} are ${share}% of it.`}</>}
+  </div>;
+}
 const Lines = ({ items, pre = "" }) => items.map((t, i) => <span key={i}>{i > 0 && <br />}{pre + t}</span>);
 
 // A dialog drawn by React (same look as the old ones)
@@ -257,6 +272,7 @@ export function Mods({ reload }) {
     <p className="small muted" style={{ margin: "10px 0 16px" }}>{`🛡 Active checks: ${d.checks.join(" + ")}. ${d.auto_apply ? "The server restarts by itself ~15 s after a change." : "Restart the server after changes."}`}</p>
     <div className="card" style={{ marginBottom: 16 }}>
       <div className="row"><div><div className="small muted">Players download before they can join</div><div style={{ fontSize: 22, fontWeight: 650 }}>{d.download ? L.fmtSize(d.download) : "Nothing - vanilla"}</div>
+        <JoinTime d={d} />
         {d.maps_size > 0 && !d.light && <div className="small muted">{`${L.fmtSize(d.maps_size)} of that is map mods. Light mode (below) sends only the map being played.`}</div>}
         {d.light && d.all_maps_size > d.maps_size && <div className="small" style={{ color: "var(--good-ink)" }}>{`Light mode saves players ${L.fmtSize(d.all_maps_size - d.maps_size)} of map downloads.`}</div>}</div></div>
       {ST.free != null && <div style={{ marginTop: 12 }}>

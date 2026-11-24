@@ -302,6 +302,7 @@ export function QuickSearch() {
   if (!open) return null;
   const go = h => {
     setOpen(false);
+    if (h.p[0] === "settings") { window.esSettingsAll = true; dispatchEvent(new Event("es-settings-all")); }   // every setting, not just Normal
     L.bridge.show(h.p[0]);
     // after the page opens, scroll to the part that was picked and light it up for a moment
     const want = h.p[1].toLowerCase(), tr = (h.label || "").toLowerCase();

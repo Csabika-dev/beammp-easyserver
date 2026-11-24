@@ -313,6 +313,38 @@ function LoadGraphs({ upMbit }) {
     <Chart title="Upload" k="up_kbps" max={upMbit ? upMbit * 1000 : 0} fmt={up} note={upMbit ? `line top = your ${upMbit} Mbit/s` : ""} />
     <Chart title="Players online" k="players" max={1} fmt={v => String(v)} /></div></div>);
 }
+function BackupCopy({ bk, again }) {
+  const [kind, setKind] = useState(bk.copy || "");
+  const [path, setPath] = useState(bk.copy_path || "");
+  const [ip, setIp] = useState(bk.copy_ip || (bk.computers[0] || {}).ip || "");
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    setBusy(true);
+    try { const r = await L.api("/api/backups", { json: { copy: kind, copy_path: path, copy_ip: ip } }); L.toast(r.note); again(); }
+    catch (e) { L.toast(e.message, 9000); }
+    setBusy(false);
+  };
+  const last = bk.copy_last;
+  return <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--line)" }}>
+    <b>{"Keep a copy somewhere else"}</b>
+    <p className="small muted" style={{ margin: "4px 0 8px" }}>{`If this computer's disk dies, the backups on it are gone too. After every backup a copy goes to a USB drive or another computer at home, and the last ${bk.keep} are kept there.`}</p>
+    <label className="f"><span>{"Copy to"}</span><select value={kind} onChange={e => setKind(e.target.value)}>
+      <option value="">{"Nowhere - only this computer"}</option>
+      <option value="folder">{"A USB drive or folder"}</option>
+      {(bk.computers.length > 0 || kind === "computer") && <option value="computer">{"Another computer at home"}</option>}</select></label>
+    {kind === "folder" && <>
+      <label className="f"><span>{"Folder"}</span><input type="text" value={path} onChange={e => setPath(e.target.value)} placeholder={bk.folder.includes("\\") ? "E:\\" : "/media/usb"} spellCheck={false} autoComplete="off" />
+        <small>{`A "${bk.copy_dir}" folder is made in it.`}</small></label>
+      {bk.drives.length > 0 && <div className="row small" style={{ gap: 6, flexWrap: "wrap", margin: "-4px 0 10px" }}>
+        <span className="muted">{"Drives:"}</span>{bk.drives.map(x => <button key={x.path} className="btn sm ghost" onClick={() => setPath(x.path)}>{x.usb ? `${x.path} (USB)` : x.path}</button>)}</div>}</>}
+    {kind === "computer" && <label className="f"><span>{"Computer"}</span><select value={ip} onChange={e => setIp(e.target.value)}>
+      {bk.computers.map(c => <option key={c.ip} value={c.ip}>{`${c.name} (${c.ip})`}</option>)}</select>
+      <small>{"Saved in the easyserver-backups folder of the user it was set up with. Set computers up under Servers → Other computers at home."}</small></label>}
+    <button className="btn" disabled={busy} onClick={save}>{"Save"}</button>
+    {last && <p className="small" style={{ marginTop: 8, color: last.ok ? "var(--good-ink)" : "var(--warning)" }}>{`${last.ok ? "Last copy" : "The last copy failed"} (${L.fmtTime(last.t)}): ${last.note}`}</p>}
+  </div>;
+}
+
 export function Backups() {
   const [d, again, v, err] = useLoad(["/api/backups", "/api/settings", "/api/resources"]);
   const [busy, setBusy] = useState("");
@@ -341,6 +373,7 @@ export function Backups() {
         {bk.items.length ? <div style={{ marginTop: 10 }}>{bk.items.map(b => <div key={b.file} className="row small" style={{ padding: "3px 0" }}><span>{L.fmtTime(b.t) + (b.mods ? " · with mods" : "") + " · " + L.fmtSize(b.size)}</span><span className="spacer" />
           {owner && <button className="btn sm" disabled={busy === b.file} onClick={() => restore(b)}>Restore</button>}<a href={"/api/backups/download?file=" + encodeURIComponent(b.file) + "&srv=" + encodeURIComponent(S().SERVER)} download>Download</a></div>)}</div>
           : <p className="small muted" style={{ marginTop: 8 }}>No backups of this server yet.</p>}
+        {owner && <BackupCopy bk={bk} again={again} />}
       </div>
       <div className="card"><div className="row"><h2 style={{ margin: 0 }}>Fixed address (DuckDNS)</h2><span className="spacer" /><span className={"pill " + (st.duckdns_domain ? (st.duck_err ? "warn" : "good") : "")}><span className="dot" />{st.duckdns_domain ? st.duckdns_domain + ".duckdns.org" : "Off"}</span></div>
         <p className="small muted">Most home internet gets a new IP address now and then, and your friends' saved address stops working. With a free DuckDNS name they always use <b>yourname.duckdns.org</b> - the dashboard keeps it pointing at your home.</p>

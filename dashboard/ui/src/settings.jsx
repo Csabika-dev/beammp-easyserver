@@ -17,6 +17,22 @@ const NOTIFY = [["crash", "Crashes", "The server crashed or keeps crashing"], ["
   ["backup", "Backup problems", "A nightly backup failed"], ["mod_update", "Mod updates", "A newer version of a repository mod is out"],
   ["sleep", "Sleep and wake-up", "The server computer went to sleep or woke up"]];
 
+/* ---------------- how much of the page to show: Normal, Advanced or Everything (remembered in this browser) */
+const LEVELS = [["Normal", "The everyday ones: notifications, phone app, password and backups."],
+  ["Advanced", "Adds security alerts, the team, two-step login, internet access, Discord bot, integrations, sleep and moving the server."],
+  ["Everything", "Every setting, including the public status page and hiding your IP."]];
+// The quick search (Ctrl+K) shows every setting: it sets window.esSettingsAll before opening the page, or sends
+// "es-settings-all" when the page is already open. That doesn't change the choice saved here.
+function useLevel() {
+  const [lv, setLv] = useState(() => {
+    if (window.esSettingsAll) { window.esSettingsAll = false; return 2; }
+    try { const n = +localStorage.getItem("es_settings_level"); return n >= 0 && n <= 2 ? n : 0; } catch (e) { return 0; }
+  });
+  useEffect(() => { const all = () => { window.esSettingsAll = false; setLv(2); }; addEventListener("es-settings-all", all); return () => removeEventListener("es-settings-all", all); }, []);
+  const set = n => { setLv(n); try { localStorage.setItem("es_settings_level", String(n)); } catch (e) {} };
+  return [lv, set];
+}
+
 /* ---------------- pop-ups on this device */
 function PopupButton() {
   const note = () => !window.Notification ? (window.isSecureContext ? "This browser has no pop-ups" : "Pop-ups need HTTPS (turn it on below) or http://localhost")
@@ -142,6 +158,7 @@ function ExportImport() {
 /* ---------------- the page */
 export function Settings({ reload }) {
   const [page, setPage] = useState(0), [pwTick, setPwTick] = useState(0);
+  const [lv, setLv] = useLevel();
   const [s, sAgain, v, err] = useLoad("/api/settings", [reload, page]);
   if (!s) return <PageWait err={err} retry={sAgain} cards={6} />;
   const reloadPage = () => setPage(p => p + 1);
@@ -180,10 +197,14 @@ export function Settings({ reload }) {
   };
   const security = e => saveNotif(false).catch(x => L.toast(x.message));
   return (<div key={v}>
-    <h1>Settings</h1><p className="sub">Notifications, security, remote access and backups.</p>
+    <div className="row" style={{ flexWrap: "wrap", gap: 10 }}><div><h1>Settings</h1><p className="sub">Notifications, security, remote access and backups.</p></div><span className="spacer" />
+      <div className="seg" role="group" aria-label="How many settings to show">{LEVELS.map(([t], i) =>
+        <button key={t} className={lv === i ? "on" : ""} aria-pressed={lv === i} onClick={() => setLv(i)}>{t}</button>)}</div></div>
+    <p className="small muted" style={{ margin: "0 0 12px" }}>{LEVELS[lv][1]}{lv < 2 && <>{" "}<a href="#" onClick={e => { e.preventDefault(); setLv(2); }}>{"Show everything"}</a></>}</p>
     <Supporter />
     <div className="grid g2">
-      <div className="card"><h2>Security alerts</h2>
+      {/* (kept on the page when hidden: the save button below reads its switches) */}
+      <div className="card" hidden={lv < 1}><h2>Security alerts</h2>
         <label className="toggle"><input type="checkbox" id="security_alerts" defaultChecked={!!s.security_alerts} onChange={security} /><span><b>Alert me about attacks</b><small>Password guessing, websites probing the dashboard, mods with viruses, tampered server files, zip bombs, connection floods. Sent to every channel that is set up (here, Discord, email) - even if its switch below is off</small></span></label>
         <label className="toggle"><input type="checkbox" id="security_reminders" defaultChecked={!!s.security_reminders} onChange={security} /><span><b>Repeat every 15 minutes</b><small>Until you click "Got it - stop alerts" (or the link/pop-up in the message)</small></span></label>
         <PopupButton />
@@ -214,34 +235,34 @@ export function Settings({ reload }) {
     <div className="row" style={{ margin: "16px 0 30px" }}><button className="btn primary" onClick={() => saveNotif(false).catch(e => L.toast(e.message))}>Save notification settings</button></div>
 
     <Phone />
-    <DiscordBot />
-    <Integrations />
-    {owner && <StatusPage />}
-    <Power />
-    {SESSION.role === "owner" && <Users />}
+    {lv >= 1 && <DiscordBot />}
+    {lv >= 1 && <Integrations />}
+    {lv >= 2 && owner && <StatusPage />}
+    {lv >= 1 && <Power />}
+    {lv >= 1 && SESSION.role === "owner" && <Users />}
 
     <div className="grid g2">
-      <div className="card"><h2>Mod virus check</h2><p className="small muted">Optional VirusTotal key (free account at virustotal.com → your name → API key). Stored encrypted.</p>
-        <div className="row"><input type="password" id="vt" placeholder={s.has_vt ? "Saved - paste a new key or type off" : "VirusTotal API key"} autoComplete="off" /><button className="btn" onClick={saveVt}>Save</button></div></div>
+      {lv >= 1 && <div className="card"><h2>Mod virus check</h2><p className="small muted">Optional VirusTotal key (free account at virustotal.com → your name → API key). Stored encrypted.</p>
+        <div className="row"><input type="password" id="vt" placeholder={s.has_vt ? "Saved - paste a new key or type off" : "VirusTotal API key"} autoComplete="off" /><button className="btn" onClick={saveVt}>Save</button></div></div>}
       <div className="card"><h2>Password</h2>
         <label className="f"><span>Current password</span><input type="password" id="pw_cur" autoComplete="current-password" /></label>
         <label className="f"><span>New password</span><input type="password" id="pw_new" autoComplete="new-password" /><small>{s.remote_enabled ? "At least 12 characters" : "At least 8 characters (12 for internet access)"}</small></label>
         <button className="btn" onClick={savePw}>Change password</button></div>
     </div>
 
-    <Devices tick={pwTick} />
-    <TwoStep s={s} reloadPage={reloadPage} />
+    {lv >= 1 && <Devices tick={pwTick} />}
+    {lv >= 1 && <TwoStep s={s} reloadPage={reloadPage} />}
 
-    <div className="card" style={{ marginTop: 16 }}><h2>Access from the internet</h2>
+    {lv >= 1 && <div className="card" style={{ marginTop: 16 }}><h2>Access from the internet</h2>
       <p className="small muted">{`Manage the server from anywhere: needs HTTPS, two-step login and a 12+ character password. You also have to forward port ${s.port} (TCP) on your router. Leave this off if you only use the dashboard at home.`}</p>
       <Toggle id="https" on={s.https} title="HTTPS (encrypted connection)">Uses a self-made certificate - your browser shows a warning the first time; check the fingerprint below and continue</Toggle>
       <Toggle id="remote_enabled" on={s.remote_enabled} title="Allow access from the internet">Only with HTTPS + two-step login</Toggle>
       {s.cert_fingerprint && <p className="small">Certificate fingerprint (SHA-256): <span className="mono">{s.cert_fingerprint}</span></p>}
-      <button className="btn" onClick={saveRemote}>Apply</button></div>
+      <button className="btn" onClick={saveRemote}>Apply</button></div>}
 
-    <Relay s={s} reloadPage={reloadPage} />
+    {lv >= 2 && <Relay s={s} reloadPage={reloadPage} />}
     <Backups />
-    <ExportImport />
+    {lv >= 1 && <ExportImport />}
     <p className="small muted" style={{ marginTop: 24 }}>{`BeamMP EasyServer ${SESSION.version} · ${s.platform} · not affiliated with the BeamMP team`}</p>
   </div>);
 }

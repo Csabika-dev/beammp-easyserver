@@ -128,6 +128,9 @@ DEFAULT_SETTINGS = {
     "backup_on": True,             # nightly backup of every server's settings (keeps the last 7)
     "backup_at": "03:30",
     "backup_mods": False,          # ...including the mods (can be big)
+    "backup_copy": "",             # also keep a copy: "" (no), "folder" (a USB drive or folder), "computer" (a paired one)
+    "backup_copy_path": "",
+    "backup_copy_ip": "",
     "duckdns_domain": "",          # name.duckdns.org - a fixed address even when the home IP changes
     "upload_mbit": 0,              # the user's upload speed from a speed test (0 = unknown)
     "discord_status_msg": False,   # a status message in the webhook channel that updates itself every minute
@@ -329,7 +332,7 @@ def open_shared(path, mode="r"):
     Never follows links (a hacked game server could point them at the
     dashboard's own files) and never blocks on FIFOs. Text mode is UTF-8."""
     flags = {"r": os.O_RDONLY, "rb": os.O_RDONLY, "w": os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
-             "a": os.O_WRONLY | os.O_CREAT | os.O_APPEND}[mode]
+             "wb": os.O_WRONLY | os.O_CREAT | os.O_TRUNC, "a": os.O_WRONLY | os.O_CREAT | os.O_APPEND}[mode]
     flags |= (getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0) |
               getattr(os, "O_BINARY", 0))
     fd = os.open(path, flags, 0o664)
@@ -2006,11 +2009,16 @@ def pi_ssh(pi, cmd, password=None, stdin_data=None, timeout=60, on_line=None):
         timer.start()
         try:
             if stdin_data is not None:
-                try:
-                    proc.stdin.write(stdin_data if isinstance(stdin_data, bytes) else stdin_data.encode("utf-8"))
-                    proc.stdin.close()
-                except OSError:
-                    pass
+                def feed():
+                    try:
+                        if hasattr(stdin_data, "read"):         # a file: sent in pieces
+                            shutil.copyfileobj(stdin_data, proc.stdin, 1024 * 1024)
+                        else:
+                            proc.stdin.write(stdin_data if isinstance(stdin_data, bytes) else stdin_data.encode("utf-8"))
+                        proc.stdin.close()
+                    except (OSError, ValueError):
+                        pass
+                threading.Thread(target=feed, daemon=True, name="ssh-in").start()
             for raw_line in proc.stdout:
                 line = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]|\r", "", raw_line.decode("utf-8", "replace")).rstrip("\n")
                 out.append(line)
@@ -2221,6 +2229,330 @@ def pi_status():
         x["online"] = u
         x["problem"] = pi_problem(x)
     return pis
+
+
+# ---- paired computers talk through files --------------------------------------------------------------------
+# A paired computer (reached over SSH with this dashboard's key) gets files in its dashboard's data folder:
+# remote/in/c-<id>.json is a command (start, stop, restart, move-in) and remote/in/move-<id>.zip a server moved
+# to it. Its dashboard does them within 10 seconds and keeps remote/status.json up to date, which is read back.
+# On Linux the files are written as the dashboard's own user, so the game server can't put commands there.
+REMOTE_DIR = os.path.join(DATA_DIR, "remote")
+REMOTE_IN = os.path.join(REMOTE_DIR, "in")
+REMOTE_LINUX = "/opt/beammp-server/.easyserver/remote"
+REMOTE_CMD_RE = re.compile(r"c-[0-9a-f]{8,32}\.json")
+REMOTE_ZIP_RE = re.compile(r"move-[0-9a-f]{8,32}\.zip")
+REMOTE_STALE = 600                   # status.json is rewritten at least every 5 minutes
+
+PI_WIN_REMOTE = r"""$ErrorActionPreference = 'Stop'
+$t = Get-ScheduledTask -TaskName 'BeamMP Dashboard (EasyServer)'
+$py = ($t.Actions | Select-Object -First 1).Arguments.Trim().Trim('"')
+$r = Join-Path (Split-Path (Split-Path $py)) 'data\remote'
+"""
+PI_WIN_STATUS = "[Console]::Out.Write([IO.File]::ReadAllText((Join-Path $r 'status.json')))\n"
+PI_WIN_PUT = r"""$in = Join-Path $r 'in'
+New-Item -ItemType Directory -Force $in | Out-Null
+$tmp = Join-Path $in '.%(n)s'
+$f = [IO.File]::Create($tmp)
+try { [Console]::OpenStandardInput().CopyTo($f) } finally { $f.Close() }
+Move-Item -Force $tmp (Join-Path $in '%(n)s')
+'ES_PUT_OK'
+"""
+
+
+def pi_key_ok(pi):
+    """Can this dashboard log in to it with its key alone? (Windows only lets an admin's key in.)"""
+    return pi.get("os") != "windows" or bool(pi.get("sudo"))
+
+
+def pi_can_remote(pi):
+    """Can its status be read and commands be sent? It needs EasyServer, the key, and (Linux) sudo without a password."""
+    return bool(pi.get("version")) and pi_key_ok(pi) and (pi.get("os") == "windows" or pi.get("root") or pi.get("sudo"))
+
+
+def pi_remote(pi, op, name="", data=None, timeout=60):
+    """op "status": read its remote/status.json. op "put": data (bytes or a file) becomes remote/in/<name>."""
+    if op == "put" and not (REMOTE_CMD_RE.fullmatch(name) or REMOTE_ZIP_RE.fullmatch(name)):
+        raise ValueError("bad name")
+    if pi.get("os") == "windows":
+        ps = PI_WIN_REMOTE + (PI_WIN_STATUS if op == "status" else PI_WIN_PUT % {"n": name})
+        return pi_ssh(pi, pi_ps(ps), stdin_data=data, timeout=timeout)
+    as_dash = "runuser -u beammp-dash -- " if pi.get("root") else "sudo -n -u beammp-dash "
+    if op == "status":
+        cmd = as_dash + "cat %s/status.json" % REMOTE_LINUX
+    else:
+        cmd = as_dash + "sh -c %s sh %s %s" % (pi_quote('cd /; umask 077; mkdir -p "$1/in" && cat > "$1/in/.$2" && '
+                                                        'mv -f "$1/in/.$2" "$1/in/$2" && echo ES_PUT_OK'), REMOTE_LINUX, name)
+    return pi_ssh(pi, cmd, stdin_data=data if data is not None else b"", timeout=timeout)
+
+
+def pi_remote_json(out):
+    try:
+        d = json.loads(out[out.index("{"):])
+    except ValueError:
+        return None
+    return d if isinstance(d, dict) else None
+
+
+def pi_remote_send(pi, action, **kw):
+    """Send a command; returns its id (the answer shows up in its status.json under "done")."""
+    cid = uuid.uuid4().hex
+    code, out = pi_remote(pi, "put", "c-%s.json" % cid, json.dumps(dict(kw, id=cid, action=action)).encode(), timeout=40)
+    if "ES_PUT_OK" not in out:
+        raise RuntimeError(pi_ssh_error(out) if code == 255 else
+                           "That computer didn't take it: " + (out.strip().splitlines() or ["no answer"])[-1][:200])
+    return cid
+
+
+def pi_overview():
+    """Every paired computer with what its EasyServer says about itself (cached for 10 seconds)."""
+    c = _PI.get("overview")
+    if c and time.time() - c[0] < 10:
+        return c[1]
+    pis = pi_status()
+
+    def one(x):
+        if not x.get("online"):
+            return {"error": "off"}
+        if not x.get("version"):
+            return {"error": "none"}
+        if not pi_can_remote(x):
+            return {"error": "nokey"}
+        try:
+            code, out = pi_remote(x, "status", timeout=25)
+        except Exception as e:
+            return {"error": "ssh", "detail": short_err(e)}
+        if code == 255:
+            return {"error": "ssh", "detail": pi_ssh_error(out)}
+        d = pi_remote_json(out)
+        if d is None:
+            return {"error": "nokey" if "password is required" in out else "old"}
+        servers = [{"id": str(v.get("id"))[:12], "name": str(v.get("name"))[:80], "state": str(v.get("state"))[:20],
+                    "players": int(v.get("players") or 0), "max": int(v.get("max") or 0), "map": str(v.get("map") or "")[:60]}
+                   for v in (d.get("servers") or [])[:10] if isinstance(v, dict)]
+        return {"servers": servers, "version": str(d.get("version") or "")[:20],
+                "stale": now() - int(d.get("t") or 0) > REMOTE_STALE}
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(8) as ex:
+        res = list(ex.map(one, pis))
+    for x, r in zip(pis, res):
+        x["remote"] = r
+    _PI["overview"] = (time.time(), pis)
+    return pis
+
+
+def remote_snapshot():
+    """This computer's servers, for status.json and the top of the All computers list."""
+    with LOCK:
+        insts = list(INSTANCES.values())
+    prev = getattr(_TL, "inst", None)
+    out = []
+    try:
+        for inst in insts:
+            use_server(inst.id)
+            try:
+                st = inst.server.status()["state"]
+            except Exception:
+                st = "unknown"
+            o = read_json(os.path.join(inst.STATS_DIR, "online.json"), None)
+            fresh = isinstance(o, dict) and now() - int(o.get("t", 0) or 0) < 120
+            try:
+                mx, mp = APP.max_players(), current_map()
+            except Exception:
+                mx, mp = 0, ""
+            out.append({"id": inst.id, "name": inst.name, "state": st, "players": len(o.get("players") or []) if fresh else 0,
+                        "max": mx, "map": mp or ""})
+    finally:
+        _TL.inst = prev
+    return out
+
+
+class _Capture:
+    """Stands in for a web request when a server moved here is put in place (Handler._import_zip answers through it)."""
+    _restore_undo = None
+
+    def __init__(self):
+        self.result = (500, {"ok": False, "error": "nothing happened"})
+
+    def send(self, code, obj):
+        self.result = (code, obj)
+
+    def fail(self, code, msg):
+        self.result = (code, {"ok": False, "error": msg})
+
+
+def pi_move_job(pi, iid, stop_here):
+    """Move this server to a paired computer: pack everything up, send it, let that computer put it in place,
+    then stop it here."""
+    job = {"kind": "move", "ip": pi["ip"], "state": "running", "t": now(), "lines": [], "password": "", "error": "", "web": ""}
+
+    def add(line):
+        job["lines"].append(line[:400])
+
+    def run():
+        tmp = None
+        try:
+            use_server(iid)
+            add("Packing up this server: its settings, mods, bans, stats, championships and lap times…")
+            fd, tmp = tempfile.mkstemp(suffix=".zip", dir=DATA_DIR)
+            os.close(fd)
+            build_export(tmp, True, include_games=True)
+            size = os.path.getsize(tmp)
+            mid = uuid.uuid4().hex
+            add("Sending it to %s (%d MB)…" % (pi.get("host") or pi["ip"], max(1, size // 10 ** 6)))
+            with open(tmp, "rb") as f:
+                code, out = pi_remote(pi, "put", "move-%s.zip" % mid, f, timeout=max(900, size // 10 ** 6))
+            if "ES_PUT_OK" not in out:
+                raise RuntimeError(pi_ssh_error(out) if code == 255 else
+                                   "Couldn't put it on that computer: " + (out.strip().splitlines() or ["no answer"])[-1][:200])
+            cid = pi_remote_send(pi, "move-in", file="move-%s.zip" % mid, source=server_name())
+            add("That computer is putting it in place - it checks every mod for viruses first, so this can take a while…")
+            deadline, res = time.time() + 1800, None
+            while res is None and time.time() < deadline:
+                time.sleep(10)
+                try:
+                    _, out = pi_remote(pi, "status", timeout=30)
+                except Exception:
+                    continue
+                d = pi_remote_json(out) or {}
+                res = next((x for x in d.get("done") or [] if isinstance(x, dict) and x.get("id") == cid), None)
+            if res is None:
+                raise RuntimeError("That computer didn't finish within 30 minutes. Open its dashboard to see where it got to.")
+            if not res.get("ok"):
+                raise RuntimeError("That computer said: " + str(res.get("note") or "it didn't work")[:300])
+            add(str(res.get("note") or "Done.")[:400])
+            if stop_here:
+                use_server(iid)
+                r = I().server.action("stop")
+                add("Stopped the server on this computer. It starts again if this computer restarts - uninstall it here "
+                    "once you're happy with the new one." if r.get("ok") else
+                    "Couldn't stop the server on this computer (%s) - stop it yourself." % (r.get("msg") or "failed"))
+            _PI.pop("overview", None)
+            job.update(state="done", web=pi.get("web") or pi_web(pi["ip"]))
+        except Exception as e:
+            job.update(state="failed", error=str(e) if isinstance(e, RuntimeError) else short_err(e))
+        finally:
+            job["ended"] = now()
+            if tmp:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+
+    _PI["job"] = job
+    threading.Thread(target=run, daemon=True, name="pi-move").start()
+    return job
+
+
+# ---- a copy of every backup somewhere else ---------------------------------------------------------------------
+BACKUP_COPY_DIR = "BeamMP EasyServer backups"
+
+
+def backup_tag():
+    """This computer's name in the copies' file names, so two computers can copy to the same place."""
+    return re.sub(r"[^A-Za-z0-9-]", "", socket.gethostname())[:20].strip("-") or "server"
+
+
+def backup_drives():
+    """Folders worth offering: USB drives and other disks."""
+    out = []
+    if IS_WIN:
+        try:
+            import ctypes
+            k32 = ctypes.windll.kernel32
+            mask, sysd = k32.GetLogicalDrives(), (os.environ.get("SystemDrive") or "C:").upper()
+            for i in range(26):
+                if mask >> i & 1:
+                    root = "%s:\\" % chr(65 + i)
+                    t = k32.GetDriveTypeW(root)
+                    if t == 2 or (t == 3 and root[:2] != sysd):
+                        out.append({"path": root, "usb": t == 2})
+        except Exception:
+            pass
+        return out
+    for base in ("/media", "/run/media", "/mnt"):
+        try:
+            for a in sorted(os.listdir(base)):
+                p = os.path.join(base, a)
+                cands = [p] if os.path.ismount(p) else [os.path.join(p, b) for b in sorted(os.listdir(p))] if os.path.isdir(p) else []
+                out += [{"path": c, "usb": base != "/mnt"} for c in cands if os.path.ismount(c)]
+        except OSError:
+            continue
+    return out[:12]
+
+
+def backup_folder_check(path):
+    """'' if backups can be copied into the folder, otherwise why not."""
+    if not path or not os.path.isabs(path):
+        return "Enter the whole path of the folder, like E:\\ or /media/usb"
+    if not os.path.isdir(path):
+        return "%s isn't there - is the USB drive plugged in?" % path
+    test = os.path.join(path, ".easyserver-test")
+    try:
+        with open(test, "w") as f:
+            f.write("ok")
+        os.remove(test)
+    except OSError:
+        return ("The dashboard isn't allowed to write in %s." % path) + ("" if IS_WIN else
+                " On Linux it runs as the user beammp-dash - give it a folder it can write to (sudo chown beammp-dash).")
+    return ""
+
+
+def backup_put_cmd(pi, name, prefix):
+    """A command that saves stdin as ~/easyserver-backups/<name> on the computer and keeps the newest 7 <prefix>*."""
+    if pi.get("os") == "windows":
+        return pi_ps(r"""$ErrorActionPreference = 'Stop'
+$d = Join-Path $HOME 'easyserver-backups'
+New-Item -ItemType Directory -Force $d | Out-Null
+$tmp = Join-Path $d '.%(n)s'
+$f = [IO.File]::Create($tmp)
+try { [Console]::OpenStandardInput().CopyTo($f) } finally { $f.Close() }
+Move-Item -Force $tmp (Join-Path $d '%(n)s')
+Get-ChildItem $d -Filter '%(p)s*.zip' | Sort-Object Name -Descending | Select-Object -Skip %(k)d | Remove-Item -Force
+'ES_PUT_OK'
+""" % {"n": name, "p": prefix, "k": BACKUP_KEEP})
+    return ("umask 077; mkdir -p ~/easyserver-backups && cd ~/easyserver-backups && cat > .%(n)s && mv -f .%(n)s %(n)s && "
+            "echo ES_PUT_OK && ls -1 -- %(p)s*.zip | sort -r | tail -n +%(k)d | xargs -r rm -f --"
+            % {"n": name, "p": prefix, "k": BACKUP_KEEP + 1})
+
+
+def copy_backups(files):
+    """Copy the backups just made to the place in Settings → Backups. Returns a note; raises RuntimeError."""
+    s = APP.settings
+    kind, tag = s.get("backup_copy"), backup_tag()
+    if kind == "folder":
+        root = s.get("backup_copy_path") or ""
+        why = backup_folder_check(root)
+        if why:
+            raise RuntimeError(why)
+        dest = os.path.join(root, BACKUP_COPY_DIR, tag)
+        os.makedirs(dest, exist_ok=True)
+        for n in files:
+            tmp = os.path.join(dest, n + ".tmp")
+            shutil.copyfile(os.path.join(BACKUP_DIR, n), tmp)
+            os.replace(tmp, os.path.join(dest, n))
+        for iid in {n.split("-")[0] for n in files}:
+            for old in sorted((x for x in os.listdir(dest) if x.startswith(iid + "-") and x.endswith(".zip")), reverse=True)[BACKUP_KEEP:]:
+                try:
+                    os.remove(os.path.join(dest, old))
+                except OSError:
+                    pass
+        return "Copied to %s" % dest
+    if kind == "computer":
+        pi = next((x for x in pi_saved() if x["ip"] == s.get("backup_copy_ip")), None)
+        if pi is None:
+            raise RuntimeError("The computer the copies go to isn't set up here any more - pick another one.")
+        if not pi_key_ok(pi):
+            raise RuntimeError("%s doesn't let this dashboard in with its key, so copies can't go there." % (pi.get("host") or pi["ip"]))
+        for n in files:
+            name = "%s-%s" % (tag, n)
+            with open(os.path.join(BACKUP_DIR, n), "rb") as f:
+                code, out = pi_ssh(pi, backup_put_cmd(pi, name, "%s-%s-" % (tag, n.split("-")[0])), stdin_data=f,
+                                   timeout=max(600, os.path.getsize(os.path.join(BACKUP_DIR, n)) // 10 ** 6))
+            if "ES_PUT_OK" not in out:
+                raise RuntimeError(pi_ssh_error(out) if code == 255 else
+                                   "Couldn't save it there: " + (out.strip().splitlines() or ["no answer"])[-1][:200])
+        return "Copied to the easyserver-backups folder on %s" % (pi.get("host") or pi["ip"])
+    return ""
 
 
 # ---- a ready-to-go SD card -------------------------------------------------------------------------------------
@@ -4822,9 +5154,17 @@ def discord_api(method, path, token=None, body=None, timeout=20):
 BACKUP_DIR = os.path.join(DATA_DIR, "backups")
 BACKUP_KEEP = 7
 STATS_EXPORT = ("allowlist.txt", "extras.txt", "moderation.txt", "bans.txt", "messages.txt")
+# a move also takes the stats, lap times, championships, drift and race results the plugin keeps
+GAMES_RE = re.compile(r"[\w.-]{1,64}\.(?:tsv|txt|log|json)")
+GAMES_SKIP = {"bridge.txt", "online.json", "livemap.txt", "livemap.json"}
+GAMES_MAX = 64 * 1024 ** 2
 
 
-def build_export(path, include_mods):
+def games_name_ok(name):
+    return bool(GAMES_RE.fullmatch(name)) and name not in GAMES_SKIP and name not in STATS_EXPORT
+
+
+def build_export(path, include_mods, include_games=False):
     """A settings (and optionally mods) zip of the current server - used by Export and nightly backups."""
     app = APP
     text = app.read_config_text()
@@ -4838,7 +5178,7 @@ def build_export(path, include_mods):
                                   "discord_enabled", "email_enabled")},
             "server_meta": {k: v for k, v in I().meta.items() if k in ("restart", "rotation")},
             "mods": [{"name": m["name"], "enabled": m["enabled"], "size": m["size"]} for m in mods],
-            "includes_mods": include_mods}
+            "includes_mods": include_mods, "includes_games": include_games}
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("ServerConfig.toml", text)
         z.writestr("easyserver-export.json", json.dumps(meta, indent=1))
@@ -4851,6 +5191,21 @@ def build_export(path, include_mods):
                     z.writestr(name, f.read(256 * 1024))
             except OSError:
                 pass
+        if include_games:
+            try:
+                names = sorted(os.listdir(I().STATS_DIR))
+            except OSError:
+                names = []
+            for name in names:
+                if not games_name_ok(name):
+                    continue
+                try:
+                    with open_shared(os.path.join(I().STATS_DIR, name), "rb") as f:
+                        data = f.read(GAMES_MAX + 1)
+                except OSError:
+                    continue
+                if len(data) <= GAMES_MAX:
+                    z.writestr("games/" + name, data)
         if include_mods:
             for m in mods:
                 src = os.path.join(I().CLIENT_DIR if m["enabled"] else I().DISABLED_DIR, m["name"])
@@ -8422,8 +8777,8 @@ VIEWER_WRITE = {"/api/logout", "/api/notifications/read", "/api/logs/explain", "
                 "/api/me/discord/link", "/api/me/discord/unlink"}
 OWNER_WRITE = {"/api/roles", "/api/teaminvite", "/api/discordlogin", "/api/plugins/fetch", "/api/plugins/upload", "/api/plugins/install", "/api/plugins/toggle", "/api/plugins/remove", "/api/plugins/adopt", "/api/users", "/api/password", "/api/2fa/begin", "/api/2fa/confirm", "/api/2fa/disable", "/api/remote",
                "/api/authkey", "/api/import", "/api/backups/restore", "/api/power/helper", "/api/servers/delete", "/api/statuspage", "/api/supporter",
-               "/api/pi"}
-ADMIN_GET = {"/api/pi", "/api/recap", "/api/export", "/api/backups/download", "/api/phoneapp", "/api/ntfy", "/api/power/offline",
+               "/api/pi", "/api/machines"}
+ADMIN_GET = {"/api/pi", "/api/machines", "/api/recap", "/api/export", "/api/backups/download", "/api/phoneapp", "/api/ntfy", "/api/power/offline",
              "/api/health/report", "/api/health/saved", "/api/users", "/api/activity", "/api/modpack", "/api/integrations", "/api/statuspage"}
 
 
@@ -9231,7 +9586,7 @@ class App:
                              ("duckdns", self.duck_tick), ("resources", self.resource_tick),
                              ("discord status", self.status_msg_tick), ("mod updates", self.mod_update_tick),
                              ("sleep", self.sleep_tick), ("health", self.health_tick), ("community", self.community_tick),
-                             ("upnp", self.upnp_tick), ("supporter", self.supporter_tick)):
+                             ("upnp", self.upnp_tick), ("supporter", self.supporter_tick), ("other computers", self.remote_tick)):
                 try:
                     fn()
                 except Exception as e:
@@ -9668,7 +10023,129 @@ class App:
             use_server("main")
             self.notifier.add("backup", "Backup failed", "Couldn't back up " + "; ".join(errors) +
                               ". Check that the disk isn't full.", "warning")
+        if made and self.settings.get("backup_copy"):
+            threading.Thread(target=self.copy_backups, args=(made,), daemon=True, name="backup-copy").start()
         return made, errors
+
+    def copy_backups(self, made):
+        use_server("main")
+        try:
+            note, ok = copy_backups(made), True
+        except Exception as e:
+            note, ok = str(e) if isinstance(e, RuntimeError) else short_err(e), False
+            self.notifier.add("backup", "Backup copy failed", "The backups were made on this computer, but copying them "
+                              "failed: %s" % note, "warning")
+        self.state["backup_copy"] = {"t": now(), "ok": ok, "note": note}
+        self.save_state()
+
+    # ---------- commands from the other computers' dashboards (see "paired computers talk through files")
+    def remote_tick(self):
+        if not hasattr(self, "remote_done"):
+            self.remote_done, self.remote_t, self.remote_last, self.remote_busy = [], 0, "", False
+        try:
+            names = sorted(os.listdir(REMOTE_IN))
+        except OSError:
+            names = []
+        changed = False
+        for n in names:
+            p = os.path.join(REMOTE_IN, n)
+            if REMOTE_CMD_RE.fullmatch(n):
+                cmd = read_json(p, None)
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+                if not isinstance(cmd, dict) or not re.fullmatch(r"[0-9a-f]{8,32}", str(cmd.get("id") or "")):
+                    continue
+                if cmd.get("action") == "move-in":
+                    if self.remote_busy:
+                        self.remote_answer(cmd, {"ok": False, "note": "It's already putting a server in place - try again after."})
+                    else:
+                        self.remote_busy = True
+                        threading.Thread(target=self.remote_move_in, args=(cmd,), daemon=True, name="move-in").start()
+                    continue
+                self.remote_answer(cmd, self.remote_do(cmd))
+                changed = True
+            else:
+                try:                    # a move's file waits a day for its command (and a half-sent one, too)
+                    old = now() - os.path.getmtime(p) > 86400
+                    if (old or not (REMOTE_ZIP_RE.fullmatch(n) or n.startswith("."))) and (os.path.isfile(p) or os.path.islink(p)):
+                        os.remove(p)
+                except OSError:
+                    pass
+        if changed or now() - self.remote_t >= 30:
+            self.remote_write()
+
+    def remote_answer(self, cmd, r):
+        self.remote_done = ([dict(r, id=str(cmd["id"]), action=str(cmd.get("action"))[:20], t=now())] + self.remote_done)[:10]
+        self.remote_last = ""
+        self.remote_write()
+
+    def remote_write(self):
+        self.remote_t = now()
+        d = {"version": EASY_VERSION, "host": socket.gethostname()[:40], "servers": remote_snapshot(), "done": self.remote_done}
+        key = json.dumps(d, sort_keys=True)
+        if key == self.remote_last and now() - getattr(self, "remote_wrote", 0) < REMOTE_STALE // 2:
+            return
+        os.makedirs(REMOTE_IN, exist_ok=True)
+        if not IS_WIN:
+            os.chmod(REMOTE_DIR, 0o700)
+            os.chmod(REMOTE_IN, 0o700)
+        write_json(os.path.join(REMOTE_DIR, "status.json"), dict(d, t=now()))
+        self.remote_last, self.remote_wrote = key, now()
+
+    def remote_do(self, cmd):
+        act = cmd.get("action")
+        use_server("main")
+        if act not in ("start", "stop", "restart"):
+            return {"ok": False, "note": "This EasyServer doesn't know that command - update it."}
+        if act == "start" and not I().meta.get("reviewed"):
+            return {"ok": False, "note": "Open this computer's dashboard once and look over the settings first."}
+        r = self.server.action(act)
+        return {"ok": bool(r.get("ok")), "note": {"start": "Started.", "stop": "Stopped.", "restart": "Restarted."}[act]
+                if r.get("ok") else (r.get("msg") or "It didn't work")}
+
+    def remote_move_in(self, cmd):
+        """A server moved here from another computer: a backup of this one first, then its settings, mods, bans,
+        stats and games data, then start it."""
+        name = str(cmd.get("file") or "")
+        p = os.path.join(REMOTE_IN, name)
+        try:
+            use_server("main")
+            if not REMOTE_ZIP_RE.fullmatch(name) or not os.path.isfile(p) or os.path.islink(p):
+                return self.remote_answer(cmd, {"ok": False, "note": "The server's file didn't arrive - try again."})
+            try:
+                undo = make_backup(I(), False)
+            except Exception as e:
+                return self.remote_answer(cmd, {"ok": False, "note": "Couldn't save this computer's own settings first, so "
+                                                "nothing was changed (%s)" % short_err(e)})
+            cap = _Capture()
+            Handler._import_zip(cap, p, {"settings": "1", "mods": "1", "games": "1"})
+            code, body = cap.result
+            if code != 200:
+                return self.remote_answer(cmd, {"ok": False, "note": body.get("error") or "It couldn't be put in place"})
+            rep = body.get("report") or {}
+            set_server_meta("main", reviewed=True)
+            src = re.sub(r"[\x00-\x1f]", "", str(cmd.get("source") or "another computer"))[:80]
+            self.notifier.add("backup", "A server moved here", "%s was moved to this computer. How this computer's server was "
+                              "before is saved as a backup (%s)." % (src, undo), "info")
+            r = self.server.action("restart" if self.server.status()["state"] == "running" else "start")
+            nm, ng, nb = len(rep.get("mods_added") or []), len(rep.get("games") or []), len(rep.get("mods_blocked") or [])
+            note = "Moved: the settings, %d mod%s and %d file%s of stats and games%s." % (
+                nm, "" if nm == 1 else "s", ng, "" if ng == 1 else "s",
+                (" - %d mod%s blocked by the virus check" % (nb, " was" if nb == 1 else "s were")) if nb else "")
+            note += " The server is starting there." if r.get("ok") else " Start the server there yourself (%s)." % (r.get("msg") or "it didn't start")
+            if not I().has_authkey():
+                note += " It has no AuthKey yet: put yours in on its Settings page so it shows in the BeamMP server list."
+            self.remote_answer(cmd, {"ok": True, "note": note})
+        except Exception as e:
+            self.remote_answer(cmd, {"ok": False, "note": "It stopped with an error: " + short_err(e)})
+        finally:
+            self.remote_busy = False
+            try:
+                os.remove(p)
+            except OSError:
+                pass
 
     def duck_tick(self, force=False):
         """Keep name.duckdns.org pointing at this home's current public IP."""
@@ -11723,7 +12200,9 @@ class Handler(BaseHTTPRequestHandler):
                         "desc_modsize": bool(I().meta.get("desc_modsize")),
                         "light": bool(I().meta.get("light_maps")), "current_map": current_map(),
                         "all_maps_size": sum(m["size"] for m in mods if (m["enabled"] or m.get("parked")) and m["maps"]),
-                        "storage": mods_storage(I(), mods), "sets": mod_sets_view(I(), mods)})
+                        "storage": mods_storage(I(), mods), "sets": mod_sets_view(I(), mods),
+                        "upload_mbit": APP.settings.get("upload_mbit") or 0,
+                        "limit_kbps": int((I().meta.get("limits") or {}).get("upload_kbps") or 0)})
 
     def post_mods_sets(self, q):
         """Mod sets: save the mods in use now under a name, switch to a saved set, or delete one."""
@@ -13169,7 +13648,11 @@ class Handler(BaseHTTPRequestHandler):
     def get_backups(self, q):
         s = APP.settings
         self.send(200, {"on": bool(s.get("backup_on")), "at": s.get("backup_at"), "mods": bool(s.get("backup_mods")),
-                        "keep": BACKUP_KEEP, "items": list_backups(I().id), "folder": BACKUP_DIR})
+                        "keep": BACKUP_KEEP, "items": list_backups(I().id), "folder": BACKUP_DIR,
+                        "copy": s.get("backup_copy") or "", "copy_path": s.get("backup_copy_path") or "",
+                        "copy_ip": s.get("backup_copy_ip") or "", "copy_last": APP.state.get("backup_copy"),
+                        "drives": backup_drives(), "copy_dir": BACKUP_COPY_DIR,
+                        "computers": [{"ip": x["ip"], "name": x.get("host") or x["ip"]} for x in pi_saved() if pi_key_ok(x)]})
 
     def post_backups(self, q):
         b = self.body_json()
@@ -13183,6 +13666,25 @@ class Handler(BaseHTTPRequestHandler):
             if not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", at):
                 return self.fail(400, "Enter the time like 03:30")
             upd["backup_at"] = "%02d:%s" % (int(at.split(":")[0]), at.split(":")[1])
+        if "copy" in b:
+            kind = b["copy"] if b["copy"] in ("", "folder", "computer") else None
+            if kind is None:
+                return self.fail(400, "Unknown place for the copies")
+            if _TL.user != "owner":
+                return self.fail(403, "Only the owner can choose where copies of the backups go.")
+            upd["backup_copy"] = kind
+            if kind == "folder":
+                path = str(b.get("copy_path") or "").strip().strip('"')[:400]
+                why = backup_folder_check(path)
+                if why:
+                    return self.fail(400, why)
+                upd["backup_copy_path"] = path
+            if kind == "computer":
+                ip = str(b.get("copy_ip") or "")
+                pi = next((x for x in pi_saved() if x["ip"] == ip), None)
+                if pi is None or not pi_key_ok(pi):
+                    return self.fail(400, "Pick one of the computers set up under Other computers at home")
+                upd["backup_copy_ip"] = ip
         APP.settings.update(upd)
         self.send(200, {"ok": True, "note": "Saved."})
 
@@ -13190,7 +13692,8 @@ class Handler(BaseHTTPRequestHandler):
         made, errors = APP.run_backups(bool(self.body_json().get("mods")))
         if errors:
             return self.fail(500, "; ".join(errors))
-        self.send(200, {"ok": True, "note": "Backed up %d server%s." % (len(made), "" if len(made) == 1 else "s")})
+        self.send(200, {"ok": True, "note": "Backed up %d server%s." % (len(made), "" if len(made) == 1 else "s") +
+                        (" Copying them to the other place now…" if APP.settings.get("backup_copy") else "")})
 
     def get_backups_download(self, q):
         name = str(q.get("file") or "")
@@ -13255,6 +13758,45 @@ class Handler(BaseHTTPRequestHandler):
             return self.fail(400, "Enter your upload speed in Mbit/s, like 20")
         APP.settings.update({"upload_mbit": round(v, 1)})
         self.send(200, {"ok": True, "note": "Saved."})
+
+    # ---------- all computers on one page
+    def get_machines(self, q):
+        job = dict(_PI["job"]) if _PI["job"] else None
+        if job:
+            job["password"] = ""
+        self.send(200, {"here": {"host": socket.gethostname()[:40], "version": EASY_VERSION, "servers": remote_snapshot(),
+                                 "ip": pi_lan_ip()},
+                        "machines": pi_overview(), "job": job})
+
+    def post_machines(self, q):
+        b = self.body_json()
+        act = b.get("action")
+        ip = str(b.get("ip") or "")
+        pi = next((x for x in pi_saved() if x["ip"] == ip), None)
+        if pi is None:
+            return self.fail(404, "That computer isn't set up here")
+        if not pi_can_remote(pi):
+            return self.fail(400, "This dashboard can't control that computer yet - update EasyServer on it first.")
+        if act in ("start", "stop", "restart"):
+            try:
+                pi_remote_send(pi, act)
+            except RuntimeError as e:
+                return self.fail(502, str(e))
+            _PI.pop("overview", None)
+            return self.send(200, {"ok": True, "note": "Sent. It does it within 10 seconds."})
+        if act == "move":
+            if _TL.user != "owner":
+                return self.fail(403, "Only the owner can move the server.")
+            if _PI["job"] and _PI["job"]["state"] == "running":
+                return self.fail(409, "Wait until the other job is done")
+            st = next((x["remote"] for x in pi_overview() if x["ip"] == ip), {})
+            if st.get("error") == "old":
+                return self.fail(400, "Update EasyServer on that computer first (the Update button), then move the server.")
+            if st.get("error"):
+                return self.fail(400, "Can't reach EasyServer on that computer right now.")
+            pi_move_job(pi, I().id, bool(b.get("stop_here", True)))
+            return self.send(200, {"ok": True})
+        return self.fail(400, "Unknown action")
 
     # ---------- Raspberry Pi on the same network
     def get_pi(self, q):
@@ -14608,12 +15150,31 @@ class Handler(BaseHTTPRequestHandler):
                 shared_write(I().BANS_FILE, z.read("bans.txt").decode("utf-8", "replace"))
                 write_bans(read_bans())
                 report.setdefault("restored", []).append("bans.txt")
+            if q.get("games") == "1":
+                for n in names:
+                    gm = re.fullmatch(r"games/([^/]+)", n)
+                    if not gm:
+                        continue
+                    zi = z.getinfo(n)
+                    if not games_name_ok(gm.group(1)) or zi.file_size > GAMES_MAX:
+                        report["skipped"].append(n[:120])
+                        continue
+                    dest = os.path.join(I().STATS_DIR, gm.group(1))
+                    try:
+                        os.unlink(dest + ".tmp")
+                    except OSError:
+                        pass
+                    with z.open(zi) as src, open_shared(dest + ".tmp", "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+                    os.replace(dest + ".tmp", dest)
+                    report.setdefault("games", []).append(gm.group(1))
             if q.get("mods", "1") == "1":
                 total = 0
                 for n in names:
                     m = re.fullmatch(r"(mods|mods-disabled)/([^/]+)", n)
                     if not m:
-                        if n not in ("ServerConfig.toml", "easyserver-export.json", "modpack.json", "README.txt") + STATS_EXPORT and not n.endswith("/"):
+                        if n not in ("ServerConfig.toml", "easyserver-export.json", "modpack.json", "README.txt") + STATS_EXPORT \
+                                and not n.endswith("/") and not (n.startswith("games/") and q.get("games") == "1"):
                             report["skipped"].append(n[:120])
                         continue
                     name = safe_zip_name(m.group(2))
