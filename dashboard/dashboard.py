@@ -1759,7 +1759,7 @@ def laps_summary(limit=10, only_map=None):
 PI_OUIS = ("b8:27:eb", "dc:a6:32", "e4:5f:01", "28:cd:c1", "d8:3a:dd", "2c:cf:67", "88:a2:9e")
 PI_DIR = os.path.join(DATA_DIR, "pi")
 PI_INSTALLER = "https://raw.githubusercontent.com/%s/main/linux/install.sh" % REPO
-PI_USER_RE = re.compile(r"[a-z_][a-z0-9_-]{0,31}")
+PI_USER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_. -]{0,31}")
 PI_PORT = 30815
 _PI_LOCK = threading.Lock()
 _PI = {"scan": None, "scanning": False, "job": None}
@@ -1823,6 +1823,53 @@ def pi_is_pi(mac):
     return bool(mac) and mac[:8] in PI_OUIS
 
 
+def pi_banner(ip):
+    """The SSH greeting ("SSH-2.0-OpenSSH_9.2p1 Debian-2+deb12u3"): "" when nothing answers on port 22,
+    "?" when something does but says nothing."""
+    try:
+        with socket.create_connection((ip, 22), timeout=0.7) as c:
+            c.settimeout(1.5)
+            try:
+                return c.recv(256).decode("latin-1").split("\n")[0].strip()[:120] or "?"
+            except OSError:
+                return "?"
+    except OSError:
+        return ""
+
+
+def pi_os_from_banner(b):
+    b = (b or "").lower()
+    for key in ("windows", "raspbian", "ubuntu", "debian"):
+        if key in b:
+            return key
+    return ""
+
+
+def pi_problem(pi):
+    """Why EasyServer can't go on this computer ("" = it can)."""
+    if pi.get("os") == "windows":
+        return "" if pi.get("admin", True) else ("This Windows account isn't an administrator. Forget it and set it up again "
+                                                  "with an administrator account of that PC.")
+    if pi.get("truenas"):
+        return "TrueNAS doesn't allow installing programs on it, so EasyServer can't go there."
+    oses = set(str(pi.get("os_like", "")).split(",")) | {str(pi.get("os", ""))}
+    if pi.get("os") and not oses & {"debian", "ubuntu", "raspbian"}:
+        return "EasyServer needs Ubuntu, Debian or Raspberry Pi OS - this computer runs %s." % pi.get("os")
+    if pi.get("bits") == 32:
+        return ("This Raspberry Pi runs the 32-bit Raspberry Pi OS. The BeamMP server needs the 64-bit one - write that to the card "
+                "and set it up again.") if pi.get("kind") == "pi" else \
+            "This computer runs a 32-bit system. The BeamMP server needs a 64-bit one."
+    if pi.get("arch") and pi["arch"] not in ("x86_64", "aarch64", "amd64", "arm64"):
+        return "The BeamMP server doesn't run on this kind of processor (%s)." % pi["arch"]
+    return ""
+
+
+def pi_ps(script):
+    """A PowerShell script as one command for Windows' SSH (which starts cmd.exe)."""
+    return "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " + \
+        base64.b64encode(script.encode("utf-16-le")).decode()
+
+
 def pi_saved():
     d = read_json(os.path.join(PI_DIR, "pis.json"), [])
     return [x for x in d if isinstance(x, dict) and pi_private(x.get("ip")) and PI_USER_RE.fullmatch(str(x.get("user", "")))] \
@@ -1856,7 +1903,7 @@ def pi_scan():
     ips = ["%s.%d" % (base, i) for i in range(1, 255) if "%s.%d" % (base, i) != me]
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(64) as ex:
-        ssh = dict(zip(ips, ex.map(lambda ip: pi_open(ip, 22), ips)))   # also fills the ARP table
+        ban = dict(zip(ips, ex.map(pi_banner, ips)))                    # also fills the ARP table
         named = ex.submit(lambda: socket.gethostbyname("raspberrypi.local"))
         try:
             named_ip = named.result(timeout=4)
@@ -1872,11 +1919,28 @@ def pi_scan():
     known = {x["ip"] for x in pi_saved()}
     found = []
     for ip in ips:
-        mac = macs.get(ip, "")
-        if pi_is_pi(mac) or ip == named_ip or ip in known:
-            found.append({"ip": ip, "mac": mac, "pi": pi_is_pi(mac) or ip == named_ip, "ssh": ssh.get(ip, False),
+        mac, os_ = macs.get(ip, ""), pi_os_from_banner(ban.get(ip))
+        is_pi = pi_is_pi(mac) or ip == named_ip or os_ == "raspbian"
+        if is_pi or os_ or ip in known:
+            found.append({"ip": ip, "mac": mac, "pi": is_pi, "os": os_, "ssh": bool(ban.get(ip)),
+                          "kind": "pi" if is_pi else ("windows" if os_ == "windows" else "pc"),
                           "easyserver": pi_open(ip, PI_PORT), "known": ip in known})
+    with ThreadPoolExecutor(16) as ex:      # its name on the network, when the router or the computer says it
+        names = {f["ip"]: ex.submit(pi_hostname, f["ip"]) for f in found}
+        for f in found:
+            try:
+                f["name"] = names[f["ip"]].result(timeout=3)
+            except Exception:
+                f["name"] = ""
     return {"t": now(), "me": me, "found": found, "error": ""}
+
+
+def pi_hostname(ip):
+    try:
+        n = socket.gethostbyaddr(ip)[0].split(".")[0]
+    except (OSError, UnicodeError):
+        return ""
+    return n[:40] if re.fullmatch(r"[\w-]+", n) and n != ip.split(".")[0] else ""
 
 
 def pi_ssh_exe(name="ssh"):
@@ -1964,37 +2028,75 @@ def pi_ssh(pi, cmd, password=None, stdin_data=None, timeout=60, on_line=None):
 def pi_ssh_error(out):
     o = out.lower()
     if "permission denied" in o:
-        return "The Raspberry Pi said no - check the user name and password you set in Raspberry Pi Imager."
+        return "It said no - check the user name and password (on a Raspberry Pi: the ones you set in Raspberry Pi Imager)."
     if "connection refused" in o:
-        return "SSH is turned off on this Raspberry Pi. In Raspberry Pi Imager's settings turn on Enable SSH, write the card again and start the Pi with it."
+        return "SSH is turned off on that computer, so it can't be set up from here - the steps under it say how to turn it on."
     if "host key verification failed" in o or "remote host identification has changed" in o:
-        return "This device isn't the Raspberry Pi set up here before (its identity changed). If you put a new card in it, press Forget and set it up again."
+        return "This isn't the computer set up here before (its identity changed). If you reinstalled it or put a new card in it, press Forget and set it up again."
     if "timed out" in o or "no route" in o or "unreachable" in o:
-        return "Couldn't reach the Raspberry Pi - is it switched on and on the same Wi-Fi?"
+        return "Couldn't reach it - is it switched on and on the same network?"
     return "Couldn't connect: " + (out.strip().splitlines() or ["unknown error"])[-1][:200]
 
 
+PI_PAIR_WIN = r"""$ErrorActionPreference = 'Stop'
+$k = '%s'
+$admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if ($admin) {
+    $f = Join-Path $env:ProgramData 'ssh\administrators_authorized_keys'
+    if (-not ((Test-Path $f) -and ((Get-Content $f) -contains $k))) { Add-Content -Path $f -Value $k -Encoding ascii }
+    icacls.exe $f /inheritance:r /grant '*S-1-5-32-544:F' /grant '*S-1-5-18:F' | Out-Null
+}
+'ES_BITS=' + $(if ([Environment]::Is64BitOperatingSystem) { 64 } else { 32 })
+'ES_HOST=' + $env:COMPUTERNAME
+'ES_ADMIN=' + [int]$admin
+"""
+
+
 def pi_pair(ip, user, password):
-    """Log in once with the password, leave this dashboard's key there, and find out whether sudo needs a password."""
+    """Log in once with the password, leave this dashboard's key there, and learn what the computer is."""
     _, pub = pi_key()
     pi = {"ip": ip, "user": user}
-    code, out = pi_ssh(pi, "umask 077; mkdir -p ~/.ssh && touch ~/.ssh/authorized_keys && "
-                           "(grep -qxF %s ~/.ssh/authorized_keys || echo %s >> ~/.ssh/authorized_keys) && "
-                           "echo ES_BITS=$(getconf LONG_BIT) ES_HOST=$(hostname); sudo -n true 2>/dev/null && echo ES_SUDO=1; true"
-                       % (pi_quote(pub), pi_quote(pub)), password=password, timeout=45)
+    win = pi_os_from_banner(pi_banner(ip)) == "windows"
+    if win:
+        cmd = pi_ps(PI_PAIR_WIN % pub.replace("'", ""))
+    else:
+        cmd = ("umask 077; mkdir -p ~/.ssh && touch ~/.ssh/authorized_keys && "
+               "(grep -qxF %s ~/.ssh/authorized_keys || echo %s >> ~/.ssh/authorized_keys) && "
+               "echo ES_BITS=$(getconf LONG_BIT) ES_HOST=$(hostname) ES_ARCH=$(uname -m) ES_UID=$(id -u); "
+               ". /etc/os-release 2>/dev/null; echo \"ES_OS=$ID ES_LIKE=$(echo $ID_LIKE | tr ' ' ',')\"; "
+               "echo ES_MODEL=$(tr -d '\\0' </proc/device-tree/model 2>/dev/null | tr ' ' '_'); "
+               "[ -e /usr/bin/midclt ] && echo ES_TRUENAS=1; [ -e /usr/sbin/omv-confdbadm ] && echo ES_OMV=1; "
+               "sudo -n true 2>/dev/null && echo ES_SUDO=1; true") % (pi_quote(pub), pi_quote(pub))
+    code, out = pi_ssh(pi, cmd, password=password, timeout=60)
     if code == 255 or "ES_BITS=" not in out:
         raise RuntimeError(pi_ssh_error(out))
     code2, out2 = pi_ssh(pi, "echo ES_KEY_OK", timeout=30)
-    if "ES_KEY_OK" not in out2:
-        raise RuntimeError("Logged in, but the Raspberry Pi didn't accept this computer's key: " + pi_ssh_error(out2))
-    bits = re.search(r"ES_BITS=(\d+)", out)
-    host = re.search(r"ES_HOST=([\w.-]{1,63})", out)
-    return pi_remember(ip, user=user, mac=pi_neighbors().get(ip, ""), sudo="ES_SUDO=1" in out,
-                       bits=int(bits.group(1)) if bits else 0, host=host.group(1) if host else "")
+    if "ES_KEY_OK" not in out2 and not win:
+        raise RuntimeError("Logged in, but the computer didn't accept this dashboard's key: " + pi_ssh_error(out2))
+
+    def val(k, pat=r"[\w.,-]{1,63}"):
+        m = re.search(r"\b%s=(%s)" % (k, pat), out)
+        return m.group(1) if m else ""
+    bits = val("ES_BITS", r"\d+")
+    info = {"user": user, "mac": pi_neighbors().get(ip, ""), "bits": int(bits) if bits else 0, "host": val("ES_HOST")}
+    if win:
+        admin = val("ES_ADMIN") == "1"
+        # Windows only lets an admin's key in through administrators_authorized_keys, so it may still say no to
+        # the key; then updates ask for the password again.
+        info.update(os="windows", os_like="", arch="", kind="windows", admin=admin, sudo="ES_KEY_OK" in out2, root=False,
+                    truenas=False, omv=False, model="")
+    else:
+        model = val("ES_MODEL", r"[\w.,-]{1,80}").replace("_", " ")
+        info.update(os=val("ES_OS"), os_like=val("ES_LIKE"), arch=val("ES_ARCH"), root=val("ES_UID") == "0",
+                    sudo="ES_SUDO=1" in out or val("ES_UID") == "0", truenas="ES_TRUENAS=1" in out, omv="ES_OMV=1" in out,
+                    model=model, kind="pi" if "Raspberry" in model or val("ES_OS") == "raspbian" else
+                    ("nas" if "ES_OMV=1" in out or "ES_TRUENAS=1" in out else "pc"))
+    return pi_remember(ip, **info)
 
 
 def pi_job(kind, pi, name="", sudo_pw=None):
-    """Install or update EasyServer on the Pi (in the background): download the installer here, copy it over, run it."""
+    """Install or update EasyServer on the computer (in the background). Linux: download the installer here, copy it over,
+    run it. Windows: it downloads EasyServer itself and runs install.ps1 without the setup window."""
     job = {"kind": kind, "ip": pi["ip"], "state": "running", "t": now(), "lines": [], "password": "", "error": "", "web": ""}
 
     def add(line):
@@ -2007,40 +2109,72 @@ def pi_job(kind, pi, name="", sudo_pw=None):
 
     def run():
         try:
+            if pi.get("os") == "windows":
+                return run_windows()
             add("Downloading the installer…")
             req = urllib.request.Request(PI_INSTALLER, headers={"User-Agent": "BeamMP-EasyServer/%s (Raspberry Pi setup)" % EASY_VERSION})
             with urllib.request.urlopen(req, timeout=30) as r:
                 script = r.read(2 * 1024 * 1024)
             if not script.startswith(b"#!") or b"BeamMP EasyServer" not in script:
                 raise RuntimeError("The installer that came from GitHub doesn't look right - try again later.")
-            add("Copying it to the Raspberry Pi at %s…" % pi["ip"])
+            add("Copying it to the computer at %s…" % pi["ip"])
             code, out = pi_ssh(pi, "umask 077; cat > ~/.easyserver-install.sh && echo ES_COPIED", stdin_data=script, timeout=60)
             if "ES_COPIED" not in out:
                 raise RuntimeError(pi_ssh_error(out))
             args = ["--unattended", "--mod-page", "yes", "--laptop-mode", "no"]
             if kind == "install" and name:
                 args += ["--name", name]
-            sudo = "sudo -n" if pi.get("sudo") else "sudo -S -p ''"
-            add("Running it - this takes 5 to 15 minutes on a Raspberry Pi…")
-            code, out = pi_ssh(pi, "%s bash ~/.easyserver-install.sh %s; c=$?; rm -f ~/.easyserver-install.sh; exit $c"
+            sudo = "" if pi.get("root") else ("sudo -n " if pi.get("sudo") else "sudo -S -p '' ")
+            add("Running it - this takes 5 to 15 minutes on a Raspberry Pi, less on a PC…")
+            code, out = pi_ssh(pi, "%sbash ~/.easyserver-install.sh %s; c=$?; rm -f ~/.easyserver-install.sh; exit $c"
                                % (sudo, " ".join(pi_quote(a) for a in args)),
-                               stdin_data=None if pi.get("sudo") else (sudo_pw or "") + "\n", timeout=2400, on_line=add)
-            if code == 255:
-                raise RuntimeError(pi_ssh_error(out))
-            if code != 0:
-                raise RuntimeError("The installer stopped with an error - the last lines above say why.")
-            ver = re.search(r"BeamMP EasyServer v([\d.]+)", out)
-            web = pi_web(pi["ip"])
-            pi_remember(pi["ip"], version=ver.group(1) if ver else "", updated=now(), web=web)
-            job.update(state="done", web=web)
+                               stdin_data=None if (pi.get("sudo") or pi.get("root")) else (sudo_pw or "") + "\n",
+                               timeout=2400, on_line=add)
+            finish(code, out)
         except Exception as e:
             job.update(state="failed", error=str(e) if isinstance(e, RuntimeError) else short_err(e))
         finally:
             job["ended"] = now()
 
+    def finish(code, out):
+        if code == 255:
+            raise RuntimeError(pi_ssh_error(out))
+        if code != 0:
+            raise RuntimeError("The installer stopped with an error - the last lines above say why.")
+        ver = re.search(r"BeamMP EasyServer v([\d.]+)", out)
+        web = pi_web(pi["ip"])
+        pi_remember(pi["ip"], version=ver.group(1) if ver else "", updated=now(), web=web)
+        job.update(state="done", web=web)
+
+    def run_windows():
+        """Windows downloads EasyServer itself and runs its installer without the setup window. The first install logs
+        in with the password: only then can Windows lock away the keys EasyServer saves (it ties them to the login)."""
+        add("Windows PC at %s: downloading EasyServer there and running its installer…" % pi["ip"])
+        args = "-Unattended" + (" -Update" if kind == "update" else "")
+        if kind == "install" and name:
+            args += " -ServerName '%s'" % name.replace("'", "''")
+        code, out = pi_ssh(pi, pi_ps(PI_WIN_RUN % (ROLLING_ZIP % REPO, args)), password=sudo_pw,
+                           timeout=2400, on_line=add)
+        finish(code, out)
+
     _PI["job"] = job
     threading.Thread(target=run, daemon=True, name="pi-" + kind).start()
     return job
+
+
+PI_WIN_RUN = r"""$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+$d = Join-Path $env:TEMP 'easyserver-setup'
+Remove-Item -Recurse -Force $d -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force $d | Out-Null
+Invoke-WebRequest -Uri '%s' -OutFile (Join-Path $d 'es.zip') -UseBasicParsing
+Expand-Archive -Path (Join-Path $d 'es.zip') -DestinationPath $d -Force
+$src = Get-ChildItem $d -Directory | Select-Object -First 1
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $src.FullName 'windows\install.ps1') %s
+$c = $LASTEXITCODE
+Remove-Item -Recurse -Force $d -ErrorAction SilentlyContinue
+exit $c
+"""
 
 
 def pi_web(ip):
@@ -2055,6 +2189,29 @@ def pi_web(ip):
         return "http://%s:%d/" % (ip, PI_PORT)
 
 
+def pi_here():
+    """This computer's Wi-Fi name and country, to start the SD card form with (never its Wi-Fi password)."""
+    if not IS_WIN:
+        return {"wifi": "", "country": ""}
+    if "here" not in _PI or time.time() - _PI["here"][0] > 300:
+        wifi, country = "", ""
+        try:
+            out = subprocess.run(["netsh", "wlan", "show", "interfaces"], capture_output=True, timeout=10, **_NOWIN).stdout
+            m = re.search(rb"^\s*SSID\s*:\s*(.+?)\s*$", out, re.M)
+            wifi = m.group(1).decode("utf-8", "replace")[:32] if m else ""
+        except (OSError, subprocess.SubprocessError):
+            pass
+        try:
+            out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                                  "[Globalization.RegionInfo]::CurrentRegion.TwoLetterISORegionName"],
+                                 capture_output=True, text=True, timeout=20, **_NOWIN).stdout.strip().upper()
+            country = out if PI_COUNTRY_RE.fullmatch(out) else ""
+        except (OSError, subprocess.SubprocessError):
+            pass
+        _PI["here"] = (time.time(), wifi, country)
+    return {"wifi": _PI["here"][1], "country": _PI["here"][2]}
+
+
 def pi_status():
     pis = pi_saved()
     from concurrent.futures import ThreadPoolExecutor
@@ -2062,7 +2219,440 @@ def pi_status():
         up = list(ex.map(lambda x: pi_open(x["ip"], PI_PORT, 1.5), pis))
     for x, u in zip(pis, up):
         x["online"] = u
+        x["problem"] = pi_problem(x)
     return pis
+
+
+# ---- a ready-to-go SD card -------------------------------------------------------------------------------------
+# Like Raspberry Pi Imager: Raspberry Pi OS Lite (64-bit) plus cloud-init files on its boot partition, so the Pi
+# joins the Wi-Fi, makes the user and lets this dashboard's key in on its first start. Then the dashboard finds it
+# and installs EasyServer. Windows only (writing a card needs Windows' permission, asked on the screen).
+PI_OS_LIST = "https://downloads.raspberrypi.com/os_list_imagingutility_v4.json"
+PI_OS_NAME = "Raspberry Pi OS Lite (64-bit)"
+PI_CARD_MIN = 4 * 1000 ** 3
+PI_CARD_MAX = 520 * 1000 ** 3        # bigger is a USB hard disk, not a card
+PI_WIFI_RE = re.compile(r"[^\x00-\x1f]{1,32}")
+PI_COUNTRY_RE = re.compile(r"[A-Z]{2}")
+_B64CRYPT = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+
+
+def sha512_crypt(password, salt=None, rounds=5000):
+    """The "$6$" password hash Linux keeps in /etc/shadow (Python 3.13 has no crypt module any more)."""
+    if salt is None:
+        salt = "".join(secrets.choice(_B64CRYPT) for _ in range(16))
+    pw, sl = password.encode("utf-8"), salt[:16].encode("ascii")
+    b = hashlib.sha512(pw + sl + pw).digest()
+    a = hashlib.sha512(pw + sl)
+    n = len(pw)
+    while n > 64:
+        a.update(b)
+        n -= 64
+    a.update(b[:n])
+    n = len(pw)
+    while n:
+        a.update(b if n & 1 else pw)
+        n >>= 1
+    a = a.digest()
+    dp = hashlib.sha512(pw * len(pw)).digest()
+    p_ = (dp * (len(pw) // 64 + 1))[:len(pw)]
+    ds = hashlib.sha512(sl * (16 + a[0])).digest()
+    s_ = (ds * (len(sl) // 64 + 1))[:len(sl)]
+    c = a
+    for i in range(rounds):
+        h = hashlib.sha512()
+        h.update(p_ if i & 1 else c)
+        if i % 3:
+            h.update(s_)
+        if i % 7:
+            h.update(p_)
+        h.update(c if i & 1 else p_)
+        c = h.digest()
+    order = [(0, 21, 42), (22, 43, 1), (44, 2, 23), (3, 24, 45), (25, 46, 4), (47, 5, 26), (6, 27, 48), (28, 49, 7),
+             (50, 8, 29), (9, 30, 51), (31, 52, 10), (53, 11, 32), (12, 33, 54), (34, 55, 13), (56, 14, 35),
+             (15, 36, 57), (37, 58, 16), (59, 17, 38), (18, 39, 60), (40, 61, 19), (62, 20, 41)]
+    out = []
+    for x, y, z in order:
+        v = (c[x] << 16) | (c[y] << 8) | c[z]
+        out += [_B64CRYPT[(v >> (6 * k)) & 63] for k in range(4)]
+    v = c[63]
+    out += [_B64CRYPT[(v >> (6 * k)) & 63] for k in range(2)]
+    head = "$6$" if rounds == 5000 else "$6$rounds=%d$" % rounds
+    return head + sl.decode() + "$" + "".join(out)
+
+
+def pi_psk(ssid, password):
+    """The Wi-Fi key worked out from the Wi-Fi password (what WPA2 really uses): the card gets this, not the password."""
+    return hashlib.pbkdf2_hmac("sha1", password.encode("utf-8"), ssid.encode("utf-8"), 4096, 32).hex()
+
+
+def pi_yaml(x):
+    return json.dumps(str(x), ensure_ascii=False)       # a JSON string is a valid double-quoted YAML string
+
+
+def pi_card_files(host, user, pw_hash, pub, ssid="", psk="", country=""):
+    """The boot partition files that set the Pi up on its first start (cloud-init, the way Raspberry Pi Imager does)."""
+    iid = "beammp-easyserver-%d" % int(time.time() * 1000)
+    ud = ["#cloud-config", "hostname: " + pi_yaml(host), "manage_etc_hosts: true", "",
+          "user:", "  name: " + pi_yaml(user), "  shell: /bin/bash", "  lock_passwd: false", "  passwd: " + pi_yaml(pw_hash),
+          "  ssh_authorized_keys:", "    - " + pi_yaml(pub), "  sudo: ALL=(ALL) NOPASSWD:ALL", "",
+          "ssh_pwauth: true", "", "runcmd:", "  - [ systemctl, enable, --now, ssh ]", ""]
+    files = {"user-data": "\n".join(ud), "meta-data": "instance-id: %s\n" % iid}
+    if ssid:
+        nc = ["network:", "  version: 2", "  ethernets:", "    eth0:", "      dhcp4: true", "      dhcp6: true",
+              "      optional: true", "  wifis:", "    wlan0:", "      dhcp4: true"]
+        if country:
+            nc.append("      regulatory-domain: " + pi_yaml(country))
+        nc += ["      access-points:", "        %s:" % pi_yaml(ssid)]
+        nc += ["          password: " + pi_yaml(psk)] if psk else ["          auth:", "            key-management: none"]
+        nc += ["      optional: true", ""]
+        files["network-config"] = "\n".join(nc)
+    return files, " ds=nocloud;i=" + iid
+
+
+def pi_card_image():
+    """Where the newest Raspberry Pi OS Lite (64-bit) is, from the list Raspberry Pi Imager uses."""
+    req = urllib.request.Request(PI_OS_LIST, headers={"User-Agent": "BeamMP-EasyServer/%s" % EASY_VERSION})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        data = json.loads(r.read(8 * 1024 * 1024))
+
+    def walk(items):
+        for it in items or []:
+            if isinstance(it, dict):
+                if it.get("name") == PI_OS_NAME and it.get("url"):
+                    return it
+                hit = walk(it.get("subitems"))
+                if hit:
+                    return hit
+        return None
+    it = walk(data.get("os_list"))
+    if not it:
+        raise RuntimeError("Couldn't find Raspberry Pi OS Lite (64-bit) in Raspberry Pi's list - try again later.")
+    u = urllib.parse.urlsplit(it["url"])
+    if u.scheme != "https" or u.hostname != "downloads.raspberrypi.com" or not u.path.endswith(".img.xz"):
+        raise RuntimeError("Raspberry Pi's list points somewhere unexpected - not downloading it.")
+    if it.get("init_format") not in ("cloudinit", "cloudinit-rpi"):
+        raise RuntimeError("This Raspberry Pi OS version is set up a way this dashboard doesn't know yet - use Raspberry Pi Imager.")
+    return {"url": it["url"], "sha256": str(it.get("extract_sha256", "")).lower(), "size": int(it.get("extract_size") or 0),
+            "download": int(it.get("image_download_size") or 0), "date": str(it.get("release_date", ""))}
+
+
+def pi_disks():
+    """Removable cards and sticks in this computer (never the one Windows or the server is on)."""
+    if not IS_WIN:
+        return []
+    ps = ("Get-CimInstance Win32_DiskDrive | ForEach-Object { $d = $_; "
+          "$l = @(Get-CimAssociatedInstance -InputObject $d -ResultClassName Win32_DiskPartition | "
+          "ForEach-Object { Get-CimAssociatedInstance -InputObject $_ -ResultClassName Win32_LogicalDisk } | ForEach-Object { $_.DeviceID }); "
+          "[pscustomobject]@{n=[int]$d.Index; model=[string]$d.Model; size=[int64]$d.Size; media=[string]$d.MediaType; "
+          "bus=[string]$d.InterfaceType; letters=$l} } | ConvertTo-Json -Compress -Depth 3")
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True, text=True,
+                           timeout=40, **_NOWIN)
+        rows = json.loads(r.stdout or "[]")
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return []
+    return pi_disk_filter(rows if isinstance(rows, list) else [rows])
+
+
+def pi_disk_filter(rows):
+    keep = (os.environ.get("SystemDrive", "C:").upper(), os.path.splitdrive(os.path.abspath(DATA_DIR))[0].upper())
+    out = []
+    for d in rows:
+        if not isinstance(d, dict):
+            continue
+        letters = [str(x).upper() for x in (d.get("letters") or []) if x]
+        removable = "removable" in str(d.get("media", "")).lower() or str(d.get("bus", "")).upper() == "USB"
+        size = int(d.get("size") or 0)
+        if removable and PI_CARD_MIN <= size <= PI_CARD_MAX and not set(letters) & set(keep):
+            out.append({"n": int(d.get("n", -1)), "model": str(d.get("model", ""))[:60], "size": size, "letters": letters})
+    return [d for d in out if d["n"] >= 0]
+
+
+def pi_card_job(o):
+    """Download Raspberry Pi OS, check it, have Windows write it to the card (with permission), then wait for the Pi."""
+    job = {"kind": "card", "ip": "", "state": "running", "t": now(), "lines": [], "password": "", "error": "", "web": "",
+           "progress": 0, "host": o["host"]}
+
+    def add(line):
+        job["lines"].append(line[:300])
+        del job["lines"][:-300]
+
+    def run():
+        tmp = None
+        try:
+            img = pi_card_image()
+            add("Raspberry Pi OS Lite (64-bit) from %s" % img["date"])
+            path = pi_card_download(img, job, add)
+            add("Checking the download…")
+            pi_card_check(path, img, job)
+            tmp = tempfile.mkdtemp(prefix="card-", dir=PI_DIR)
+            files, cmdline = pi_card_files(o["host"], o["user"], o["pw_hash"], pi_key()[1], o["ssid"], o["psk"], o["country"])
+            spec = {"disk": o["disk"]["n"], "size": o["disk"]["size"], "image": path, "extract_size": img["size"],
+                    "sha256": img["sha256"], "files": files, "cmdline": cmdline, "status": os.path.join(tmp, "status.json")}
+            write_json(os.path.join(tmp, "card.json"), spec)
+            helper = os.path.join(tmp, "cardwriter.py")
+            with open(helper, "w", encoding="utf-8") as f:
+                f.write(PI_CARD_HELPER)
+            add("Windows asks for permission to write the card - press Yes on this computer's screen.")
+            job["progress"] = 0
+            pi_card_elevate(helper, os.path.join(tmp, "card.json"), spec["status"], job, add)
+            add("The card is ready. Take it out, put it in the Raspberry Pi and plug in the power.")
+            add("It shows up here by itself in about 3 to 5 minutes, then EasyServer gets installed.")
+            job.update(state="waiting", progress=0)
+            pi_card_wait(o, job, add)
+        except Exception as e:
+            job.update(state="failed", error=str(e) if isinstance(e, RuntimeError) else short_err(e))
+        finally:
+            if tmp:
+                shutil.rmtree(tmp, ignore_errors=True)       # it held the Wi-Fi key
+            job["ended"] = now()
+
+    _PI["job"] = job
+    threading.Thread(target=run, daemon=True, name="pi-card").start()
+    return job
+
+
+def pi_card_download(img, job, add):
+    d = os.path.join(PI_DIR, "images")
+    os.makedirs(d, exist_ok=True)
+    name = os.path.basename(urllib.parse.urlsplit(img["url"]).path)
+    path = os.path.join(d, name)
+    for old in os.listdir(d):                   # keep only the newest one (about 500 MB each)
+        if old != name:
+            try:
+                os.remove(os.path.join(d, old))
+            except OSError:
+                pass
+    if os.path.isfile(path) and (not img["download"] or os.path.getsize(path) == img["download"]):
+        add("Already downloaded")
+        return path
+    add("Downloading it (about %d MB)…" % ((img["download"] or 500 * 1024 * 1024) // (1024 * 1024)))
+    req = urllib.request.Request(img["url"], headers={"User-Agent": "BeamMP-EasyServer/%s" % EASY_VERSION})
+    part = path + ".part"
+    done, total = 0, img["download"] or 1
+    with urllib.request.urlopen(req, timeout=60) as r, open(part, "wb") as f:
+        while True:
+            chunk = r.read(1 << 20)
+            if not chunk:
+                break
+            f.write(chunk)
+            done += len(chunk)
+            job["progress"] = min(99, done * 100 // total)
+    if img["download"] and done != img["download"]:
+        os.remove(part)
+        raise RuntimeError("The download stopped half way - try again.")
+    os.replace(part, path)
+    return path
+
+
+def pi_card_check(path, img, job):
+    """Unpack it once without writing anything, to be sure it's whole before the card is erased."""
+    import lzma
+    h, done, total = hashlib.sha256(), 0, img["size"] or 1
+    dec = lzma.LZMADecompressor()
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(1 << 20)
+            if not chunk:
+                break
+            while chunk:
+                out = dec.decompress(chunk)
+                h.update(out)
+                done += len(out)
+                chunk = dec.unused_data if dec.eof else b""
+                if dec.eof:
+                    dec = lzma.LZMADecompressor()
+            job["progress"] = min(99, done * 100 // total)
+    if img["sha256"] and h.hexdigest() != img["sha256"]:
+        os.remove(path)
+        raise RuntimeError("The download was damaged (it doesn't match Raspberry Pi's checksum) and was deleted - try again.")
+
+
+def pi_card_elevate(helper, spec, status, job, add):
+    """Run the card writer with Windows' permission (the UAC question on this computer's screen) and follow it."""
+    py = sys.executable
+    if py.lower().endswith("python.exe") and os.path.exists(py[:-10] + "pythonw.exe"):
+        py = py[:-10] + "pythonw.exe"
+    q = lambda x: x.replace("'", "''")
+    ps = ("Start-Process -FilePath '%s' -ArgumentList @('\"%s\"', '\"%s\"') -Verb RunAs -Wait -WindowStyle Hidden"
+          % (q(py), q(helper), q(spec)))
+    proc = subprocess.Popen(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, **_NOWIN)
+    seen = ""
+    while proc.poll() is None:
+        time.sleep(1)
+        st = read_json(status, {})
+        if st.get("step") and st["step"] != seen:
+            seen = st["step"]
+            add({"erase": "Erasing the card…", "write": "Writing Raspberry Pi OS to the card - a few minutes…",
+                 "setup": "Adding your Wi-Fi, user and this dashboard's key…"}.get(seen, seen))
+        if st.get("progress") is not None:
+            job["progress"] = st["progress"]
+    out = proc.stdout.read().decode("utf-8", "replace") if proc.stdout else ""
+    st = read_json(status, {})
+    if st.get("step") == "done":
+        return
+    if st.get("error"):
+        raise RuntimeError(st["error"])
+    if proc.returncode or "cancel" in out.lower():
+        raise RuntimeError("Windows didn't get permission (No was pressed), so nothing was written. Press the button again and choose Yes.")
+    raise RuntimeError("Writing the card stopped without saying why - nothing may have been written. Try again.")
+
+
+def pi_card_wait(o, job, add):
+    """Wait for the new Pi to turn up (its name on the network, or a Pi that lets this dashboard's key in), then
+    set it up with the key - no password needed."""
+    host, user, end = o["host"], o["user"], time.time() + 40 * 60
+    last_scan = 0
+    while time.time() < end and _PI["job"] is job:
+        cands = []
+        try:
+            cands.append(socket.gethostbyname(host + ".local"))
+        except OSError:
+            pass
+        if time.time() - last_scan > 60:
+            last_scan = time.time()
+            try:
+                _PI["scan"] = pi_scan()
+                cands += [f["ip"] for f in _PI["scan"]["found"] if f["pi"] and f["ssh"] and not f["known"]]
+            except Exception:
+                pass
+        for ip in dict.fromkeys(cands):
+            if not pi_private(ip):
+                continue
+            try:
+                code, out = pi_ssh({"ip": ip, "user": user}, "echo ES_KEY_OK", timeout=20)
+            except Exception:
+                continue
+            if "ES_KEY_OK" in out:
+                add("Found it at %s - setting it up." % ip)
+                pi = pi_pair(ip, user, None)
+                job.update(state="done", ip=ip)
+                if pi_problem(pi):
+                    raise RuntimeError(pi_problem(pi))
+                if _PI["job"] is job:
+                    pi_job("install", pi, name=o["name"])
+                return
+        time.sleep(10)
+    if _PI["job"] is job:
+        raise RuntimeError("The Raspberry Pi didn't show up within 40 minutes. Is it plugged in, and is the Wi-Fi name and "
+                           "password right? It might be on the network already: press Look again.")
+
+
+PI_CARD_HELPER = r"""# BeamMP EasyServer: writes Raspberry Pi OS to an SD card. Started by the dashboard with Windows' permission.
+import hashlib, json, lzma, os, subprocess, sys, time
+
+NOWIN = 0x08000000
+BLOCK = 4 << 20
+
+
+def status(path, **k):
+    with open(path + ".tmp", "w") as f:
+        json.dump(k, f)
+    os.replace(path + ".tmp", path)
+
+
+def ps(cmd):
+    return subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd], capture_output=True, text=True,
+                          timeout=180, creationflags=NOWIN)
+
+
+def blocks(image):
+    dec = lzma.LZMADecompressor()
+    buf = bytearray()
+    with open(image, "rb") as f:
+        while True:
+            chunk = f.read(1 << 20)
+            if not chunk:
+                break
+            while chunk:
+                buf += dec.decompress(chunk)
+                chunk = dec.unused_data if dec.eof else b""
+                if dec.eof:
+                    dec = lzma.LZMADecompressor()
+            while len(buf) >= BLOCK:
+                yield bytes(buf[:BLOCK])
+                del buf[:BLOCK]
+    if buf:
+        yield bytes(buf) + b"\0" * (-len(buf) % 512)
+
+
+def write_image(image, device, total, sha, progress=lambda p: None):
+    # The first block (with the partition table) goes on last, so Windows doesn't find the new partitions and
+    # get in the way while the rest is written - Raspberry Pi Imager does the same.
+    h, done, first = hashlib.sha256(), 0, None
+    with open(device, "r+b", buffering=0) as dev:
+        for b in blocks(image):
+            h.update(b if done + len(b) <= total else b[:max(0, total - done)])
+            if first is None:
+                first = b
+                dev.seek(len(b))
+            else:
+                dev.write(b)
+            done += len(b)
+            progress(min(99, done * 100 // max(total, 1)))
+        dev.seek(0)
+        dev.write(first)
+        try:
+            os.fsync(dev.fileno())
+        except OSError:
+            pass
+    if sha and h.hexdigest() != sha:
+        raise RuntimeError("The card didn't take the data correctly - it may be worn out. Try again or use another card.")
+
+
+def main(spec_path):
+    spec = json.load(open(spec_path, encoding="utf-8"))
+    st = spec["status"]
+    try:
+        n = int(spec["disk"])
+        r = ps("$d = Get-Disk -Number %d; @{bus=[string]$d.BusType; boot=[bool]$d.IsBoot; system=[bool]$d.IsSystem; size=[int64]$d.Size} | ConvertTo-Json -Compress" % n)
+        d = json.loads(r.stdout or "{}")
+        if not d or d.get("boot") or d.get("system") or d.get("bus") not in ("SD", "USB", "MMC") or abs(int(d.get("size", 0)) - int(spec["size"])) > (1 << 20):
+            raise RuntimeError("That card was taken out or swapped, or isn't a removable card - nothing was written.")
+        if int(spec["size"]) < int(spec["extract_size"]):
+            raise RuntimeError("The card is too small for Raspberry Pi OS - use one with 8 GB or more.")
+        status(st, step="erase")
+        dp = os.path.join(os.path.dirname(spec_path), "erase.txt")
+        with open(dp, "w") as f:
+            f.write("select disk %d\nclean\n" % n)
+        r = subprocess.run(["diskpart", "/s", dp], capture_output=True, text=True, timeout=180, creationflags=NOWIN)
+        if r.returncode:
+            raise RuntimeError("Windows couldn't erase the card: " + ((r.stdout or "").strip().splitlines() or ["?"])[-1][:200])
+        time.sleep(2)
+        status(st, step="write", progress=0)
+        write_image(spec["image"], r"\\.\PhysicalDrive%d" % n, int(spec["extract_size"]), spec["sha256"],
+                    lambda p: status(st, step="write", progress=p))
+        status(st, step="setup", progress=100)
+        ps("Update-Disk -Number %d" % n)
+        letter = ""
+        for _ in range(30):
+            r = ps("$p = Get-Partition -DiskNumber %d -PartitionNumber 1 -ErrorAction Stop; if (-not $p.DriveLetter) { $p | Add-PartitionAccessPath -AssignDriveLetter -ErrorAction SilentlyContinue; $p = Get-Partition -DiskNumber %d -PartitionNumber 1 }; [string]$p.DriveLetter" % (n, n))
+            letter = (r.stdout or "").strip()[:1]
+            if letter.isalpha() and os.path.exists(letter + ":\\cmdline.txt"):
+                break
+            letter = ""
+            time.sleep(2)
+        if not letter:
+            raise RuntimeError("Raspberry Pi OS is on the card, but Windows didn't open its boot part to add your settings. "
+                               "Take the card out, put it back in and press the button again.")
+        root = letter + ":\\"
+        for name, text in spec["files"].items():
+            with open(root + name, "w", encoding="utf-8", newline="\n") as f:
+                f.write(text)
+        with open(root + "cmdline.txt", encoding="utf-8") as f:
+            line = f.read().strip()
+        if "ds=nocloud" not in line:
+            with open(root + "cmdline.txt", "w", encoding="utf-8", newline="\n") as f:
+                f.write(line + spec["cmdline"])
+        status(st, step="done", progress=100)
+    except Exception as e:
+        status(st, step="failed", error=str(e)[:300] if isinstance(e, RuntimeError) else "Writing the card failed: %s" % e)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1])
+"""
 
 
 # ----------------------------------------------------------------------------- games
@@ -12672,7 +13262,7 @@ class Handler(BaseHTTPRequestHandler):
         if job and _TL.user != "owner":
             job["password"] = ""
         self.send(200, {"pis": pi_status(), "scan": _PI["scan"], "scanning": _PI["scanning"], "job": job,
-                        "ssh": bool(pi_ssh_exe()), "me": pi_lan_ip()})
+                        "ssh": bool(pi_ssh_exe()), "me": pi_lan_ip(), "card": IS_WIN, **pi_here()})
 
     def post_pi(self, q):
         b = self.body_json()
@@ -12690,49 +13280,88 @@ class Handler(BaseHTTPRequestHandler):
                         _PI["scanning"] = False
                 threading.Thread(target=scan, daemon=True, name="pi-scan").start()
             return self.send(200, {"ok": True})
+        if act == "disks":
+            return self.send(200, {"disks": pi_disks()})
+        if act == "card":
+            return self.pi_card(b)
         ip = str(b.get("ip") or "").strip()
         if not pi_private(ip):
-            return self.fail(400, "Enter the Raspberry Pi's address on your network, like 192.168.0.23")
+            return self.fail(400, "Enter the computer's address on your network, like 192.168.0.23")
         if act == "forget":
             with _PI_LOCK:
                 pi_store([x for x in pi_saved() if x["ip"] != ip])
-            return self.send(200, {"ok": True, "note": "Forgotten. EasyServer stays on the Raspberry Pi."})
+            return self.send(200, {"ok": True, "note": "Forgotten. EasyServer stays on that computer."})
         if act not in ("install", "update", "password"):
             return self.fail(400, "Unknown action")
         if _PI["job"] and _PI["job"]["state"] == "running":
-            return self.fail(409, "Wait until the Raspberry Pi that's being set up is done")
+            return self.fail(409, "Wait until the computer that's being set up is done")
         pi = next((x for x in pi_saved() if x["ip"] == ip), None)
         try:
             if act == "install" and (pi is None or b.get("password")):
                 user = str(b.get("user") or "").strip()
                 if not PI_USER_RE.fullmatch(user):
-                    return self.fail(400, "Enter the user name you set in Raspberry Pi Imager (small letters, like pi)")
+                    return self.fail(400, "Enter the computer's user name (like pi)")
                 if not b.get("password"):
-                    return self.fail(400, "Enter the password you set in Raspberry Pi Imager")
+                    return self.fail(400, "Enter the computer's password")
                 pi = pi_pair(ip, user, str(b["password"])[:200])
             if pi is None:
-                return self.fail(404, "Set up this Raspberry Pi first")
-            if pi.get("bits") == 32:
-                return self.fail(400, "This Raspberry Pi runs the 32-bit Raspberry Pi OS. The BeamMP server needs the 64-bit one - "
-                                      "write it to the card with Raspberry Pi Imager and set it up again.")
+                return self.fail(404, "Set up this computer first")
+            if pi_problem(pi):
+                return self.fail(400, pi_problem(pi))
             if act == "password":
+                if pi.get("os") == "windows":
+                    return self.fail(400, "Windows keeps it locked to that PC's login, so it can't be shown from here. Forgot it? "
+                                          "Run Reset-Dashboard-Login.bat in the BeamMP server folder on that PC.")
                 if not pi.get("sudo"):
                     return self.fail(400, "Look it up on the Raspberry Pi with: beammp dashboard")
-                code, out = pi_ssh(pi, "sudo -n /usr/local/lib/beammp-easyserver/secrets.sh get MODS_PASSWORD", timeout=30)
+                code, out = pi_ssh(pi, "%s/usr/local/lib/beammp-easyserver/secrets.sh get MODS_PASSWORD"
+                                   % ("" if pi.get("root") else "sudo -n "), timeout=30)
                 pw = out.strip().splitlines()[-1] if code == 0 and out.strip() else ""
                 if not re.fullmatch(r"\S{4,64}", pw):
                     return self.fail(502, "Couldn't read it - is EasyServer installed on it?" if code != 255 else pi_ssh_error(out))
                 return self.send(200, {"ok": True, "password": pw})
             sudo_pw = str(b.get("password") or "")[:200] or None
-            if not pi.get("sudo") and not sudo_pw:
-                return self.fail(400, "This Raspberry Pi asks for its password for system changes - enter it")
+            if pi.get("os") == "windows" and act == "install" and not sudo_pw:
+                return self.fail(400, "Enter the password of that PC's Windows account")
+            if not pi.get("sudo") and not pi.get("root") and not sudo_pw:
+                return self.fail(400, "This computer asks for its password for system changes - enter it")
             name = re.sub(r"[\x00-\x1f\"]", "", str(b.get("name") or "")).strip()[:60]
             pi_job(act, pi, name=name, sudo_pw=sudo_pw)
         except RuntimeError as e:
             return self.fail(502, str(e))
         except (OSError, subprocess.SubprocessError) as e:
             return self.fail(502, "Couldn't connect: " + short_err(e))
-        self.send(200, {"ok": True, "note": "Installing EasyServer on the Raspberry Pi…" if act == "install" else "Updating the Raspberry Pi…"})
+        self.send(200, {"ok": True, "note": "Installing EasyServer…" if act == "install" else "Updating…"})
+
+    def pi_card(self, b):
+        if not IS_WIN:
+            return self.fail(400, "Making the card from here works on Windows. Use Raspberry Pi Imager - the steps are on this page.")
+        if _PI["job"] and _PI["job"]["state"] == "running":
+            return self.fail(409, "Wait until the computer that's being set up is done")
+        user = str(b.get("user") or "").strip()
+        if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", user) or user in ("root", "daemon", "bin", "sys", "nobody"):
+            return self.fail(400, "Pick a user name for the Raspberry Pi: small letters and numbers, like beammp")
+        pw = str(b.get("password") or "")
+        if len(pw) < 8 or len(pw) > 128:
+            return self.fail(400, "Pick a password for the Raspberry Pi: at least 8 characters")
+        ssid, wpw = str(b.get("ssid") or "").strip(), str(b.get("wifi_password") or "")
+        if ssid and not PI_WIFI_RE.fullmatch(ssid):
+            return self.fail(400, "That Wi-Fi name is too long")
+        if ssid and wpw and not 8 <= len(wpw) <= 63:
+            return self.fail(400, "A Wi-Fi password is 8 to 63 characters - check it")
+        country = str(b.get("country") or "").strip().upper()
+        if ssid and not PI_COUNTRY_RE.fullmatch(country):
+            return self.fail(400, "Pick the country you're in (the Wi-Fi rules depend on it)")
+        if not b.get("erase_ok"):
+            return self.fail(400, "Tick that everything on the card may be erased")
+        disk = next((d for d in pi_disks() if d["n"] == b.get("disk")), None)
+        if not disk:
+            return self.fail(400, "That card isn't there any more - press Look for cards")
+        name = re.sub(r"[\x00-\x1f\"]", "", str(b.get("name") or "")).strip()[:60]
+        host = "beammp-pi-" + secrets.token_hex(2)
+        pi_card_job({"user": user, "pw_hash": sha512_crypt(pw), "ssid": ssid, "psk": pi_psk(ssid, wpw) if ssid and wpw else "",
+                     "country": country, "disk": disk, "name": name, "host": host})
+        self.send(200, {"ok": True, "note": "Making the card…"})
 
     # ---------- mod updates
     def get_mods_updates(self, q):

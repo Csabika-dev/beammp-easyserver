@@ -5,13 +5,18 @@
 #  install.ps1             -> setup window
 #  install.ps1 -Update     -> download newest server version
 #  install.ps1 -Uninstall  -> remove firewall rules, shortcuts, autostart
+#  install.ps1 -Unattended [-ServerName "..."] [-Update]
+#                          -> no windows or questions: used by another computer's
+#                             dashboard (Servers -> Other computers) over SSH
 #
 #  Not affiliated with the BeamMP team. BeamMP: https://beammp.com
 # =============================================================================
 param(
     [switch]$Update,
     [switch]$Uninstall,
-    [switch]$ResetLogin
+    [switch]$ResetLogin,
+    [switch]$Unattended,
+    [string]$ServerName = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -32,6 +37,7 @@ $PythonUrl    = 'https://www.python.org/ftp/python/3.13.17/python-3.13.17-embed-
 # ---- run as administrator ----------------------------------------------------
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    if ($Unattended) { Write-Host '  [ERROR] This needs a Windows administrator account.'; exit 1 }
     $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")
     if ($Update)    { $argList += '-Update' }
     if ($Uninstall) { $argList += '-Uninstall' }
@@ -47,12 +53,16 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 . (Join-Path $PSScriptRoot 'easyserver-common.ps1')
-$Host.UI.RawUI.WindowTitle = "BeamMP EasyServer v$EasyVersion"
+try { $Host.UI.RawUI.WindowTitle = "BeamMP EasyServer v$EasyVersion" } catch { }
+$script:EsFailed = $false
 
 function Step($t) { Write-Host ''; Write-Host "==> $t" -ForegroundColor Cyan }
 function Ok($t)   { Write-Host "  [OK] $t" -ForegroundColor Green }
 function Warn($t) { Write-Host "  [!]  $t" -ForegroundColor Yellow }
-function Finish   { Write-Host ''; Read-Host 'Press Enter to close'; exit }
+function Finish {
+    if ($Unattended) { if ($script:EsFailed) { exit 1 } else { exit 0 } }
+    Write-Host ''; Read-Host 'Press Enter to close'; exit
+}
 
 function Get-InstallDir {
     if (Test-Path $StateFile) {
@@ -378,16 +388,18 @@ if ($ResetLogin) {
 # =============================================================================
 if ($Update) {
     $dir = Get-InstallDir
+    Write-Host "  BeamMP EasyServer v$EasyVersion - updating $dir"
     if (-not (Test-Path (Join-Path $dir 'BeamMP-Server.exe'))) {
-        Warn "No server found in $dir - run Install-BeamMP-Server.bat first."; Finish
+        Warn "No server found in $dir - run Install-BeamMP-Server.bat first."; $script:EsFailed = $true; Finish
     }
     Protect-EsFolder $dir
     if (Test-Path (Split-Path $StateFile)) { Protect-EsFolder (Split-Path $StateFile) -AdminOnly }
-    Download-Server $dir
+    try { Download-Server $dir } catch { Warn "The server download failed: $($_.Exception.Message)"; $script:EsFailed = $true; Finish }
     [void](Copy-EsScripts $dir)
     if (Test-Path (Join-Path $dir 'EasyServer\python\pythonw.exe')) {
-        try { Install-Dashboard $dir } catch { Warn "Dashboard update failed: $($_.Exception.Message)" }
+        try { Install-Dashboard $dir } catch { Warn "Dashboard update failed: $($_.Exception.Message)"; $script:EsFailed = $true }
     }
+    if ($Unattended) { Start-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue }
     Ok 'Updated. Start it again with the "Start BeamMP Server" shortcut (or from the dashboard).'
     Finish
 }
@@ -418,6 +430,20 @@ if (Test-Path $prevCfg) {
     if ($txt -match '(?m)^\s*Private\s*=\s*true')       { $prev.Private = $true }
 }
 
+if ($Unattended) {
+    # The same answers as pressing Install straight away (an earlier install's settings are kept)
+    $prevPorts = 'auto'
+    $prevJson = Join-Path $prevDir 'EasyServer\data\dashboard.json'
+    if (Test-Path $prevJson) {
+        try { if (-not (Get-Content $prevJson -Raw | ConvertFrom-Json).upnp_on) { $prevPorts = 'manual' } } catch { }
+    }
+    $nm = ($ServerName -replace '[\x00-\x1f"]', '').Trim()
+    $cfg = @{
+        Name = $(if ($nm) { $nm.Substring(0, [Math]::Min(60, $nm.Length)) } else { $prev.Name })
+        Key = ''; VtKey = ''; Map = $prev.Map; Players = $prev.MaxPlayers; Cars = $prev.MaxCars; Port = $prev.Port
+        Dir = $prevDir; Private = $prev.Private; Auto = $true; StartNow = $true; Dash = $true; Ports = $prevPorts
+    }
+} else {
 $font = New-Object System.Drawing.Font('Segoe UI', 10)
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "BeamMP EasyServer v$EasyVersion"
@@ -558,6 +584,7 @@ if (Test-Path $prevJson) {
     try { if (-not (Get-Content $prevJson -Raw | ConvertFrom-Json).upnp_on) { $prevPorts = 'manual' } } catch { }
 }
 $cfg.Ports = Show-PortChoice $cfg.Port $cfg.Dash $prevPorts
+}
 
 try {
     Write-Host ''
@@ -686,6 +713,15 @@ UpdateReminderTime = "30s"
 
     # ---- dashboard ----
     $dashOk = $false
+    $newPw = ''
+    if ($Unattended -and $cfg.Dash -and -not (Read-EsSecretsRaw $cfg.Dir).ContainsKey('MODS_PASSWORD')) {
+        $abc = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+        $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+        $buf = New-Object byte[] 16
+        $rng.GetBytes($buf)
+        $newPw = -join ($buf | ForEach-Object { $abc[$_ % $abc.Length] })
+        Set-EsSecret $cfg.Dir 'MODS_PASSWORD' $newPw
+    }
     if ($cfg.Dash) {
         $preset = if ($cfg.Ports -eq 'auto') { @{ upnp_on = $true; upnp_mode = 'needed' } } else { @{ upnp_on = $false } }
         try { Install-Dashboard $cfg.Dir $preset; $dashOk = $true }
@@ -706,7 +742,10 @@ UpdateReminderTime = "30s"
 
     # start through the shortcut via Explorer so it runs as you (not as admin);
     # that way the mod tool can restart it later
-    if ($cfg.StartNow) { Start-Process explorer.exe -ArgumentList "`"$($sc.Start)`"" }
+    if ($cfg.StartNow) {
+        if ($Unattended) { Start-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue }   # no desktop to start it from
+        else { Start-Process explorer.exe -ArgumentList "`"$($sc.Start)`"" }
+    }
 
     Write-Host ''
     Write-Host '  All done!' -ForegroundColor Green
@@ -726,7 +765,7 @@ UpdateReminderTime = "30s"
         Write-Host "    3. Add a rule:  port $($cfg.Port)  -  protocol TCP and UDP (or Both)  -  to $lan"
         Write-Host '    4. Save. Test it on the dashboard''s Health page.'
         Write-Host '    Stuck? Search "<your router model> port forwarding".'
-        try { Start-Process 'https://csabika-dev.github.io/beammp-easyserver/help.html#friends-cant-join' } catch { }
+        if (-not $Unattended) { try { Start-Process 'https://csabika-dev.github.io/beammp-easyserver/help.html#friends-cant-join' } catch { } }
     } else {
         Write-Host "    -> Not set up yet. When you want it: dashboard -> Health -> Automatic port forwarding."
     }
@@ -734,9 +773,16 @@ UpdateReminderTime = "30s"
     if ($dashOk) {
         Write-Host '  Dashboard:           ' -NoNewline; Write-Host "http://localhost:$DashPort  (double-click 'BeamMP Dashboard' on your desktop)" -ForegroundColor Cyan
         Write-Host "                       other devices at home: http://$($lan):$DashPort"
-        Write-Host '                       The first time you open it, create a password.'
-        Start-Sleep -Seconds 2
-        Start-Process "http://localhost:$DashPort/"
+        if ($newPw) {
+            Write-Host "    Password:  $newPw"
+            Write-Host '                       (change it in the dashboard: click your name -> My account)'
+        } elseif ($Unattended) {
+            Write-Host '                       Log in with the password it already had.'
+        } else {
+            Write-Host '                       The first time you open it, create a password.'
+            Start-Sleep -Seconds 2
+            Start-Process "http://localhost:$DashPort/"
+        }
     }
     Write-Host '  Add mods:            drag .zip files onto "Drop BeamMP Mods Here" on your desktop'
     Write-Host '  Mods folder:         ' -NoNewline; Write-Host (Join-Path $cfg.Dir 'Resources\Client')
@@ -745,6 +791,7 @@ UpdateReminderTime = "30s"
 } catch {
     Write-Host ''
     Write-Host "  [ERROR] $($_.Exception.Message)" -ForegroundColor Red
+    $script:EsFailed = $true
     Write-Host '  If this keeps happening, open an issue on GitHub with this message.'
 }
 Finish

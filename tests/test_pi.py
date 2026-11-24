@@ -1,6 +1,10 @@
 """Raspberry Pi setup from the dashboard: finding it on the network, logging in over SSH once, then installing and
 updating EasyServer on it. No real Pi or SSH: the network, ssh and the installer download are replaced by fakes."""
+import base64
+import hashlib
 import io
+import json
+import lzma
 import os
 import shutil
 import tempfile
@@ -74,9 +78,9 @@ class Basics(unittest.TestCase):
 
     def test_ssh_errors(self):
         self.assertIn("user name and password", D.pi_ssh_error("pi@192.168.0.5: Permission denied (publickey,password)."))
-        self.assertIn("Enable SSH", D.pi_ssh_error("ssh: connect to host 192.168.0.5 port 22: Connection refused"))
+        self.assertIn("turned off", D.pi_ssh_error("ssh: connect to host 192.168.0.5 port 22: Connection refused"))
         self.assertIn("Forget", D.pi_ssh_error("Host key verification failed."))
-        self.assertIn("same Wi-Fi", D.pi_ssh_error("ssh: connect to host 192.168.0.5 port 22: Connection timed out"))
+        self.assertIn("same network", D.pi_ssh_error("ssh: connect to host 192.168.0.5 port 22: Connection timed out"))
         self.assertEqual(D.pi_ssh_error("weird\nthing broke"), "Couldn't connect: thing broke")
 
 
@@ -160,9 +164,11 @@ def fake_ssh(replies, calls):
 class Pair(PiDir):
     def setUp(self):
         super().setUp()
-        p = mock.patch.object(D, "pi_key", lambda: ("k", "ssh-ed25519 AAAA beammp-easyserver"))
-        p.start()
-        self.addCleanup(p.stop)
+        self.banner = ""
+        for p in (mock.patch.object(D, "pi_key", lambda: ("k", "ssh-ed25519 AAAA beammp-easyserver")),
+                  mock.patch.object(D, "pi_banner", lambda ip: self.banner)):
+            p.start()
+            self.addCleanup(p.stop)
 
     def test_pair(self):
         calls = []
@@ -189,7 +195,7 @@ class Pair(PiDir):
     def test_key_refused(self):
         replies = {"authorized_keys": (0, "ES_BITS=64 ES_HOST=p"), "ES_KEY_OK": (255, "Permission denied (publickey).")}
         with mock.patch.object(D, "pi_ssh", fake_ssh(replies, [])):
-            with self.assertRaisesRegex(RuntimeError, "didn't accept this computer's key"):
+            with self.assertRaisesRegex(RuntimeError, "didn't accept this dashboard's key"):
                 D.pi_pair("192.168.0.77", "pi", "secret")
 
 
@@ -266,7 +272,207 @@ class Job(PiDir):
     def test_pi_unreachable(self):
         job, _ = self.run_job("update", {"ip": "192.168.0.77", "user": "pi", "sudo": True}, {})
         self.assertEqual(job["state"], "failed")
-        self.assertIn("Enable SSH", job["error"])
+        self.assertIn("SSH is turned off", job["error"])
+
+
+class Kinds(PiDir):
+    """Which computers are found, and which can take EasyServer."""
+
+    def test_banner(self):
+        self.assertEqual(D.pi_os_from_banner("SSH-2.0-OpenSSH_for_Windows_9.5"), "windows")
+        self.assertEqual(D.pi_os_from_banner("SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13.5"), "ubuntu")
+        self.assertEqual(D.pi_os_from_banner("SSH-2.0-OpenSSH_9.2p1 Debian-2+deb12u3"), "debian")
+        self.assertEqual(D.pi_os_from_banner("SSH-2.0-OpenSSH_7.9p1 Raspbian-10+deb10u2"), "raspbian")
+        self.assertEqual(D.pi_os_from_banner("SSH-2.0-dropbear_2022.83"), "")      # a router: not listed
+        self.assertEqual(D.pi_os_from_banner(""), "")
+
+    def test_problems(self):
+        ok = [{"os": "debian", "arch": "aarch64", "bits": 64}, {"os": "ubuntu", "arch": "x86_64", "bits": 64},
+              {"os": "linuxmint", "os_like": "ubuntu,debian", "bits": 64}, {"os": "windows", "admin": True}, {}]
+        for pi in ok:
+            self.assertEqual(D.pi_problem(pi), "", pi)
+        self.assertIn("TrueNAS", D.pi_problem({"os": "debian", "truenas": True}))
+        self.assertIn("Ubuntu, Debian", D.pi_problem({"os": "fedora", "os_like": "rhel"}))
+        self.assertIn("32-bit Raspberry Pi OS", D.pi_problem({"os": "debian", "bits": 32, "kind": "pi"}))
+        self.assertIn("32-bit system", D.pi_problem({"os": "debian", "bits": 32, "kind": "pc"}))
+        self.assertIn("processor", D.pi_problem({"os": "debian", "arch": "armv7l", "bits": 64}))
+        self.assertIn("administrator", D.pi_problem({"os": "windows", "admin": False}))
+
+    def test_scan(self):
+        banners = {"192.168.0.10": "SSH-2.0-OpenSSH_for_Windows_9.5", "192.168.0.11": "SSH-2.0-OpenSSH_9.6p1 Ubuntu-3",
+                   "192.168.0.12": "SSH-2.0-dropbear", "192.168.0.13": "SSH-2.0-OpenSSH_9.2p1 Debian-2"}
+        with mock.patch.object(D, "pi_lan_ip", lambda: "192.168.0.120"), \
+                mock.patch.object(D, "pi_banner", lambda ip: banners.get(ip, "")), \
+                mock.patch.object(D, "pi_neighbors", lambda: {"192.168.0.13": "d8:3a:dd:00:00:01", "192.168.0.14": "dc:a6:32:00:00:02"}), \
+                mock.patch.object(D, "pi_open", lambda ip, port, timeout=0.7: False), \
+                mock.patch.object(D, "pi_hostname", lambda ip: "box" + ip.rsplit(".", 1)[1]), \
+                mock.patch.object(D.socket, "gethostbyname", side_effect=OSError("no mdns")):
+            r = D.pi_scan()
+        got = {f["ip"]: (f["kind"], f["os"], f["ssh"], f["pi"]) for f in r["found"]}
+        self.assertEqual(got, {"192.168.0.10": ("windows", "windows", True, False), "192.168.0.11": ("pc", "ubuntu", True, False),
+                               "192.168.0.13": ("pi", "debian", True, True), "192.168.0.14": ("pi", "", False, True)})
+        self.assertEqual(r["found"][0]["name"], "box10")
+
+    def test_pair_linux_nas(self):
+        out = ("ES_BITS=64 ES_HOST=nas ES_ARCH=x86_64 ES_UID=0\nES_OS=debian ES_LIKE=\nES_MODEL=\nES_OMV=1")
+        with mock.patch.object(D, "pi_key", lambda: ("k", "ssh-ed25519 AAAA x")), mock.patch.object(D, "pi_banner", lambda ip: "SSH-2.0-OpenSSH_9.2p1 Debian"), \
+                mock.patch.object(D, "pi_ssh", fake_ssh({"authorized_keys": (0, out), "ES_KEY_OK": (0, "ES_KEY_OK")}, [])), \
+                mock.patch.object(D, "pi_neighbors", lambda: {}):
+            pi = D.pi_pair("192.168.0.60", "root", "pw")
+        self.assertEqual((pi["kind"], pi["root"], pi["sudo"], pi["omv"], pi["os"], pi["arch"]), ("nas", True, True, True, "debian", "x86_64"))
+        self.assertEqual(D.pi_problem(pi), "")
+
+    def test_pair_pi_model(self):
+        out = "ES_BITS=64 ES_HOST=garage ES_ARCH=aarch64 ES_UID=1000\nES_OS=debian ES_LIKE=\nES_MODEL=Raspberry_Pi_5_Model_B_Rev_1.0\nES_SUDO=1"
+        with mock.patch.object(D, "pi_key", lambda: ("k", "ssh-ed25519 AAAA x")), mock.patch.object(D, "pi_banner", lambda ip: ""), \
+                mock.patch.object(D, "pi_ssh", fake_ssh({"authorized_keys": (0, out), "ES_KEY_OK": (0, "ES_KEY_OK")}, [])), \
+                mock.patch.object(D, "pi_neighbors", lambda: {}):
+            pi = D.pi_pair("192.168.0.50", "pi", "pw")
+        self.assertEqual((pi["kind"], pi["model"], pi["root"]), ("pi", "Raspberry Pi 5 Model B Rev 1.0", False))
+
+    def test_pair_windows(self):
+        calls = []
+        with mock.patch.object(D, "pi_key", lambda: ("k", "ssh-ed25519 AAAA beammp-easyserver")), \
+                mock.patch.object(D, "pi_banner", lambda ip: "SSH-2.0-OpenSSH_for_Windows_9.5"), \
+                mock.patch.object(D, "pi_ssh", fake_ssh({"EncodedCommand": (0, "ES_BITS=64\r\nES_HOST=LIVINGROOM\r\nES_ADMIN=1"),
+                                                          "ES_KEY_OK": (0, "ES_KEY_OK")}, calls)), \
+                mock.patch.object(D, "pi_neighbors", lambda: {}):
+            pi = D.pi_pair("192.168.0.61", "Gamer", "pw")
+        script = base64.b64decode(calls[0]["cmd"].rsplit(" ", 1)[1]).decode("utf-16-le")
+        self.assertIn("$k = 'ssh-ed25519 AAAA beammp-easyserver'", script)
+        self.assertIn("administrators_authorized_keys", script)
+        self.assertIn("*S-1-5-32-544:F", script)                    # by SID: the group name depends on Windows' language
+        self.assertEqual((pi["os"], pi["kind"], pi["admin"], pi["sudo"], pi["host"]), ("windows", "windows", True, True, "LIVINGROOM"))
+
+
+class WinJob(PiDir):
+    def test_windows_install_and_update(self):
+        for kind, pw in (("install", "winpw"), ("update", None)):
+            calls = []
+            with mock.patch.object(D, "pi_ssh", fake_ssh({"EncodedCommand": (0, "  BeamMP EasyServer v1.16.0 - installing\n    Password:  Abc123def456ghjk")}, calls)), \
+                    mock.patch.object(D, "pi_web", lambda ip: "http://%s:30815/" % ip):
+                job = D.pi_job(kind, {"ip": "192.168.0.61", "user": "Gamer", "os": "windows", "sudo": True}, name="Bob's", sudo_pw=pw)
+                for _ in range(200):
+                    if job["state"] != "running":
+                        break
+                    time.sleep(0.02)
+            self.assertEqual(job["state"], "done", job)
+            self.assertEqual(job["password"], "Abc123def456ghjk")
+            self.assertEqual(calls[0]["password"], pw)                # the first install logs in with the password
+            script = base64.b64decode(calls[0]["cmd"].rsplit(" ", 1)[1]).decode("utf-16-le")
+            self.assertIn("archive/refs/heads/main.zip", script)
+            if kind == "install":
+                self.assertIn("-Unattended -ServerName 'Bob''s'", script)
+            else:
+                self.assertIn("-Unattended -Update", script)
+                self.assertNotIn("ServerName", script)
+
+    def test_root_needs_no_sudo(self):
+        calls = []
+        with mock.patch.object(D, "pi_ssh", fake_ssh({"ES_COPIED": (0, "ES_COPIED"), "--unattended": (0, RUN_OUT)}, calls)), \
+                mock.patch.object(D.urllib.request, "urlopen", lambda req, timeout=0: Url(INSTALLER)), \
+                mock.patch.object(D, "pi_web", lambda ip: ""):
+            job = D.pi_job("update", {"ip": "192.168.0.60", "user": "root", "root": True, "sudo": True})
+            for _ in range(200):
+                if job["state"] != "running":
+                    break
+                time.sleep(0.02)
+        self.assertEqual(job["state"], "done", job)
+        self.assertTrue(calls[1]["cmd"].startswith("bash ~/.easyserver-install.sh"), calls[1]["cmd"])
+
+
+class Card(PiDir):
+    """The ready-to-go SD card: hashes, the setup files, the image list, the card list and the writer."""
+
+    def test_hashes(self):
+        self.assertEqual(D.sha512_crypt("Hello world!", "saltstring"),
+                         "$6$saltstring$svn8UoSVapNtMuq1ukKS4tPQd8iKwSMHWjl/O817G3uBnIFNjnQJuesI68u4OTLiBFdcbYEdFCoEOfaS35inz1")
+        self.assertEqual(D.sha512_crypt("Hello world!", "saltstringsaltstring", 10000),
+                         "$6$rounds=10000$saltstringsaltst$OW1/O6BYHV6BcXZu8QVeXbDWra3Oeqh0sbHbbMCVNSnCM/UrjmM0Dp8vOuZeHBy/YTBmSK6H9qs/y3RnOaw5v.")
+        self.assertEqual(D.sha512_crypt("This is just a test", "toolongsaltstring", 5000),
+                         "$6$toolongsaltstrin$lQ8jolhgVRVhY4b5pZKaysCLi0QBxGoNeKQzQ3glMhwllF7oGDZxUhx1yxdYcz/e1JSbq3y6JMxxl8audkUEm0")
+        h = D.sha512_crypt("pw")
+        self.assertTrue(h.startswith("$6$") and len(h.split("$")[2]) == 16)
+        self.assertNotEqual(D.sha512_crypt("pw"), h)                  # a new salt each time
+        self.assertEqual(D.pi_psk("IEEE", "password"), "f42c6fc52df0ebef9ebb4b90b38a5f902e83fe1b135a70e23aed762e9710a12e")
+
+    def test_files(self):
+        files, cmdline = D.pi_card_files("beammp-pi-ab12", "beammp", "$6$salt$hash", "ssh-ed25519 AAAA key", 'My "Wi-Fi"',
+                                         "ab" * 32, "HU")
+        ud = files["user-data"]
+        self.assertTrue(ud.startswith("#cloud-config\n"))
+        for line in ('hostname: "beammp-pi-ab12"', 'name: "beammp"', 'passwd: "$6$salt$hash"', '- "ssh-ed25519 AAAA key"',
+                     "sudo: ALL=(ALL) NOPASSWD:ALL", "ssh_pwauth: true", "[ systemctl, enable, --now, ssh ]"):
+            self.assertIn(line, ud)
+        nc = files["network-config"]
+        self.assertIn('"My \\"Wi-Fi\\"":', nc)                         # quotes in the Wi-Fi name stay inside the string
+        self.assertIn('password: "%s"' % ("ab" * 32), nc)
+        self.assertIn('regulatory-domain: "HU"', nc)
+        iid = files["meta-data"].split(": ")[1].strip()
+        self.assertEqual(cmdline, " ds=nocloud;i=" + iid)
+        files, _ = D.pi_card_files("h", "u", "x", "k")                    # cable only: no Wi-Fi file
+        self.assertNotIn("network-config", files)
+        files, _ = D.pi_card_files("h", "u", "x", "k", "Open", "", "HU")  # an open Wi-Fi
+        self.assertIn("key-management: none", files["network-config"])
+
+    def oslist(self, entry):
+        body = json.dumps({"os_list": [{"name": "Raspberry Pi OS (other)", "subitems": [entry]}]}).encode()
+        return mock.patch.object(D.urllib.request, "urlopen", lambda req, timeout=0: Url(body))
+
+    def test_image_list(self):
+        good = {"name": "Raspberry Pi OS Lite (64-bit)", "url": "https://downloads.raspberrypi.com/x/2026-10-06-raspios-trixie-arm64-lite.img.xz",
+                "extract_size": 3078619136, "extract_sha256": "AB" * 32, "image_download_size": 550466056,
+                "release_date": "2026-10-06", "init_format": "cloudinit-rpi"}
+        with self.oslist(good):
+            img = D.pi_card_image()
+        self.assertEqual((img["sha256"], img["size"], img["download"]), ("ab" * 32, 3078619136, 550466056))
+        for bad in ({"url": "https://evil.example/x.img.xz"}, {"url": "http://downloads.raspberrypi.com/x.img.xz"},
+                    {"init_format": "systemd"}, {"name": "Something else"}):
+            with self.oslist({**good, **bad}):
+                with self.assertRaises(RuntimeError):
+                    D.pi_card_image()
+
+    def test_disk_filter(self):
+        rows = [{"n": 0, "model": "Samsung SSD", "size": 500e9, "media": "Fixed hard disk media", "bus": "SCSI", "letters": ["C:"]},
+                {"n": 1, "model": "SD reader", "size": 31.9e9, "media": "Removable Media", "bus": "USB", "letters": ["E:"]},
+                {"n": 2, "model": "USB disk", "size": 2e12, "media": "External hard disk media", "bus": "USB", "letters": ["F:"]},
+                {"n": 3, "model": "Stick", "size": 16e9, "media": "Removable Media", "bus": "USB", "letters": ["C:"]},
+                {"n": 4, "model": "Tiny", "size": 2e9, "media": "Removable Media", "bus": "USB", "letters": []},
+                {"n": 5, "model": "Empty reader", "size": None, "media": "Removable Media", "bus": "USB", "letters": []},
+                "junk"]
+        with mock.patch.dict(os.environ, {"SystemDrive": "C:"}):
+            self.assertEqual([d["n"] for d in D.pi_disk_filter(rows)], [1])
+
+    def make_image(self, size=9 * 1024 * 1024 + 512):
+        raw = (b"\x5a" * 4096 + os.urandom(4096)) * (size // 8192) + b"\x01" * (size % 8192)
+        xz = os.path.join(self.dir, "os.img.xz")
+        with open(xz, "wb") as f:
+            f.write(lzma.compress(raw[:size // 2]) + lzma.compress(raw[size // 2:]))     # two xz streams, like xz -T
+        return raw, xz
+
+    def test_check_download(self):
+        raw, xz = self.make_image()
+        job = {}
+        D.pi_card_check(xz, {"sha256": hashlib.sha256(raw).hexdigest(), "size": len(raw)}, job)
+        self.assertEqual(job["progress"], 99)
+        with self.assertRaisesRegex(RuntimeError, "damaged"):
+            D.pi_card_check(xz, {"sha256": "00" * 32, "size": len(raw)}, job)
+        self.assertFalse(os.path.exists(xz))                             # a damaged download is deleted
+
+    def test_writer(self):
+        raw, xz = self.make_image()
+        helper = {}
+        exec(compile(D.PI_CARD_HELPER, "cardwriter", "exec"), helper)
+        dev = os.path.join(self.dir, "card.bin")
+        with open(dev, "wb") as f:
+            f.write(b"\xff" * (len(raw) + 4096))                        # the old contents of the card
+        seen = []
+        helper["write_image"](xz, dev, len(raw), hashlib.sha256(raw).hexdigest(), seen.append)
+        with open(dev, "rb") as f:
+            self.assertEqual(f.read(len(raw)), raw)
+        self.assertEqual(seen[-1], 99)
+        with self.assertRaisesRegex(RuntimeError, "didn't take the data"):
+            helper["write_image"](xz, dev, len(raw), "00" * 32)
 
 
 @unittest.skipUnless(not D.IS_WIN, "live tests run on Linux")
@@ -283,7 +489,7 @@ class Api(PiDir):
         self.assertEqual(self.post(action="install", ip="8.8.8.8", user="pi", password="x")[0], 400)
         self.assertEqual(self.post(action="reboot", ip="192.168.0.77")[0], 400)
         self.assertEqual(self.post(action="update", ip="192.168.0.77")[0], 404)
-        self.assertEqual(self.post(action="install", ip="192.168.0.77", user="Bad User", password="x")[0], 400)
+        self.assertEqual(self.post(action="install", ip="192.168.0.77", user="bad;user", password="x")[0], 400)
         self.assertEqual(self.post(action="install", ip="192.168.0.77", user="pi", password="")[0], 400)
         D.pi_remember("192.168.0.60", user="pi", sudo=True, bits=32)
         st, d = self.post(action="update", ip="192.168.0.60")
@@ -317,6 +523,29 @@ class Api(PiDir):
 
     def test_admin_cannot_set_up(self):
         self.assertIn("/api/pi", D.OWNER_WRITE)
+
+    def test_card_checks(self):
+        self.assertEqual(self.post(action="card")[0], 400)                 # not on Linux
+        disk = {"n": 1, "model": "SD", "size": 32e9, "letters": ["E:"]}
+        good = dict(action="card", user="beammp", password="longenough", ssid="Home", wifi_password="wifipass1",
+                    country="hu", disk=1, erase_ok=True, name="Pi")
+        made = []
+        with mock.patch.object(D, "IS_WIN", True), mock.patch.object(D, "pi_disks", lambda: [disk]), \
+                mock.patch.object(D, "pi_card_job", made.append), mock.patch.object(D, "pi_key", lambda: ("k", "ssh-ed25519 AAAA x")):
+            for bad in ({"user": "Root"}, {"user": "root"}, {"password": "short"}, {"wifi_password": "short"},
+                        {"country": "Hungary"}, {"erase_ok": False}, {"disk": 7}):
+                st, d = self.post(**{**good, **bad})
+                self.assertEqual(st, 400, (bad, d))
+            self.assertEqual(made, [])
+            st, d = self.post(**good)
+        self.assertEqual(st, 200, d)
+        o = made[0]
+        self.assertEqual((o["user"], o["country"], o["disk"]["n"], o["ssid"]), ("beammp", "HU", 1, "Home"))
+        self.assertTrue(o["pw_hash"].startswith("$6$"))
+        self.assertEqual(o["psk"], D.pi_psk("Home", "wifipass1"))
+        self.assertNotIn("longenough", json.dumps(o))                     # neither password itself goes any further
+        self.assertNotIn("wifipass1", json.dumps(o))
+        self.assertRegex(o["host"], r"^beammp-pi-[0-9a-f]{4}$")
 
 
 if __name__ == "__main__":
