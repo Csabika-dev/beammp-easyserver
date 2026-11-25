@@ -1,11 +1,11 @@
 {
  "about": "Made from CHANGELOG.md by site/build.mjs - don't edit by hand.",
  "version": "1.15",
- "status": "rolling",
+ "status": "stable",
  "languages": {
   "en": {
    "title": "New in 1.15",
-   "note": "In Rolling now. They come to Stable once they've been tested.",
+   "note": "Out now in the Stable version.",
    "items": [
     [
      "Vehicle rules",
@@ -23,7 +23,7 @@
   },
   "de": {
    "title": "Neu in 1.15",
-   "note": "Jetzt in Rolling. Sie kommen nach Stable, sobald sie getestet sind.",
+   "note": "Jetzt in der Stable-Version.",
    "items": [
     [
      "Fahrzeugregeln",
@@ -41,7 +41,7 @@
   },
   "es": {
    "title": "Novedades de 1.15",
-   "note": "Ya en Rolling. Pasan a Stable cuando están probadas.",
+   "note": "Ya disponibles en la versión Stable.",
    "items": [
     [
      "Reglas de vehículos",
@@ -59,7 +59,7 @@
   },
   "hu": {
    "title": "Az 1.15 újdonságai",
-   "note": "Már a Rollingban. Tesztelés után kerülnek a Stable-be.",
+   "note": "Már a Stable verzióban.",
    "items": [
     [
      "Járműszabályok",
@@ -77,7 +77,7 @@
   },
   "pl": {
    "title": "Nowości w 1.15",
-   "note": "Już w Rolling. Trafią do Stable, gdy zostaną przetestowane.",
+   "note": "Już w wersji Stable.",
    "items": [
     [
      "Zasady pojazdów",
