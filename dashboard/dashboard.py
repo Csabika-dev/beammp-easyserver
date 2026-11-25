@@ -14428,6 +14428,8 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---------- Google Drive copies and rescue
     def get_gdrive(self, q):
+        if self.sess.get("role", "owner") != "owner":      # the sign-in code would let someone link their own Drive
+            return self.fail(403, "Only the owner can see the Google Drive settings")
         s = APP.settings
         d = {"ready": gdrive_ready(), "own_app": bool(s.get("gdrive_client_id")), "own_client_id": s.get("gdrive_client_id") or "",
              "connected": gdrive_connected(), "on": bool(s.get("gdrive_on")), "account": s.get("gdrive_account") or "",
