@@ -22,6 +22,24 @@ function JoinTime({ d }) {
     {on.length > 3 && share >= 50 && <>{" "}{`${top.map(m => m.name.replace(/\.zip$/i, "")).join(", ")} are ${share}% of it.`}</>}
   </div>;
 }
+// Smart mod manager: mods players download but don't use, and what turning them off saves
+const KIND = { unused: "Not used", map: "Map not played", double: "Duplicate" };
+function ModAdvice({ version, onChange }) {
+  const [a, setA] = useState(null), [open, setOpen] = useState(false);
+  useEffect(() => { L.api("/api/mods/advice").then(setA).catch(() => setA(null)); }, [version]);
+  if (!a || !a.items.length) return null;
+  const off = async name => { try { const r = await L.api("/api/mods/action", { json: { action: "toggle", name } }); L.toast(r.note || "Turned off"); onChange(); } catch (e) { L.toast(e.message); } };
+  const fmt = s => s < 90 ? `${Math.max(1, s)} seconds` : `${Math.round(s / 60)} minutes`;
+  return <div className="card" style={{ marginBottom: 16 }}>
+    <div className="row"><b>{`💡 ${a.items.length === 1 ? "1 mod" : a.items.length + " mods"} players download but don't use`}</b><span className="spacer" /><button className="btn sm" onClick={() => setOpen(!open)}>{open ? "Hide" : "Show"}</button></div>
+    <p className="small muted" style={{ margin: "4px 0 0" }}>{`Turning them off saves every new player ${L.fmtSize(a.save)}`}{a.secs_now != null ? ` - joining goes from about ${fmt(a.secs_now)} to ${fmt(a.secs_after)}.` : "."}{" Turned-off mods stay on the Mods page, so you can turn them back on any time."}</p>
+    {!a.enough && <p className="small muted" style={{ margin: "4px 0 0" }}>{"Unused vehicles show up here after a week of playing."}</p>}
+    {open && a.items.map(x => <div key={x.name} className="row small" style={{ padding: "8px 0", borderTop: "1px solid var(--line)", gap: 8 }}>
+      <span className="badge">{KIND[x.kind] || x.kind}</span>
+      <div style={{ flex: 1, minWidth: 0 }}><b>{x.name.replace(/\.zip$/i, "")}</b> <span className="muted">{L.fmtSize(x.size)}</span><div className="muted">{x.why}</div></div>
+      <button className="btn sm" onClick={() => off(x.name)}>Turn off</button></div>)}
+  </div>;
+}
 const Lines = ({ items, pre = "" }) => items.map((t, i) => <span key={i}>{i > 0 && <br />}{pre + t}</span>);
 
 // A dialog drawn by React (same look as the old ones)
@@ -270,6 +288,7 @@ export function Mods({ reload }) {
     <div className="row"><div><h1>Mods</h1><p className="sub">Drop mod .zip files here, or find mods in the BeamNG repository. Every mod is virus-checked before players can download it.</p></div><span className="spacer" /><button className="btn primary" onClick={() => L.modBrowser()}>Browse mods</button></div>
     <Uploads roomLeft={roomLeft} onDone={again} />
     <p className="small muted" style={{ margin: "10px 0 16px" }}>{`🛡 Active checks: ${d.checks.join(" + ")}. ${d.auto_apply ? "The server restarts by itself ~15 s after a change." : "Restart the server after changes."}`}</p>
+    <ModAdvice version={d} onChange={again} />
     <div className="card" style={{ marginBottom: 16 }}>
       <div className="row"><div><div className="small muted">Players download before they can join</div><div style={{ fontSize: 22, fontWeight: 650 }}>{d.download ? L.fmtSize(d.download) : "Nothing - vanilla"}</div>
         <JoinTime d={d} />

@@ -50,6 +50,7 @@ export const PLACES = [
   ["settings", "Access from the internet", "remote https phone outside"],
   ["settings", "Hide your IP (DDoS protection)", "relay ip ddos hide my ip guard"],
   ["settings", "Automatic backups", "backup restore nightly copy usb drive another computer"],
+  ["settings", "Google Drive", "google drive cloud backup copy restore rescue storage"],
   ["settings", "Users & roles", "team accounts invite friend moderator"],
   ["settings", "Public status page", "status page public link join"],
   ["settings", "Phone app", "app android qr"],

@@ -230,14 +230,18 @@ function Templates({ reloadPage }) {
   if (!tp) return <CardWait err={tpErr} retry={tpAgain} />;
   const use = t => {
     const map = chk("tpl_map");
-    if (!confirm(`Use the ${t.label} template? It changes the player limit, car cleanup, AFK removal, chat tags, chat rules and the welcome message${map ? ", and switches the map to " + t.map : ""}.`)) return;
-    post("/api/template", { id: t.id, map }, 6000, reloadPage);
+    if (!confirm(`Use the ${t.label} template? It changes the player limit, car cleanup, AFK removal, chat tags, chat rules, the welcome message, the games and lap times${map ? ", and switches the map to " + t.map : ""}.`)) return;
+    L.api("/api/template", { json: { id: t.id, map } }).then(r => {
+      L.toast(r.note, 6000); reloadPage();
+      if (r.search && confirm(`Find mods for it? This opens the mod browser with a search for "${r.search}".`)) L.modBrowser(r.search);
+    }).catch(e => L.toast(e.message, 8000));
   };
   return (<div className="card" style={{ marginTop: 16 }}><h2>Quick setup: server templates</h2>
     <p className="small muted">One click sets the player limit, car cleanup, AFK removal, chat tags, chat rules, a welcome message and tips for the kind of server you want. You can change everything afterwards.</p>
     <div className="grid g2" style={{ gap: 10 }}>{tp.templates.map(t => <div key={t.id} className="card tight" style={{ padding: "12px 14px" }}>
-      <div className="row"><b>{t.label}</b><span className="spacer" /><button className="btn sm" onClick={() => use(t)}>Use</button></div>
-      <div className="small muted">{t.about}</div><div className="small" style={{ marginTop: 4 }}>{`Map ${t.map} · ${t.max_players} players · tags ${t.tags.join(", ")}`}</div></div>)}</div>
+      <div className="row"><b>{t.label}</b>{tp.current === t.id && <span className="badge good" style={{ marginLeft: 6 }}>{"In use"}</span>}<span className="spacer" /><button className="btn sm" onClick={() => use(t)}>Use</button></div>
+      <div className="small muted">{t.about}</div><div className="small" style={{ marginTop: 4 }}>{`Map ${t.map} · ${t.max_players} players · tags ${t.tags.join(", ")}`}</div>
+      {t.games.length > 0 && <div className="small muted">{`Games: ${t.games.join(", ")}${t.laps ? " · lap times" : ""}`}</div>}</div>)}</div>
     <Toggle id="tpl_map" on title="Also switch to the template's map" style={{ marginTop: 8 }}>Restarts the server if it's running</Toggle>
   </div>);
 }
@@ -295,13 +299,17 @@ function Events() {
   const stop = async () => { try { const r = await L.api("/api/events/stop", { method: "POST" }); L.toast(r.note); setTimeout(again, 4000); } catch (e) { L.toast(e.message); } };
   return (<div className="card" style={{ marginTop: 16 }}>
     <Head title="Events" on={list.some(e => e.on !== false)} pill={list.length ? `${list.length} planned` : "None"} />
-    <p className="small muted">{`Weekly events like "Friday 20:00 drift night": announced in Discord${d.has_webhook ? "" : " (add a webhook in Settings)"} and the game chat, then the server switches to the event's map and mods, and back to your normal map when it's over. Players can type `}<Mono>/events</Mono> in Discord to see what's coming.</p>
+    <p className="small muted">{`Weekly or one-off events like "Friday 20:00 drift night": announced in Discord${d.has_webhook ? "" : " (add a webhook in Settings)"} and the game chat, then the server switches to the event's map and mods, and back to your normal map when it's over. Players can type `}<Mono>/events</Mono> in Discord to see what's coming.</p>
+    {d.last && d.last.results && <div className="small muted" style={{ margin: "6px 0" }}>{`Last event: ${d.last.name} · ${d.last.results.players.length} players`}{d.last.results.laps[0] ? ` · fastest lap ${d.last.results.laps[0].name} ${d.last.results.laps[0].time}` : ""}{d.last.results.drifts[0] ? ` · best drift ${d.last.results.drifts[0].name} ${d.last.results.drifts[0].score}` : ""}</div>}
     {d.active && <div className="issue info"><span className="ic">★</span><span><b>{d.active.name}</b>{` is running until ${L.fmtTime(d.active.end)}.`}</span><button className="btn sm" style={{ marginLeft: "auto" }} onClick={stop}>End now</button></div>}
     <div>{list.map((e, i) => <div key={e._k} className="card tight" style={{ padding: "12px 14px", marginTop: 10 }}>
       <div className="row"><input type="text" value={e.name || ""} onChange={x => set(i, { name: x.target.value })} placeholder="Friday drift night" style={{ flex: 1, fontWeight: 600 }} />
         <label className="toggle" style={{ margin: "0 0 0 10px" }}><input type="checkbox" checked={e.on !== false} onChange={x => set(i, { on: x.target.checked })} /><span><b>On</b></span></label>
         <button className="btn sm danger" style={{ marginLeft: 8 }} onClick={() => setList(list.filter((_, j) => j !== i))}>Remove</button></div>
-      <div className="row" style={{ flexWrap: "wrap", gap: 6, margin: "8px 0" }}>{d.days.map((n, k) => <label key={k} className="badge" style={{ cursor: "pointer" }}><input type="checkbox" checked={(e.days || []).includes(k)} onChange={x => set(i, { days: flip(e.days, k, x.target.checked).sort() })} /> {n}</label>)}</div>
+      <div className="row" style={{ flexWrap: "wrap", gap: 6, margin: "8px 0" }}>
+        <div className="seg"><button className={e.date ? "" : "on"} onClick={() => set(i, { date: "", days: (e.days || []).length ? e.days : [4] })}>Every week</button><button className={e.date ? "on" : ""} onClick={() => set(i, { date: e.date || d.today })}>One date</button></div>
+        {e.date ? <input type="date" value={e.date} min={d.today} onChange={x => set(i, { date: x.target.value })} style={TIME} />
+          : d.days.map((n, k) => <label key={k} className="badge" style={{ cursor: "pointer" }}><input type="checkbox" checked={(e.days || []).includes(k)} onChange={x => set(i, { days: flip(e.days, k, x.target.checked).sort() })} /> {n}</label>)}</div>
       <div className="grid g3" style={{ gap: 10 }}>
         <label className="f" style={{ margin: 0 }}><span>Starts at</span><input type="time" value={e.at || "20:00"} onChange={x => set(i, { at: x.target.value })} style={TIME} /></label>
         <label className="f" style={{ margin: 0 }}><span>Lasts</span><select value={e.minutes || 120} onChange={x => set(i, { minutes: Number(x.target.value) })}>{LASTS.map(m => <option key={m} value={m}>{m < 60 ? m + " min" : m / 60 + " h"}</option>)}</select></label>
@@ -309,10 +317,12 @@ function Events() {
       </div>
       {d.mods.length > 0 && <><div className="small" style={{ margin: "8px 0 2px" }}>Turn these mods on during the event (they're turned off again after):</div>
         <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>{d.mods.map(m => <label key={m} className="badge" style={{ cursor: "pointer" }}><input type="checkbox" checked={(e.mods || []).includes(m)} onChange={x => set(i, { mods: flip(e.mods, m, x.target.checked) })} /> {m}</label>)}</div></>}
-      <div className="grid g2" style={{ gap: 10, marginTop: 8 }}>
+      <div className="grid g3" style={{ gap: 10, marginTop: 8 }}>
         <label className="f" style={{ margin: 0 }}><span>Announce in Discord and the game</span><select value={e.announce ?? 30} onChange={x => set(i, { announce: Number(x.target.value) })}>{ANNOUNCE.map(([n, l]) => <option key={n} value={n}>{l}</option>)}</select></label>
         <label className="f" style={{ margin: 0 }}><span>Extra text (optional)</span><input type="text" value={e.text || ""} onChange={x => set(i, { text: x.target.value })} placeholder="Bring your best drift car!" /></label>
+        <label className="f" style={{ margin: 0 }}><span>Game during the event</span><select value={e.game || ""} onChange={x => set(i, { game: x.target.value })}><option value="">Just driving</option>{(d.games || []).map(g => <option key={g.id} value={g.id}>{g.label}</option>)}</select></label>
       </div>
+      <label className="toggle"><input type="checkbox" checked={!!e.results} onChange={x => set(i, { results: x.target.checked })} /><span><b>Post the results in Discord afterwards</b><small>Who came, the fastest laps and the best drifts during the event</small></span></label>
       <label className="toggle"><input type="checkbox" checked={!!e.ping} onChange={x => set(i, { ping: x.target.checked })} /><span><b>Ping @everyone in Discord</b><small>Only in the announcement</small></span></label>
       {e.next ? <div className="small muted">{`Next: ${L.fmtTime(e.next)}`}</div> : null}
     </div>)}</div>

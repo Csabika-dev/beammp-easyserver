@@ -153,13 +153,14 @@ function modal(inner) {
   document.body.appendChild(bg); return bg;
 }
 /* ---------------- mod browser (BeamNG repository) */
-async function modBrowser() {
+async function modBrowser(query) {
   const bg = modal(`<div class="row"><h2 style="margin:0">Browse mods</h2><span class="spacer"></span><button class="btn sm" data-x>Close</button></div>
     <p class="small muted">From the official BeamNG repository (beamng.com). Install = download, virus check, ready for players. You can also paste a link to a mod page.</p>
     <div class="row" style="gap:8px;flex-wrap:wrap"><select id="mb_cat" style="flex:1;min-width:140px"></select><select id="mb_ord" style="flex:1;min-width:140px"></select></div>
     <div class="row" style="margin-top:8px"><input type="text" id="mb_q" placeholder="Search, or paste a beamng.com mod link" maxlength="200" style="flex:1"><button class="btn" id="mb_go">Search</button></div>
     <div id="mb_list" style="margin-top:12px"><p class="muted small">Loading…</p></div>`);
   bg.querySelector(".card").style.width = "min(820px,100%)";
+  if (query) $("#mb_q", bg).value = String(query);
   bg.querySelector("[data-x]").onclick = () => { bg.remove(); if (TAB === "mods") show("mods"); };
   let page = 1, installedAny = false;
   const load = async (more) => {

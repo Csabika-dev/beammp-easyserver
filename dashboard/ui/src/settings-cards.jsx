@@ -167,17 +167,19 @@ export function StatusPage() {
   const P = d.preview;
   const save = () => {
     if (chk("sp_on") && !d.on && !confirm("Turn on the public status page? Anyone who can reach your dashboard address can see it without logging in.")) return;
-    post("/api/statuspage", { on: chk("sp_on"), players: chk("sp_players"), mods: chk("sp_mods"), address: chk("sp_addr"), credit: chk("sp_credit"), title: val("sp_title") }, 6000, again);
+    post("/api/statuspage", { on: chk("sp_on"), players: chk("sp_players"), mods: chk("sp_mods"), address: chk("sp_addr"), credit: chk("sp_credit"), title: val("sp_title"), about: val("sp_about"), discord: val("sp_discord") }, 6000, again);
   };
   return (<div className="card" style={{ margin: "0 0 16px" }} key={v}>
     <div className="row"><h2 style={{ margin: 0 }}>Public status page</h2><span className="spacer" /><Pill on={d.on}>{d.on ? "On" : "Off"}</Pill></div>
-    <p className="small muted">A simple page anyone can open without logging in: is the server up, how many players, the map, how to join, the next event, lap times and the uptime of the last 30 days. No settings or admin buttons, and no address unless you turn it on below. Also as JSON for bots and websites (<Mono>/status.json</Mono>).</p>
+    <p className="small muted">A simple page anyone can open without logging in: is the server up, how many players, the map, how to join and how long the first join takes, the coming events, lap times, drift and championship standings, and the uptime of the last 30 days. No settings or admin buttons, and no address unless you turn it on below. Also as JSON for bots and websites (<Mono>/status.json</Mono>).</p>
     <label className="toggle"><input type="checkbox" id="sp_on" defaultChecked={!!d.on} /><span><b>Turn on the status page</b></span></label>
     <Toggle id="sp_players" on={d.players} title="Show the names of online players">Off = only the number</Toggle>
     <Toggle id="sp_mods" on={d.mods} title="Show the mods and the download size">So players know what they'll download before they launch the game</Toggle>
     <Toggle id="sp_addr" on={d.address} title="Show the address to join with">{d.relay ? "Your relay's address - your home IP stays hidden" : "BeamMP has no join links, so players copy the address into Direct Connect. This shows your home IP to anyone with the link - turn on Hide my IP first if that matters to you"}</Toggle>
     <Toggle id="sp_credit" on={d.credit} title={"\"Hosted with BeamMP EasyServer\" at the bottom"}>A small link, so players who want their own server can find it</Toggle>
     <label className="f"><span>Page title</span><input type="text" id="sp_title" maxLength={80} defaultValue={d.title} placeholder={P.title} /></label>
+    <label className="f"><span>About your server (optional)</span><textarea id="sp_about" rows={3} maxLength={500} defaultValue={d.about} placeholder="Friendly drift and racing server. Race night every Friday at 20:00!" /></label>
+    <label className="f"><span>Discord invite link (optional)</span><input type="text" id="sp_discord" maxLength={80} defaultValue={d.discord} placeholder="https://discord.gg/abc123" /><small className="muted">Shows a Join our Discord button. Shared links show the title, players and map as a preview.</small></label>
     {d.on && <p className="small">On your network: <a href={d.lan_url} target="_blank" rel="noopener">{d.lan_url}</a>{d.remote ? <><br />On the internet: <a href={d.url} target="_blank" rel="noopener">{d.url}</a></>
       : <><br /><span className="muted">Players outside your network can only open it once internet access to the dashboard is on (Network). Or share the Discord status message instead.</span></>}</p>}
     <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>{P.servers.map((x, i) => <span key={i} className="badge">{`${x.name}: ${x.state}` + (x.history.d30 != null ? ` · ${x.history.d30}% (30 d)` : "")}</span>)}</div>
@@ -345,6 +347,79 @@ function BackupCopy({ bk, again }) {
   </div>;
 }
 
+/* ---------------- Google Drive copies + rescue */
+function GoogleDrive() {
+  const [d, setD] = useState(null), [err, setErr] = useState(""), [busy, setBusy] = useState(""), [tick, setTick] = useState(0);
+  const load = () => L.api("/api/gdrive?details=1").then(x => { setD(x); setErr(""); }).catch(e => setErr(e.message));
+  useEffect(() => { load(); }, [tick]);
+  const waiting = d && d.flow && d.flow.state === "waiting";
+  useEffect(() => {
+    if (!waiting) return;
+    const t = setInterval(() => L.api("/api/gdrive").then(x => { if (!x.flow || x.flow.state !== "waiting") setTick(n => n + 1); else setD(o => ({ ...o, flow: x.flow })); }).catch(() => {}), 3000);
+    return () => clearInterval(t);
+  }, [waiting]);
+  if (!d) return err ? <Oops err={err} retry={load} style={{ marginTop: 16 }} /> : <SkelCard lines={3} style={{ marginTop: 16 }} />;
+  const act = async (action, extra, msg) => {
+    if (msg && !confirm(msg)) return;
+    setBusy(action);
+    try { const r = await L.api("/api/gdrive", { json: { action, ...extra } }); if (r.note) L.toast(r.note, 8000); if (r.flow) setD(o => ({ ...o, flow: r.flow })); else setTick(n => n + 1); }
+    catch (e) { L.toast(e.message, 9000); }
+    setBusy("");
+  };
+  const est = d.estimate, dr = d.drive, f = d.flow;
+  const tooBig = dr && dr.free != null && est.known && est.total - (d.used_by_us || 0) > dr.free;
+  const restore = x => {
+    const from = x.computer === d.computer ? "" : ` (from the computer ${x.computer})`;
+    if (!confirm(`Restore the backup from ${L.fmtTime(x.t)}${from} onto this server? Its config, allow-list, bans, moderation, messages and game records go back to how they were then. How things are right now is saved as a backup first.`)) return;
+    const mods = x.mods && confirm(["This backup has the mods in it too. Put those mods back as well?", "", "OK = settings and mods, Cancel = only the settings."].join("\n"));
+    act("restore", { id: x.id, mods });
+  };
+  const useText = est.known ? `About ${L.fmtSize(est.total)} of your Google Drive: the last ${est.keep} nightly backups, ${L.fmtSize(est.per_night)} each. Older ones are deleted by themselves.`
+    : `It keeps the last ${est.keep} nightly backups there. They're usually small (settings only) - the exact size shows after the first backup.`;
+  return (<div className="card" style={{ marginTop: 16 }}>
+    <div className="row"><h2 style={{ margin: 0 }}>Google Drive</h2><span className="spacer" /><Pill on={d.connected && d.on}>{d.connected ? (d.on ? "Copying nightly" : "Paused") : "Not connected"}</Pill></div>
+    <p className="small muted">{"A copy of every nightly backup in your own Google Drive, so nothing is lost even if this computer breaks or is stolen. On a new computer, connect the same Google account and press Restore - your server is back as it was. EasyServer only sees the files it makes itself, nothing else in your Drive. Keys and passwords are never in a backup."}</p>
+    {!d.connected && <p className="small"><b>{"Space it needs: "}</b>{useText}{" A free Google account has 15 GB."}</p>}
+    {!d.backups_on && <Warn>{"Nightly backups are off - turn them on above, otherwise nothing new goes to the Drive."}</Warn>}
+    {d.connected ? <>
+      <p className="small" style={{ margin: "6px 0" }}>{"Connected to "}<b>{d.account || "your Google account"}</b>{` · folder "${d.folder}"`}</p>
+      {dr && <div style={{ margin: "8px 0" }}>
+        <div className="row small"><span>{`EasyServer's copies use ${L.fmtSize(d.used_by_us || 0)}${est.known ? ` (about ${L.fmtSize(est.total)} once ${est.keep} are kept)` : ""}`}</span><span className="spacer" />
+          {dr.limit ? <span className={tooBig ? "" : "muted"} style={tooBig ? { color: "var(--warn-ink)", fontWeight: 600 } : undefined}>{`${L.fmtSize(dr.free)} free of ${L.fmtSize(dr.limit)}`}</span> : <span className="muted">{"Unlimited storage"}</span>}</div>
+        {dr.limit ? <div className="bar" role="img" aria-label={`Google Drive: ${L.fmtSize(dr.used)} used of ${L.fmtSize(dr.limit)}`}><i style={{ width: Math.min(100, Math.round(dr.used / dr.limit * 100)) + "%", ...(tooBig ? { background: "var(--warning)" } : {}) }} /></div> : null}
+        {tooBig && <Warn>{"Your Drive is almost full - the next copies may not fit. Free up space in Google Drive or turn off Include the mods."}</Warn>}</div>}
+      {d.error && <Warn>{d.error}</Warn>}
+      <label className="toggle"><input type="checkbox" checked={d.on} disabled={busy === "on"} onChange={e => act("on", { on: e.target.checked })} /><span><b>{"Copy every nightly backup to Google Drive"}</b><small>{`The last ${est.keep} of each server are kept there`}</small></span></label>
+      {d.last && <p className="small" style={{ marginTop: 4, color: d.last.ok ? "var(--good-ink)" : "var(--warning)" }}>{`${d.last.ok ? "Last copy" : "The last copy failed"} (${L.fmtTime(d.last.t)}): ${d.last.note}`}</p>}
+      <div className="row" style={{ gap: 8 }}><button className="btn" disabled={busy === "now"} onClick={() => act("now")}>{"Copy now"}</button>
+        <button className="btn ghost" disabled={busy === "disconnect"} onClick={() => act("disconnect", {}, "Disconnect Google Drive? No more copies go there. The copies already in your Drive stay - delete the folder there if you don't want them.")}>{"Disconnect"}</button></div>
+      {d.files.length > 0 && <details style={{ marginTop: 12 }}><summary className="small"><b>{`Backups in your Drive (${d.files.length})`}</b>{" - restore one onto this server"}</summary>
+        {d.files.map(x => <div key={x.id} className="row small" style={{ padding: "3px 0" }}><span>{L.fmtTime(x.t) + (x.computer !== d.computer ? ` · from ${x.computer}` : "") + ` · server ${x.server}` + (x.mods ? " · with mods" : "") + " · " + L.fmtSize(x.size)}</span><span className="spacer" />
+          <button className="btn sm" disabled={busy === "restore"} onClick={() => restore(x)}>{"Restore"}</button></div>)}</details>}
+    </> : f && f.state === "waiting" ? <div className="card tight" style={{ padding: "14px 16px", margin: "8px 0" }}>
+      <div className="small">{"1. Open "}<a href={f.url} {...NEW_TAB}><b>{f.url.replace(/^https:\/\//, "")}</b></a>{" on your phone or this computer"}</div>
+      <div className="small" style={{ marginTop: 4 }}>{"2. Sign in to Google and type this code:"}</div>
+      <div className="mono" style={{ fontSize: 28, fontWeight: 700, letterSpacing: 3, margin: "6px 0", userSelect: "all" }}>{f.code}</div>
+      <div className="small">{"3. Press Allow. This page notices by itself."}</div>
+      <div className="row small muted" style={{ marginTop: 8 }}><span>{`Waiting… the code works until ${L.fmtTime(f.until)}`}</span><span className="spacer" /><button className="btn sm ghost" onClick={() => act("cancel")}>{"Cancel"}</button></div>
+    </div> : <>
+      {f && f.state === "failed" && <Warn>{f.note}</Warn>}
+      {d.ready ? <button className="btn primary" disabled={busy === "connect"} onClick={() => act("connect")}>{"Connect Google Drive"}</button>
+        : <p className="small">{"Google Drive needs a one-time setup in this version: use your own Google app below (free, about 5 minutes)."}</p>}
+    </>}
+    <details style={{ marginTop: 12 }} open={!d.ready && !d.connected}><summary className="small muted">{d.own_app ? "Using your own Google app" : "Use your own Google app (advanced)"}</summary>
+      <ol className="small" style={{ margin: "6px 0 10px" }}>
+        <li>{"Open "}<a href="https://console.cloud.google.com/projectcreate" {...NEW_TAB}>{"console.cloud.google.com"}</a>{" and make a new project (any name)."}</li>
+        <li>{"APIs & Services → Library: search for "}<b>{"Google Drive API"}</b>{" and press Enable."}</li>
+        <li>{"Google Auth Platform → Branding: give the app a name and your email. Audience: pick External, then press "}<b>{"Publish app"}</b>{" - otherwise Google cuts the connection after 7 days."}</li>
+        <li>{"Clients → Create client → type "}<b>{"TVs and Limited Input devices"}</b>{". Paste the Client ID and Client secret here."}</li></ol>
+      <label className="f"><span>{"Client ID"}</span><input type="text" id="gd_cid" defaultValue={d.own_client_id} placeholder="1234567890-abc….apps.googleusercontent.com" autoComplete="off" spellCheck={false} /></label>
+      <label className="f"><span>{"Client secret"}</span><input type="password" id="gd_sec" placeholder={d.own_app ? "Saved (encrypted) - paste a new one to replace" : "GOCSPX-…"} autoComplete="off" /></label>
+      <button className="btn" disabled={busy === "own_app"} onClick={() => act("own_app", { client_id: val("gd_cid"), client_secret: val("gd_sec") }, d.connected ? "Switching the Google app disconnects Google Drive - you connect it again after. Go on?" : "")}>{"Save"}</button>
+    </details>
+  </div>);
+}
+
 export function Backups() {
   const [d, again, v, err] = useLoad(["/api/backups", "/api/settings", "/api/resources"]);
   const [busy, setBusy] = useState("");
@@ -385,6 +460,7 @@ export function Backups() {
         {st.duckdns_domain && <p className="small" style={{ marginTop: 8 }}>Friends join at <span className="mono">{`${st.duckdns_domain}.duckdns.org:${st.port_main || 30814}`}</span> (the game port still has to be forwarded on your router).</p>}
       </div>
     </div>
+    {owner && <GoogleDrive />}
     <div className="card" style={{ marginTop: 16 }}><h2>Computer load</h2>
       <p className="small muted">You get a warning when this computer runs out of memory, the processor is maxed out for 5 minutes, or the server uses almost all of your upload - with a suggested player limit.</p>
       <div className="grid g3" style={{ gap: 10, margin: "8px 0" }}>

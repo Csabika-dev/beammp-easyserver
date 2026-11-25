@@ -94,7 +94,7 @@ BUILTIN_MAPS = ["gridmap_v2", "west_coast_usa", "east_coast_usa", "utah", "italy
 
 SECRET_NAMES = ("MODS_PASSWORD", "VT_API_KEY", "DISCORD_WEBHOOK", "SMTP_PASSWORD", "TOTP_SECRET",
                 "BEAMMP_AUTH_KEY", "DISCORD_BOT_TOKEN", "DUCKDNS_TOKEN", "NTFY_TOPIC", "WAKE_TOPIC", "USERS_KEY",
-                "TELEGRAM_TOKEN", "CUSTOM_WEBHOOK", "SUPPORTER_KEY")
+                "TELEGRAM_TOKEN", "CUSTOM_WEBHOOK", "SUPPORTER_KEY", "GDRIVE_SECRET", "GDRIVE_REFRESH")
 
 DEFAULT_SETTINGS = {
     "port": 30815,
@@ -152,6 +152,12 @@ DEFAULT_SETTINGS = {
     "statuspage_on": False,        # public page /status: is the server up, players, uptime - no login
     "statuspage_players": False,   # ...also show the names of online players
     "statuspage_title": "",
+    "gdrive_on": False,            # a copy of the nightly backups in the owner's Google Drive (secret GDRIVE_REFRESH)
+    "gdrive_client_id": "",        # an own Google app instead of the built-in one (its secret: GDRIVE_SECRET)
+    "gdrive_folder": "",
+    "gdrive_account": "",
+    "statuspage_about": "",
+    "statuspage_discord": "",
     "statuspage_mods": True,       # ...and the mod list with the download size
     "statuspage_address": False,   # ...and the address to join with (the relay's when "Hide my IP" is on)
     "event_ads": False,            # advertise events: Discord/Telegram/webhook post when planned + a day before, in-game reminders
@@ -2564,6 +2570,277 @@ def copy_backups(files):
     return ""
 
 
+# ---- Google Drive: a copy of the backups in the owner's own Drive ----------------------------------------------
+# Signing in works like on a TV: the dashboard shows a short code, the owner opens google.com/device on their phone,
+# types it and allows access. Only the files EasyServer makes are visible to it (drive.file), nothing else in the Drive.
+# The built-in Google app: an OAuth client of type "TVs and Limited Input devices" (Google doesn't treat its secret
+# as secret - it's in every copy of the app). Empty = not set up yet; owners can use their own in Settings instead.
+GDRIVE_CLIENT_ID = ""
+GDRIVE_CLIENT_SECRET = ""
+GDRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"
+GDRIVE_API = "https://www.googleapis.com/drive/v3"
+GDRIVE_UPLOAD = "https://www.googleapis.com/upload/drive/v3/files"
+GDRIVE_FOLDER_NAME = "BeamMP EasyServer backups"
+GDRIVE_MAX = 8 * 1024 ** 3
+GDRIVE_MIN_WAIT = 5              # seconds between asking Google whether the owner allowed access
+_GD = {"flow": None, "access": "", "exp": 0}
+
+
+class GDriveError(RuntimeError):
+    pass
+
+
+def gdrive_app():
+    """(client id, client secret) - the owner's own Google app if they set one up, otherwise the built-in one."""
+    own = (APP.settings.get("gdrive_client_id") or "").strip()
+    if own:
+        return own, APP.secrets.get("GDRIVE_SECRET")
+    return GDRIVE_CLIENT_ID, GDRIVE_CLIENT_SECRET
+
+
+def gdrive_ready():
+    return bool(gdrive_app()[0])
+
+
+def gdrive_connected():
+    return APP.secrets.has("GDRIVE_REFRESH")
+
+
+def _google(url, fields=None, method=None, body=None, headers=None, timeout=30, want_headers=False):
+    h = {"User-Agent": "BeamMP-EasyServer/" + EASY_VERSION}
+    h.update(headers or {})
+    data = body
+    if fields is not None:
+        data = urllib.parse.urlencode(fields).encode()
+        h["Content-Type"] = "application/x-www-form-urlencoded"
+    req = urllib.request.Request(url, data=data, method=method or ("POST" if data is not None else "GET"), headers=h)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            raw = r.read()
+            out = json.loads(raw) if raw else {}
+            return (out, r.headers) if want_headers else out
+    except urllib.error.HTTPError as e:            # never put a token into a message: only Google's error text
+        try:
+            j = json.loads(e.read() or b"{}")
+        except ValueError:
+            j = {}
+        err = j.get("error")
+        msg = err.get("message") if isinstance(err, dict) else (j.get("error_description") or err)
+        ex = GDriveError("Google said %d: %s" % (e.code, str(msg or "error")[:200]))
+        ex.code, ex.kind = e.code, err if isinstance(err, str) else ""
+        raise ex
+    except urllib.error.URLError as e:
+        raise GDriveError("can't reach Google (%s)" % short_err(e.reason))
+
+
+def gdrive_token():
+    if _GD["access"] and now() < _GD["exp"] - 60:
+        return _GD["access"]
+    cid, sec = gdrive_app()
+    ref = APP.secrets.get("GDRIVE_REFRESH")
+    if not cid or not ref:
+        raise GDriveError("Google Drive isn't connected")
+    try:
+        r = _google("https://oauth2.googleapis.com/token", {"client_id": cid, "client_secret": sec, "refresh_token": ref,
+                                                            "grant_type": "refresh_token"})
+    except GDriveError as e:
+        if getattr(e, "kind", "") == "invalid_grant":
+            raise GDriveError("Google Drive was disconnected (access removed in the Google account, or it expired) - "
+                              "connect it again under Settings → Automatic backups.")
+        raise
+    _GD.update(access=r["access_token"], exp=now() + int(r.get("expires_in") or 3600))
+    return _GD["access"]
+
+
+def gdrive_api(method, path, params=None, body=None, base=GDRIVE_API, headers=None, **kw):
+    url = base + path + ("?" + urllib.parse.urlencode(params) if params else "")
+    h = dict(headers or {}, Authorization="Bearer " + gdrive_token())
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode()
+        h["Content-Type"] = "application/json; charset=UTF-8"
+    return _google(url, method=method, body=data, headers=h, **kw)
+
+
+def gdrive_about():
+    """Who is connected and how full the Drive is."""
+    a = gdrive_api("GET", "/about", {"fields": "user(displayName,emailAddress),storageQuota(limit,usage)"})
+    q = a.get("storageQuota") or {}
+    lim = int(q["limit"]) if q.get("limit") else None
+    used = int(q.get("usage") or 0)
+    return {"account": (a.get("user") or {}).get("emailAddress") or (a.get("user") or {}).get("displayName") or "",
+            "limit": lim, "used": used, "free": (lim - used) if lim else None}
+
+
+def gdrive_folder():
+    """The id of the backups folder, made the first time (or again if the owner deleted it)."""
+    fid = APP.settings.get("gdrive_folder") or ""
+    if fid:
+        try:
+            f = gdrive_api("GET", "/files/" + urllib.parse.quote(fid), {"fields": "id,trashed"})
+            if not f.get("trashed"):
+                return fid
+        except GDriveError as e:
+            if getattr(e, "code", 0) != 404:
+                raise
+    f = gdrive_api("POST", "/files", {"fields": "id"}, {"name": GDRIVE_FOLDER_NAME, "mimeType": "application/vnd.google-apps.folder"})
+    APP.settings.update({"gdrive_folder": f["id"]})
+    return f["id"]
+
+
+def gdrive_list(folder=None):
+    folder = folder or gdrive_folder()
+    r = gdrive_api("GET", "/files", {"q": "'%s' in parents and trashed = false" % folder.replace("'", ""),
+                                     "fields": "files(id,name,size,createdTime)", "orderBy": "createdTime desc", "pageSize": 300})
+    out = []
+    for f in r.get("files") or []:
+        m = re.fullmatch(r"([A-Za-z0-9-]{1,20})-([a-z0-9]{1,12})-(\d{8}-\d{4}(?:\d{2})?)(-mods)?\.zip", f.get("name") or "")
+        if m:
+            out.append({"id": f["id"], "name": f["name"], "size": int(f.get("size") or 0), "computer": m.group(1),
+                        "server": m.group(2), "when": m.group(3), "mods": bool(m.group(4)),
+                        "t": int(time.mktime(time.strptime(m.group(3)[:13], "%Y%m%d-%H%M")))})
+    return out
+
+
+def gdrive_upload(path, name, folder):
+    size = os.path.getsize(path)
+    if size > GDRIVE_MAX:
+        raise GDriveError("%s is too big for the Drive copy (%s)" % (name, fmt_bytes(size)))
+    _, hdr = gdrive_api("POST", "", {"uploadType": "resumable", "fields": "id"}, {"name": name, "parents": [folder]},
+                        base=GDRIVE_UPLOAD, headers={"X-Upload-Content-Type": "application/zip", "X-Upload-Content-Length": str(size)},
+                        want_headers=True)
+    loc = hdr.get("Location")
+    if not loc or not loc.startswith("https://www.googleapis.com/"):
+        raise GDriveError("Google didn't start the upload")
+    with open(path, "rb") as f:
+        _google(loc, method="PUT", body=f, headers={"Content-Type": "application/zip", "Content-Length": str(size)},
+                timeout=max(300, size // 200000))
+
+
+def gdrive_copy(files):
+    """Upload the backups just made and keep the newest BACKUP_KEEP of each server. Returns a note."""
+    folder, tag = gdrive_folder(), backup_tag()
+    for n in files:
+        gdrive_upload(os.path.join(BACKUP_DIR, n), "%s-%s" % (tag, n), folder)
+    have = gdrive_list(folder)
+    for iid in {n.split("-")[0] for n in files}:
+        mine = [f for f in have if f["computer"] == tag and f["server"] == iid]
+        for old in mine[BACKUP_KEEP:]:
+            try:
+                gdrive_api("DELETE", "/files/" + urllib.parse.quote(old["id"]))
+            except GDriveError:
+                pass
+    return "Copied to Google Drive (%s)" % GDRIVE_FOLDER_NAME
+
+
+def gdrive_download(fid, dest):
+    url = GDRIVE_API + "/files/" + urllib.parse.quote(fid) + "?alt=media"
+    req = urllib.request.Request(url, headers={"Authorization": "Bearer " + gdrive_token(), "User-Agent": "BeamMP-EasyServer/" + EASY_VERSION})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r, open(dest, "wb") as f:
+            got = 0
+            while True:
+                chunk = r.read(1024 * 1024)
+                if not chunk:
+                    break
+                got += len(chunk)
+                if got > GDRIVE_MAX:
+                    raise GDriveError("That file is too big")
+                f.write(chunk)
+    except urllib.error.HTTPError as e:
+        raise GDriveError("Google said %d while downloading" % e.code)
+    except urllib.error.URLError as e:
+        raise GDriveError("can't reach Google (%s)" % short_err(e.reason))
+
+
+def gdrive_estimate():
+    """How much of the Drive the copies will take: the newest backup of each server x the copies kept."""
+    with LOCK:
+        ids = list(INSTANCES)
+    per = 0
+    for iid in ids:
+        b = list_backups(iid)
+        if b:
+            per += b[0]["size"]
+    return {"per_night": per, "total": per * BACKUP_KEEP, "keep": BACKUP_KEEP, "known": per > 0}
+
+
+def gdrive_flow_start():
+    """Start the TV-style sign-in: returns the code to type at google.com/device; a thread waits for the answer."""
+    cid, sec = gdrive_app()
+    if not cid:
+        raise GDriveError("Google Drive isn't set up in this version yet")
+    r = _google("https://oauth2.googleapis.com/device/code", {"client_id": cid, "scope": GDRIVE_SCOPE})
+    flow = {"code": r["user_code"], "url": r.get("verification_url") or r.get("verification_uri") or "https://www.google.com/device",
+            "until": now() + int(r.get("expires_in") or 1800), "state": "waiting", "note": ""}
+    _GD["flow"] = flow
+    dev, wait = r["device_code"], max(GDRIVE_MIN_WAIT, int(r.get("interval", 5)))
+
+    def poll():
+        while _GD["flow"] is flow and now() < flow["until"]:
+            time.sleep(wait)
+            try:
+                t = _google("https://oauth2.googleapis.com/token", {"client_id": cid, "client_secret": sec, "device_code": dev,
+                                                                    "grant_type": "urn:ietf:params:oauth:grant-type:device_code"})
+            except GDriveError as e:
+                k = getattr(e, "kind", "")
+                if k == "authorization_pending":
+                    continue
+                if k == "slow_down":
+                    time.sleep(5)
+                    continue
+                flow.update(state="failed", note="You said no on the Google page." if k == "access_denied" else str(e))
+                return
+            if not t.get("refresh_token"):
+                flow.update(state="failed", note="Google didn't give lasting access - try again.")
+                return
+            try:
+                APP.secrets.set("GDRIVE_REFRESH", t["refresh_token"])
+            except Exception as e:
+                flow.update(state="failed", note="Couldn't save the access: %s" % short_err(e))
+                return
+            _GD.update(access=t["access_token"], exp=now() + int(t.get("expires_in") or 3600))
+            upd = {"gdrive_on": True}
+            try:
+                upd["gdrive_account"] = gdrive_about()["account"]
+                APP.settings.update(upd)
+                gdrive_folder()
+            except Exception as e:
+                APP.settings.update(upd)
+                sys.stderr.write("gdrive: %s\n" % short_err(e))
+            flow.update(state="done", note="Connected.")
+            APP.notifier.add("backup", "Google Drive connected", "Every nightly backup is now also copied to your Google Drive "
+                             "(folder %s)." % GDRIVE_FOLDER_NAME, "success", send=False)
+            if APP.settings.get("backup_on") and list_backups():
+                threading.Thread(target=APP.copy_backups, args=([b["file"] for b in newest_backups()], "gdrive"), daemon=True).start()
+            return
+        if flow["state"] == "waiting":
+            flow.update(state="failed", note="The code ran out - press Connect again.")
+
+    threading.Thread(target=poll, daemon=True, name="gdrive-signin").start()
+    return flow
+
+
+def newest_backups():
+    """The newest backup of each server."""
+    out = {}
+    for b in list_backups():
+        out.setdefault(b["server"], b)
+    return list(out.values())
+
+
+def gdrive_disconnect():
+    ref = APP.secrets.get("GDRIVE_REFRESH")
+    if ref:
+        try:
+            _google("https://oauth2.googleapis.com/revoke", {"token": ref})
+        except GDriveError:
+            pass
+    APP.secrets.set("GDRIVE_REFRESH", "")
+    _GD.update(access="", exp=0, flow=None)
+    APP.settings.update({"gdrive_on": False, "gdrive_account": ""})
+
+
 # ---- a ready-to-go SD card -------------------------------------------------------------------------------------
 # Like Raspberry Pi Imager: Raspberry Pi OS Lite (64-bit) plus cloud-init files on its boot partition, so the Pi
 # joins the Wi-Fi, makes the user and lets this dashboard's key in on its first start. Then the dashboard finds it
@@ -3469,6 +3746,41 @@ def player_profile(name):
     }
 
 
+def player_card(name):
+    """The public side of a player on this server (no bans, reports or notes): for Discord and the other servers' profiles."""
+    lname = name.lower()
+    p = player_profile(name)
+    laps = sorted(p["laps"], key=lambda x: x["pos"])[:5]
+    drift = max((r for r in read_drift() if r["name"].lower() == lname), key=lambda r: r["score"], default=None)
+    rows, rounds = read_champ()
+    pos = next((i + 1 for i, r in enumerate(rows) if r["name"].lower() == lname), None)
+    b = read_badges().get(lname) or {}
+    return {"name": p["name"], "online": p["online"], "seen": p["seen"], "seconds": p["seconds"], "seconds_30d": p["seconds_30d"],
+            "sessions": p["sessions"], "first_seen": p["first_seen"], "last_seen": p["last_seen"], "laps": laps,
+            "drift": {"score": drift["score"], "car": drift["car"]} if drift else None,
+            "champ": {"pos": pos, "of": len(rows), "points": rows[pos - 1]["points"]} if pos and rounds else None,
+            "badges": len(b.get("badges") or {}), "records": p["records"]}
+
+
+def player_everywhere(name, ids):
+    """player_card() on each of these servers where the player has been. Puts the current server back."""
+    here = I().id
+    out = []
+    try:
+        for sid in ids:
+            with LOCK:
+                inst = INSTANCES.get(sid)
+            if not inst:
+                continue
+            use_server(sid)
+            c = player_card(name)
+            if c["seen"] or c["online"]:
+                out.append(dict(c, server=inst.name, id=sid))
+    finally:
+        use_server(here)
+    return out
+
+
 def player_notes():
     v = I().meta.get("player_notes")
     return v if isinstance(v, dict) else {}
@@ -3791,28 +4103,53 @@ TEMPLATES = {
               "about": "Open map, short car cleanup, drift tags and countdowns for tandem runs",
               "extras": {"clear": True, "every": 4, "afk": True, "afk_minutes": 10, "countdown": True, "tag": True, "top": True,
                          "tags": ["DRIFT", "TANDEM", "LEAD", "CHASE", "CHILL", "AFK"]},
-              "welcome": "Welcome {name}! Drift server - use /tag DRIFT and /countdown 3 for tandems. Be nice in the chat.",
-              "messages": ["Want to tandem? Pick a lead driver and use /countdown 3.", "Type /top to see the best drifters' speeds and distances."]},
+              "welcome": "Welcome {name}! Drift server - slide sideways for points, /drift for the leaderboard. /countdown 3 for tandems.",
+              "messages": ["Want to tandem? Pick a lead driver and use /countdown 3.", "Bigger angle and more speed = more points. /drift shows the best."],
+              "games": {"drift": True, "race": False, "cnr": False, "traps": True, "badges": True, "champ": False}, "laps": False,
+              "search": "drift"},
     "racing": {"label": "Racing", "map": "hirochi_raceway", "max_players": 10,
                "about": "Race track, countdowns, records, strict anti-spam and no AFK cars on track",
                "extras": {"clear": True, "every": 2, "afk": True, "afk_minutes": 3, "countdown": True, "tag": True, "top": True,
                           "tags": ["RACE", "QUALI", "PIT", "SPECTATE"]},
                "spam": True,
-               "welcome": "Welcome {name}! Racing server - start races with /countdown 5. No ramming, please.",
-               "messages": ["Race starts: line up and type /countdown 5.", "Records: /top. Cars that stand still for 3 minutes are removed."]},
+               "welcome": "Welcome {name}! Racing server - /race starts a race, /laps shows the lap records. No ramming, please.",
+               "messages": ["Every race counts for the championship - /champ shows the standings.", "Cars that stand still for 3 minutes are removed."],
+               "games": {"race": True, "champ": True, "traps": True, "badges": True, "drift": False, "cnr": False}, "laps": True,
+               "champ_name": "Season 1", "search": "race car"},
+    "cops": {"label": "Cops and robbers", "map": "west_coast_usa", "max_players": 16,
+             "about": "City map, cops and robbers rounds, speed traps, COP / ROBBER tags",
+             "extras": {"clear": True, "every": 6, "afk": True, "afk_minutes": 10, "countdown": True, "tag": True, "top": True,
+                        "tags": ["COP", "ROBBER", "CHILL", "AFK"]},
+             "spam": True,
+             "welcome": "Welcome {name}! /cnr starts cops and robbers - robbers escape, cops bust them. /traps for the speed traps.",
+             "messages": ["Cops: stay close to a robber to bust them.", "Robbers: get away and stay away until the time runs out."],
+             "games": {"cnr": True, "race": True, "traps": True, "badges": True, "drift": False, "champ": False}, "laps": False,
+             "search": "police"},
+    "offroad": {"label": "Off-road", "map": "johnson_valley", "max_players": 10,
+                "about": "Desert trails, dunes and rocks, timed trail runs, long AFK time",
+                "extras": {"clear": True, "every": 12, "afk": True, "afk_minutes": 15, "countdown": True, "tag": True, "top": True,
+                           "tags": ["CRAWL", "TRAIL", "DUNES", "AFK"]},
+                "welcome": "Welcome {name}! Off-road server - find a trail, or time a run with /track. Stuck? Ask for a tow.",
+                "messages": ["Set up a timed trail run with /track - /laps shows the best times."],
+                "games": {"race": True, "traps": False, "badges": True, "cnr": False, "drift": False, "champ": False}, "laps": True,
+                "search": "off-road"},
     "roleplay": {"label": "Roleplay", "map": "west_coast_usa", "max_players": 20,
                  "about": "Big city map, role tags, long AFK time, chat filter and anti-spam",
                  "extras": {"clear": True, "every": 24, "afk": True, "afk_minutes": 20, "countdown": False, "tag": True, "top": False,
                             "tags": ["COP", "EMS", "FIRE", "TOW", "TAXI", "CIV", "ROB"]},
                  "spam": True, "filter": True,
                  "welcome": "Welcome {name}! Roleplay server - pick your role with /tag (COP, EMS, TOW, TAXI, CIV...). Stay in character.",
-                 "messages": ["Pick your role with /tag - type /tag to see them all.", "Respect other players' roleplay. Admins can mute and kick."]},
+                 "messages": ["Pick your role with /tag - type /tag to see them all.", "Respect other players' roleplay. Admins can mute and kick."],
+                 "games": {"cnr": True, "race": False, "traps": True, "badges": False, "drift": False, "champ": False}, "laps": False,
+                 "search": "police"},
     "chill": {"label": "Chill", "map": "italy", "max_players": 8,
               "about": "Scenic map for cruising with friends, relaxed rules",
               "extras": {"clear": True, "every": 24, "afk": False, "afk_minutes": 5, "countdown": True, "tag": True, "top": True,
                          "tags": ["CRUISE", "CHILL", "PHOTO", "AFK"]},
-              "welcome": "Welcome {name}! Chill cruising server - enjoy the drive.",
-              "messages": ["Type /help to see the chat commands."]},
+              "welcome": "Welcome {name}! Chill cruising server - enjoy the drive. Want a race? /race",
+              "messages": ["Type /help to see the chat commands."],
+              "games": {"race": True, "traps": True, "badges": True, "cnr": False, "drift": False, "champ": False}, "laps": False,
+              "search": "car"},
 }
 
 
@@ -4548,10 +4885,13 @@ def health_report(deep=False):
     last = APP.state.get("backup_copy") or {}
     if not s.get("backup_on"):
         c("backups", "Backups", "warn", "Nightly backups are off.", "Turn on Back up every night under Settings → Automatic backups.")
-    elif not s.get("backup_copy"):
+    elif not s.get("backup_copy") and not (s.get("gdrive_on") and gdrive_connected()):
         c("backups", "Backups", "warn", "The backups are only on this computer - if its disk dies, they're gone too.",
-          "Settings → Automatic backups → Keep a copy somewhere else: a USB drive or another computer at home.")
-    elif last and not last.get("ok"):
+          "Settings → Automatic backups: connect Google Drive, or keep a copy on a USB drive or another computer at home.")
+    elif s.get("gdrive_on") and gdrive_connected() and not (APP.state.get("gdrive_last") or {"ok": True}).get("ok"):
+        c("backups", "Backups", "warn", "The last copy to Google Drive failed: %s" % APP.state["gdrive_last"].get("note"),
+          "Look at Settings → Google Drive - you may need to connect it again.")
+    elif s.get("backup_copy") and last and not last.get("ok"):
         c("backups", "Backups", "warn", "The last copy of the backups failed: %s" % last.get("note"),
           "Check the place under Settings → Automatic backups (is the USB drive plugged in?).")
     else:
@@ -6652,6 +6992,59 @@ def veh_preset_match(d):
     return None
 
 
+def mod_advice(inst, days=30):
+    """Mods players download but don't use: vehicle mods nobody spawned lately, map mods for maps that aren't
+    played, and the same vehicle in two mods. With the size and joining time each one costs."""
+    t_now = now()
+    mods = [m for m in list_mods() if m["enabled"] and not m["builtin"]]
+    evs = read_events(t_now - days * 86400)
+    oldest = min((e["t"] for e in evs), default=t_now)
+    covered = (t_now - oldest) / 86400.0
+    spawned = {}
+    for e in evs:
+        if e.get("ev") == "spawn":
+            j = clean_jbm(e.get("jbm"))
+            if j:
+                spawned[j.lower()] = max(spawned.get(j.lower(), 0), e["t"])
+    cur = (current_map() or "").lower()
+    rot = rotation_cfg(inst)
+    wanted = {cur} | {str(m).lower() for m in (rot["maps"] if rot["on"] else [])} | {
+        str(e.get("map") or "").lower() for e in events_cfg(inst) if e.get("on", True)}
+    out, owners = [], {}
+    for m in mods:
+        path = os.path.join(inst.CLIENT_DIR, m["name"])
+        if m["maps"]:
+            if not ({x.lower() for x in m["maps"]} & wanted) and not inst.meta.get("light_maps"):
+                out.append({"name": m["name"], "size": m["size"], "kind": "map",
+                            "why": "A map that isn't being played (not the current map%s) - every player still downloads it." % (
+                                ", the map rotation or an event" if rot["on"] or events_cfg(inst) else "")})
+            continue
+        vehs = [v for v in mod_vehicles(path) if v.get("defines")]
+        for v in vehs:
+            owners.setdefault(v["jbm"].lower(), []).append(m["name"])
+        if vehs and covered >= 7 and not any(v["jbm"].lower() in spawned for v in vehs):
+            out.append({"name": m["name"], "size": m["size"], "kind": "unused",
+                        "why": "Nobody spawned %s in the last %d days." % (
+                            ", ".join(sorted({v["name"] or v["jbm"] for v in vehs})[:3]) + (" …" if len(vehs) > 3 else ""), min(days, int(covered)))})
+    seen = {x["name"] for x in out}
+    sizes = {m["name"]: m["size"] for m in mods}
+    for jbm, names in owners.items():
+        names = sorted(set(names), key=lambda n: sizes.get(n, 0))
+        if len(names) > 1 and names[-1] not in seen:
+            seen.add(names[-1])
+            out.append({"name": names[-1], "size": sizes.get(names[-1], 0), "kind": "double",
+                        "why": "Has the same vehicle (%s) as %s - players get it twice, and only one of them works." % (jbm, ", ".join(names[:-1]))})
+    out.sort(key=lambda x: -x["size"])
+    up = float(APP.settings.get("upload_mbit") or 0) * 1000
+    lim = int((inst.meta.get("limits") or {}).get("upload_kbps") or 0)
+    kbps = min(up, lim) if up and lim else up or lim
+    total = sum(m["size"] for m in mods)
+    save = sum(x["size"] for x in out)
+    return {"items": out[:30], "save": save, "total": total, "days": min(days, int(covered)), "enough": covered >= 7,
+            "secs_now": int(total * 8 / (kbps * 1000.0)) if kbps else None,
+            "secs_after": int((total - save) * 8 / (kbps * 1000.0)) if kbps else None}
+
+
 def veh_activity(days=7):
     """What players spawned here lately, and what the rules refused."""
     since = now() - days * 86400
@@ -7429,6 +7822,18 @@ def join_info(inst):
     return {"name": name, "listed": not g.get("Private") and inst.has_authkey(), "address": addr}
 
 
+DISCORD_INVITE_RE = re.compile(r"https://(discord\.gg|discord\.com/invite)/[A-Za-z0-9-]{2,32}")
+
+
+def join_estimate(inst):
+    """(seconds a new player waits for the mods or None, bytes to download) - from the upload speed the owner entered."""
+    total = sum(x["size"] for x in list_mods() if x["enabled"])
+    up = float(APP.settings.get("upload_mbit") or 0) * 1000
+    lim = int((inst.meta.get("limits") or {}).get("upload_kbps") or 0)
+    kbps = min(up, lim) if up and lim else up or lim
+    return (int(total * 8 / (kbps * 1000.0)) if total and kbps else None), total
+
+
 def public_status():
     """What the public status page shows. No addresses, no admin data."""
     if now() - _STATUS_CACHE["t"] < 20 and _STATUS_CACHE["data"]:
@@ -7446,16 +7851,34 @@ def public_status():
         state = "maintenance" if m["on"] and st["state"] == "running" else ("up" if st["state"] == "running" else
                  "asleep" if APP.sleeping else "down")
         up = uptime_summary(inst.id)
-        nxt = None
+        upcoming = []
         for e in events_cfg(inst):
             if e.get("on", True):
                 t0 = event_next_start(e, now())
-                if t0 and (nxt is None or t0 < nxt["t"]):
-                    nxt = {"name": e["name"], "t": t0, "map": map_name("/levels/%s/info.json" % e["map"]) if e.get("map") else ""}
+                if t0:
+                    upcoming.append({"name": e["name"], "t": t0, "map": map_name("/levels/%s/info.json" % e["map"]) if e.get("map") else "",
+                                     "game": EVENT_GAMES.get(e.get("game") or "", "").split(" (")[0], "text": e.get("text") or ""})
+        upcoming.sort(key=lambda x: x["t"])
+        nxt = upcoming[0] if upcoming else None
         lc = read_laps_cfg()
         laps = [{"name": t["name"], "kind": t["kind"], "top": [{"name": r["name"], "time": r["time"], "car": r["car"]}
                                                                for r in t["top"]]}
                 for t in laps_summary(10, map_name(g.get("Map")) or None) if t["top"]] if lc["on"] and lc["public"] else []
+        drift, champ = [], None
+        if lc["public"]:
+            gc = read_games_cfg()
+            if gc["drift"]:
+                best = {}
+                for r in read_drift():
+                    if r["raw_map"] == str(g.get("Map") or "") and r["score"] > best.get(r["name"], {"score": -1})["score"]:
+                        best[r["name"]] = r
+                drift = [{"name": r["name"], "score": r["score"], "car": r["car"]} for r in sorted(best.values(), key=lambda r: -r["score"])[:10]]
+            if gc["champ"]:
+                rows, rounds = read_champ()
+                if rows and rounds:
+                    champ = {"name": gc["champ_name"] or "Championship", "races": rounds,
+                             "top": [{"name": r["name"], "points": r["points"], "wins": r["wins"]} for r in rows[:10]]}
+        wait, dl = join_estimate(inst)
         mods = []
         if APP.settings.get("statuspage_mods"):
             mods = [{"name": re.sub(r"\.zip$", "", x["name"], flags=re.I), "size": x["size"], "map": bool(x["maps"])}
@@ -7464,16 +7887,20 @@ def public_status():
                         "mods": mods, "download": sum(x["size"] for x in mods),
                         "players": len(players), "max": g.get("MaxPlayers"), "names": players[:50] if show_names else [],
                         "map": map_name(g.get("Map")) or "", "uptime": st.get("uptime") or 0, "history": up, "next_event": nxt,
+                        "events": upcoming[:5], "drift": drift, "champ": champ, "join_secs": wait, "join_bytes": dl,
                         "laps": laps, "join": join_info(inst) if st["state"] == "running" else None})
     use_server("main")
     data = {"title": APP.settings.get("statuspage_title") or server_name() or "BeamMP server", "servers": servers,
+            "about": APP.settings.get("statuspage_about") or "", "discord": APP.settings.get("statuspage_discord") or "",
             "updated": now(), "version": EASY_VERSION}
     _STATUS_CACHE.update(t=now(), data=data)
     return data
 
 
 STATUS_HTML = r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>__TITLE__ - status</title><meta http-equiv="refresh" content="60"><style>
+<title>__TITLE__</title><meta http-equiv="refresh" content="60">
+<meta property="og:type" content="website"><meta property="og:title" content="__TITLE__"><meta property="og:description" content="__DESC__">
+<meta name="description" content="__DESC__"><meta name="twitter:card" content="summary"><style>
 :root{color-scheme:light dark;--bg:#f6f7f9;--card:#fff;--ink:#16181d;--mute:#5d6470;--line:#e3e6ea;--up:#16a34a;--down:#dc2626;--warn:#d97706;--none:#d4d8de}
 @media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#171a20;--ink:#eceff3;--mute:#9aa3ae;--line:#272b33;--none:#30353e}}
 body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
@@ -7488,6 +7915,8 @@ main{max-width:760px;margin:0 auto;padding:28px 16px}h1{font-size:24px;margin:0 
 code.sel{user-select:all;-webkit-user-select:all;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:1px 6px}
 .laps table{border-collapse:collapse;margin-top:6px;width:100%}.laps td{padding:3px 8px 3px 0;border-top:1px solid var(--line)}
 .mono{font-variant-numeric:tabular-nums}
+.btn{display:inline-block;padding:8px 14px;border-radius:9px;font-weight:600;text-decoration:none;background:#5865f2;color:#fff}
+.ev{padding:6px 0;border-top:1px solid var(--line)}.ev:first-of-type{border-top:0}
 </style></head><body><main>__BODY__<p class="small mute" style="margin-top:22px">Updated __UPDATED__ · refreshes every minute · __CREDIT__</p></main></body></html>"""
 
 
@@ -7501,7 +7930,13 @@ def render_status_page(d):
         return '<i style="background:%s" title="%s%%"></i>' % (c, p)
     def pct(p):
         return "-" if p is None else ("%g%%" % p)
-    parts = ['<h1>%s</h1><p class="mute">Server status</p>' % e(d["title"])]
+    parts = ['<h1>%s</h1>' % e(d["title"])]
+    if d.get("about"):
+        parts.append('<p style="margin:4px 0 0;white-space:pre-line">%s</p>' % e(d["about"]))
+    else:
+        parts.append('<p class="mute">Server status</p>')
+    if d.get("discord"):
+        parts.append('<p style="margin:12px 0 0"><a class="btn" href="%s" rel="noopener">Join our Discord</a></p>' % e(d["discord"]))
     for s in d["servers"]:
         extra = []
         if s["state"] == "up":
@@ -7522,10 +7957,16 @@ def render_status_page(d):
                 "".join('<li>%s <span class="mute">%s%s</span></li>' % (e(x["name"]), e(fmt_bytes(x["size"])), " · map" if x["map"] else "") for x in s["mods"])))
         elif s["state"] == "up" and APP.settings.get("statuspage_mods"):
             parts.append('<p class="small mute" style="margin:6px 0 0">No mods - nothing to download.</p>')
-        if s["next_event"]:
-            ne = s["next_event"]
-            parts.append('<p class="small" style="margin:6px 0 0">📅 Next event: <b>%s</b> %s%s</p>' % (
-                e(ne["name"]), e(time.strftime("%a %d %b %H:%M", time.localtime(ne["t"]))), (" · " + e(ne["map"])) if ne["map"] else ""))
+        if s.get("join_secs") is not None and s["state"] == "up":
+            parts.append('<p class="small mute" style="margin:6px 0 0">First join: about %s to download %s of mods. After that it\'s quick.</p>'
+                         % (e(fmt_secs(max(s["join_secs"], 5))), e(fmt_bytes(s["join_bytes"]))))
+        evs = s.get("events") or ([s["next_event"]] if s.get("next_event") else [])
+        if evs:
+            parts.append('<div class="small" style="margin-top:8px"><b>📅 Coming up</b>%s</div>' % "".join(
+                '<div class="ev"><b>%s</b> · %s%s%s%s</div>' % (
+                    e(ne["name"]), e(time.strftime("%a %d %b %H:%M", time.localtime(ne["t"]))), (" · " + e(ne["map"])) if ne.get("map") else "",
+                    (" · " + e(ne["game"])) if ne.get("game") else "", ('<br><span class="mute">%s</span>' % e(ne["text"])) if ne.get("text") else "")
+                for ne in evs))
         j = s.get("join")
         if j and s["state"] == "up" and (j["listed"] or j["address"]):
             how = []
@@ -7541,12 +7982,29 @@ def render_status_page(d):
                            % (i + 1, e(r["name"]), e(r["time"]), e(r["car"])) for i, r in enumerate(t["top"]))
             parts.append('<details class="small laps" style="margin-top:8px"><summary>🏁 Lap times: <b>%s</b> (%s)</summary>'
                          '<table>%s</table></details>' % (e(t["name"]), "sprint" if t["kind"] == "sprint" else "loop", rows))
+        if s.get("champ"):
+            c = s["champ"]
+            rows = "".join('<tr><td class="mute">%d</td><td>%s</td><td class="mono">%d pts</td><td class="mute">%d win%s</td></tr>'
+                           % (i + 1, e(r["name"]), r["points"], r["wins"], "" if r["wins"] == 1 else "s") for i, r in enumerate(c["top"]))
+            parts.append('<details class="small laps" style="margin-top:8px"><summary>🏆 <b>%s</b> standings (%d race%s)</summary><table>%s</table></details>'
+                         % (e(c["name"]), c["races"], "" if c["races"] == 1 else "s", rows))
+        if s.get("drift"):
+            rows = "".join('<tr><td class="mute">%d</td><td>%s</td><td class="mono">%d</td><td class="mute">%s</td></tr>'
+                           % (i + 1, e(r["name"]), r["score"], e(r["car"])) for i, r in enumerate(s["drift"]))
+            parts.append('<details class="small laps" style="margin-top:8px"><summary>💨 Best drifts on this map</summary><table>%s</table></details>' % rows)
         h = s["history"]
         parts.append('<div class="bars">%s</div><div class="row small mute" style="justify-content:space-between"><span>30 days ago</span><span>today</span></div>'
                      % "".join(bar(x["pct"]) for x in h["days"]))
         parts.append('<div class="stats small"><span>Last 24 h <b>%s</b></span><span>7 days <b>%s</b></span><span>30 days <b>%s</b></span></div></div>'
                      % (pct(h["d1"]), pct(h["d7"]), pct(h["d30"])))
-    return STATUS_HTML.replace("__TITLE__", e(d["title"])).replace("__BODY__", "".join(parts)).replace(
+    first = d["servers"][0] if d["servers"] else None
+    desc = (d.get("about") or "").replace("\n", " ")[:150]
+    if first:
+        live = label.get(first["state"], first["state"]).split(" - ")[0]
+        if first["state"] == "up":
+            live += " · %d/%s players%s" % (first["players"], first["max"] or "?", (" · " + first["map"]) if first["map"] else "")
+        desc = (live + (" - " + desc if desc else ""))[:200]
+    return STATUS_HTML.replace("__DESC__", e(desc or "BeamMP server")).replace("__TITLE__", e(d["title"])).replace("__BODY__", "".join(parts)).replace(
         "__UPDATED__", e(time.strftime("%H:%M", time.localtime(d["updated"])))).replace(
         "__CREDIT__", ('Hosted with <a href="%s" rel="noopener" style="color:inherit">BeamMP EasyServer</a>' % e(SITE_URL))
         if APP.settings.get("credit_link") else "BeamMP EasyServer")
@@ -8207,9 +8665,19 @@ def events_cfg(inst):
     return [e for e in ev if isinstance(e, dict)] if isinstance(ev, list) else []
 
 
+EVENT_GAMES = {"race": "Races (/race)", "drift": "Drift points (/drift)", "cnr": "Cops and robbers (/cnr)"}
+
+
 def event_next_start(e, t):
-    """The next start time (local) of a weekly event at or after t - 1 minute."""
+    """The next start time (local) of a weekly event, or of a one-off event (date), at or after t - 1 minute."""
     h, m = (int(x) for x in e["at"].split(":"))
+    if e.get("date"):
+        try:
+            y, mo, d = (int(x) for x in e["date"].split("-"))
+            st = int(time.mktime((y, mo, d, h, m, 0, 0, 0, -1)))
+        except (ValueError, OverflowError):
+            return None
+        return st if st >= t - 60 else None
     lt = time.localtime(t)
     for add in range(0, 8):
         day = time.localtime(time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday + add, 0, 0, 0, 0, 0, -1)))
@@ -8219,6 +8687,123 @@ def event_next_start(e, t):
         if st >= t - 60:
             return st
     return None
+
+
+def event_results(act, end):
+    """What happened during an event (from its start until end): players, best laps, best drifts."""
+    start = int(act.get("start") or 0)
+    if not start:
+        return None
+    names = []
+    for ev in read_events(start):
+        if ev.get("ev") == "join" and ev["t"] <= end:
+            n = str(ev.get("name") or "")[:64]
+            if n and n not in names:
+                names.append(n)
+    laps = []
+    for track, rows in read_laptimes().items():
+        rows = [r for r in rows if start <= r["t"] <= end]
+        if rows:
+            laps.append((track, rows[0]))
+    laps.sort(key=lambda x: x[1]["ms"])
+    drifts = sorted((r for r in read_drift() if start <= r["t"] <= end), key=lambda r: -r["score"])[:5]
+    return {"players": names, "laps": [{"track": tr, "name": r["name"], "time": fmt_lap(r["ms"]), "car": r["car"]} for tr, r in laps[:5]],
+            "drifts": [{"name": r["name"], "score": r["score"], "car": r["car"]} for r in drifts]}
+
+
+def event_results_text(name, res):
+    lines = ["🏁 **%s** is over - %d player%s joined." % (discord_escape(name), len(res["players"]), "" if len(res["players"]) == 1 else "s")]
+    if res["players"]:
+        lines.append("Thanks to " + ", ".join(discord_escape(n) for n in res["players"][:25]) + ("..." if len(res["players"]) > 25 else ""))
+    if res["laps"]:
+        lines.append("**Fastest laps**")
+        lines += ["%s **%s** - %s (%s%s)" % (("🥇", "🥈", "🥉", "4.", "5.")[i], discord_escape(r["name"]), r["time"], discord_escape(r["track"]),
+                                           (", " + discord_escape(r["car"])) if r["car"] else "") for i, r in enumerate(res["laps"])]
+    if res["drifts"]:
+        lines.append("**Best drifts**")
+        lines += ["%s **%s** - %d points%s" % (("🥇", "🥈", "🥉", "4.", "5.")[i], discord_escape(r["name"]), r["score"],
+                                             (" (%s)" % discord_escape(r["car"])) if r["car"] else "") for i, r in enumerate(res["drifts"])]
+    return "\n".join(lines)
+
+
+MEDALS = ("🥇", "🥈", "🥉")
+
+
+def _medal(i):
+    return MEDALS[i] if i < 3 else "%d." % (i + 1)
+
+
+def discord_player_embed(name):
+    name = name.strip()
+    if not name:
+        return {"description": "Type a BeamMP player name, for example /player Dani", "color": 0x64748B}
+    with LOCK:
+        ids = sorted(INSTANCES, key=lambda i: (i != "main", i))
+    use_server("main")
+    cards = player_everywhere(name, ids)
+    use_server("main")
+    if not cards:
+        return {"description": "%s hasn't played here in the last year." % discord_escape(name), "color": 0x64748B}
+    real = cards[0]["name"]
+    total = sum(c["seconds"] for c in cards)
+    last = max((c["last_seen"] or 0 for c in cards), default=0)
+    online = [c["server"] for c in cards if c["online"]]
+    lines = ["**Time played:** %s (%s in the last 30 days)" % (fmt_hours(total), fmt_hours(sum(c["seconds_30d"] for c in cards))),
+             "**Online now** on %s" % ", ".join(discord_escape(x) for x in online) if online else
+             ("**Last seen:** <t:%d:R>" % last if last else "")]
+    for c in cards:
+        bits = []
+        if len(cards) > 1 or len(ids) > 1:
+            bits.append("__%s__ - %s" % (discord_escape(c["server"]), fmt_hours(c["seconds"])))
+        for l in c["laps"][:3]:
+            bits.append("🏁 %s: %s (#%d of %d)" % (discord_escape(l["track"]), l["time"], l["pos"], l["of"]))
+        if c["drift"]:
+            bits.append("💨 Best drift: %d points" % c["drift"]["score"])
+        if c["champ"]:
+            bits.append("🏆 Championship: #%d of %d, %d points" % (c["champ"]["pos"], c["champ"]["of"], c["champ"]["points"]))
+        if c["records"]:
+            bits.append("⚡ Top speed %d km/h" % c["records"]["speed"])
+        if c["badges"]:
+            bits.append("🎖️ %d badge%s" % (c["badges"], "" if c["badges"] == 1 else "s"))
+        lines += bits
+    return {"title": real, "description": "\n".join(x for x in lines if x)[:3900], "color": 0x22C55E if online else 0x3B82F6}
+
+
+def discord_leaderboard_embed(inst, what):
+    here = I().id
+    use_server(inst.id)
+    try:
+        title, lines = "", []
+        suffix = (" (%s)" % inst.name) if len(INSTANCES) > 1 else ""
+        if what == "drift":
+            best = {}
+            for r in read_drift():
+                if r["score"] > best.get(r["name"], {"score": -1})["score"]:
+                    best[r["name"]] = r
+            title = "Best drifts" + suffix
+            lines = ["%s **%s** - %d points (%s)" % (_medal(i), discord_escape(r["name"]), r["score"], discord_escape(map_name(r["raw_map"]) or r["raw_map"]))
+                     for i, r in enumerate(sorted(best.values(), key=lambda r: -r["score"])[:10])]
+        elif what == "champ":
+            rows, rounds = read_champ()
+            cfg = read_games_cfg()
+            title = "%s standings%s" % (cfg["champ_name"] or "Championship", suffix)
+            lines = ["%s **%s** - %d points, %d win%s" % (_medal(i), discord_escape(r["name"]), r["points"], r["wins"], "" if r["wins"] == 1 else "s")
+                     for i, r in enumerate(rows[:10])] if rounds else []
+            if lines:
+                lines.append("_%d race%s so far_" % (rounds, "" if rounds == 1 else "s"))
+        elif what == "time":
+            title = "Most played - last 30 days" + suffix
+            lines = ["%s **%s** - %s" % (_medal(i), discord_escape(p["name"]), fmt_hours(p["seconds"])) for i, p in enumerate(playtime_top(inst))]
+            use_server(inst.id)
+        else:
+            title = "Lap records" + suffix
+            for t in sorted(laps_summary(3), key=lambda t: -t["drivers"])[:6]:
+                if t["top"]:
+                    lines.append("**%s**" % discord_escape(t["name"]))
+                    lines += ["%s %s - %s" % (_medal(i), discord_escape(r["name"]), r["time"]) for i, r in enumerate(t["top"])]
+        return {"title": title, "description": "\n".join(lines)[:3900] or "Nothing here yet - go set some records!", "color": 0xF5A524}
+    finally:
+        use_server(here)
 
 
 def upcoming_events_text():
@@ -8587,6 +9172,12 @@ class DiscordBot:
                          {"type": 3, "name": "player", "description": "BeamMP player name", "required": False,
                           "max_length": 40}] + opts},
             {"name": "events", "description": "Upcoming events on the BeamMP server", "type": 1, "contexts": [0]},
+            {"name": "player", "description": "A player's stats: time played, best laps, drifts, championship", "type": 1, "contexts": [0],
+             "options": [{"type": 3, "name": "name", "description": "BeamMP player name", "required": True, "max_length": 40}]},
+            {"name": "leaderboard", "description": "The best lap times, drifts, championship or most played", "type": 1, "contexts": [0],
+             "options": [{"type": 3, "name": "what", "description": "Which leaderboard", "required": True,
+                          "choices": [{"name": "lap times", "value": "laps"}, {"name": "drift", "value": "drift"},
+                                      {"name": "championship", "value": "champ"}, {"name": "most played", "value": "time"}]}] + opts},
             {"name": "join", "description": "Open the server so you can join (it closes again once nobody plays)", "type": 1,
              "contexts": [0], "options": opts},
             {"name": "sleep", "description": "Put the server computer to sleep to save power (/start wakes it up)",
@@ -8645,6 +9236,16 @@ class DiscordBot:
                 discord_api("POST", cb, body={"type": 5})
                 return discord_api("PATCH", edit, body={"embeds": [{"title": "Upcoming events", "color": 0x8B5CF6,
                                                                     "description": upcoming_events_text()}],
+                                                        "allowed_mentions": {"parse": []}})
+            if name == "player":
+                discord_api("POST", cb, body={"type": 5})
+                return discord_api("PATCH", edit, body={"embeds": [discord_player_embed(str(opts.get("name") or "")[:40])],
+                                                        "allowed_mentions": {"parse": []}})
+            if name == "leaderboard":
+                with LOCK:
+                    inst = INSTANCES.get(str(opts.get("server") or "main")) or INSTANCES["main"]
+                discord_api("POST", cb, body={"type": 5})
+                return discord_api("PATCH", edit, body={"embeds": [discord_leaderboard_embed(inst, str(opts.get("what") or "laps"))],
                                                         "allowed_mentions": {"parse": []}})
             if name == "join":
                 with LOCK:
@@ -8820,8 +9421,8 @@ VIEWER_WRITE = {"/api/logout", "/api/notifications/read", "/api/logs/explain", "
                 "/api/me/discord/link", "/api/me/discord/unlink"}
 OWNER_WRITE = {"/api/roles", "/api/teaminvite", "/api/discordlogin", "/api/plugins/fetch", "/api/plugins/upload", "/api/plugins/install", "/api/plugins/toggle", "/api/plugins/remove", "/api/plugins/adopt", "/api/users", "/api/password", "/api/2fa/begin", "/api/2fa/confirm", "/api/2fa/disable", "/api/remote",
                "/api/authkey", "/api/import", "/api/backups/restore", "/api/power/helper", "/api/servers/delete", "/api/statuspage", "/api/supporter",
-               "/api/pi", "/api/machines"}
-ADMIN_GET = {"/api/pi", "/api/machines", "/api/recap", "/api/export", "/api/backups/download", "/api/phoneapp", "/api/ntfy", "/api/power/offline",
+               "/api/pi", "/api/machines", "/api/gdrive"}
+ADMIN_GET = {"/api/gdrive", "/api/pi", "/api/machines", "/api/recap", "/api/export", "/api/backups/download", "/api/phoneapp", "/api/ntfy", "/api/power/offline",
              "/api/health/report", "/api/health/saved", "/api/users", "/api/activity", "/api/modpack", "/api/integrations", "/api/statuspage"}
 
 
@@ -10068,10 +10669,22 @@ class App:
                               ". Check that the disk isn't full.", "warning")
         if made and self.settings.get("backup_copy"):
             threading.Thread(target=self.copy_backups, args=(made,), daemon=True, name="backup-copy").start()
+        if made and self.settings.get("gdrive_on") and gdrive_connected():
+            threading.Thread(target=self.copy_backups, args=(made, "gdrive"), daemon=True, name="backup-gdrive").start()
         return made, errors
 
-    def copy_backups(self, made):
+    def copy_backups(self, made, where=""):
         use_server("main")
+        if where == "gdrive":
+            try:
+                note, ok = gdrive_copy(made), True
+            except Exception as e:
+                note, ok = str(e) if isinstance(e, RuntimeError) else short_err(e), False
+                self.notifier.add("backup", "Google Drive copy failed", "The backups were made on this computer, but copying them "
+                                  "to Google Drive failed: %s" % note, "warning")
+            self.state["gdrive_last"] = {"t": now(), "ok": ok, "note": note}
+            self.save_state()
+            return
         try:
             note, ok = copy_backups(made), True
         except Exception as e:
@@ -10652,9 +11265,28 @@ class App:
         if isinstance(act, dict):
             if t < act.get("end", 0):
                 return
-            # the event is over: put the map and mods back
+            # the event is over: put the map, mods and games back, post the results
             for m in act.get("mods") or []:
                 set_mod_enabled(m, False)
+            if act.get("game") and act.get("game_prev") is False:
+                cfg = read_games_cfg()
+                cfg[act["game"]] = False
+                write_games_cfg(cfg)
+            try:
+                res = event_results(act, min(t, act.get("end") or t))
+            except Exception as ex:
+                sys.stderr.write("event results: %s\n" % short_err(ex))
+                res = None
+            if res is not None:
+                set_server_meta(inst.id, event_last={"name": act.get("name"), "end": t, "results": res})
+                if act.get("results") and webhook_parts()[0]:
+                    try:
+                        webhook_call("POST", body={"username": "BeamMP events", "content": event_results_text(act.get("name", "The event"), res)[:1900],
+                                                   "allowed_mentions": {"parse": []}})
+                    except Exception as ex:
+                        sys.stderr.write("event results: %s\n" % short_err(ex))
+            if act.get("once"):
+                set_server_meta(inst.id, events=[dict(e, on=False) if e.get("id") == act.get("id") else e for e in events_cfg(inst)])
             if online_names():
                 chat_say("%s is over - thanks for joining! Switching back to %s." % (act.get("name", "The event"), act.get("prev_map")))
                 time.sleep(2)
@@ -10689,10 +11321,21 @@ class App:
             if left <= 0:
                 prev = current_map()
                 moved = [m for m in e.get("mods") or [] if set_mod_enabled(m, True)]
+                game, game_prev = e.get("game") or "", None
+                if game in EVENT_GAMES:
+                    cfg = read_games_cfg()
+                    game_prev = bool(cfg.get(game))
+                    if not game_prev:
+                        cfg[game] = True
+                        write_games_cfg(cfg)
                 set_server_meta(inst.id, event_active={"id": e.get("id"), "name": e["name"], "end": st + int(e["minutes"]) * 60,
-                                                        "prev_map": prev if prev != e["map"] else None, "mods": moved})
+                                                        "prev_map": prev if prev != e["map"] else None, "mods": moved,
+                                                        "start": t, "game": game, "game_prev": game_prev,
+                                                        "results": bool(e.get("results")), "once": bool(e.get("date"))})
                 if online_names():
-                    chat_say("%s starts now! Switching to %s - rejoin in a moment." % (e["name"], e["map"]))
+                    chat_say("%s starts now! Switching to %s - rejoin in a moment.%s" % (
+                        e["name"], e["map"], {"race": " Type /race to start a race.", "drift": " Slide for drift points - /drift shows the best.",
+                                              "cnr": " Type /cnr to start cops and robbers."}.get(game, "")))
                     time.sleep(2)
                 if e["map"] != prev:
                     ok, note = self.switch_map(e["map"])
@@ -12259,6 +12902,9 @@ class Handler(BaseHTTPRequestHandler):
                         "upload_mbit": APP.settings.get("upload_mbit") or 0,
                         "limit_kbps": int((I().meta.get("limits") or {}).get("upload_kbps") or 0)})
 
+    def get_mods_advice(self, q):
+        self.send(200, mod_advice(I()))
+
     def post_mods_sets(self, q):
         """Mod sets: save the mods in use now under a name, switch to a saved set, or delete one."""
         b = self.body_json()
@@ -12630,7 +13276,15 @@ class Handler(BaseHTTPRequestHandler):
         name = str(q.get("name") or "").strip()[:64]
         if not name:
             return self.fail(400, "Which player?")
-        self.send(200, player_profile(name))
+        p = player_profile(name)
+        with LOCK:
+            ids = [i for i in INSTANCES if i != I().id]
+        if ids and self.sess.get("user", "owner") != "owner":
+            u = find_user(self.sess["user"]) or {}
+            ids = [i for i in ids if user_role_for(u, i)]
+        p["elsewhere"] = [{k: c[k] for k in ("server", "id", "seconds", "sessions", "last_seen", "online", "laps", "drift")}
+                          for c in player_everywhere(name, ids)] if ids else []
+        self.send(200, p)
 
     def post_players_note(self, q):
         b = self.body_json()
@@ -13078,8 +13732,9 @@ class Handler(BaseHTTPRequestHandler):
     # ---------- server templates
     def get_templates(self, q):
         self.send(200, {"templates": [{"id": k, "label": v["label"], "about": v["about"], "map": v["map"],
-                                       "max_players": v["max_players"], "tags": v["extras"]["tags"]}
-                                      for k, v in TEMPLATES.items()]})
+                                       "max_players": v["max_players"], "tags": v["extras"]["tags"],
+                                       "games": [g for g in GAME_SWITCHES if (v.get("games") or {}).get(g)], "laps": bool(v.get("laps"))}
+                                      for k, v in TEMPLATES.items()], "current": I().meta.get("template") or ""})
 
     def post_template(self, q):
         b = self.body_json()
@@ -13098,6 +13753,18 @@ class Handler(BaseHTTPRequestHandler):
         msg.update({"welcome": True, "welcome_text": [tp["welcome"]], "announce": True, "messages": tp["messages"],
                     "every": max(msg["every"], 15)})
         write_messages(msg)
+        if tp.get("games"):                      # the games that fit (Games page) and lap times
+            cfg = read_games_cfg()
+            cfg.update(tp["games"])
+            if tp.get("champ_name") and not cfg["champ_name"]:
+                cfg["champ_name"] = tp["champ_name"]
+            if cfg["champ"] and not cfg["champ_started"]:
+                cfg["champ_started"] = now()
+            write_games_cfg(cfg)
+            laps = read_laps_cfg()
+            laps["on"] = bool(tp.get("laps"))
+            write_laps_cfg(laps)
+        set_server_meta(I().id, template=str(b.get("id")))
         text = toml_set(app.read_config_text(), "General", "MaxPlayers", tp["max_players"])
         note = "Applied the %s template." % tp["label"]
         if b.get("map") and (tp["map"] in BUILTIN_MAPS or tp["map"] in enabled_mod_maps()):
@@ -13107,7 +13774,7 @@ class Handler(BaseHTTPRequestHandler):
         else:
             app.write_config_text(text)
             note += " " + app.applied_note()
-        self.send(200, {"ok": True, "note": note})
+        self.send(200, {"ok": True, "note": note, "search": tp.get("search") or ""})
 
     # ---------- presets
     def get_preset(self, q):
@@ -13548,7 +14215,8 @@ class Handler(BaseHTTPRequestHandler):
         base = dashboard_url().rstrip("/")
         self.send(200, {"on": bool(s.get("statuspage_on")), "players": bool(s.get("statuspage_players")), "mods": bool(s.get("statuspage_mods")),
                         "address": bool(s.get("statuspage_address")), "relay": relay_on(),
-                        "title": s.get("statuspage_title") or "", "url": base + "/status", "lan_url": "http://%s:%s/status" % (lan_ip(), s.get("port")),
+                        "title": s.get("statuspage_title") or "", "about": s.get("statuspage_about") or "",
+                        "discord": s.get("statuspage_discord") or "", "url": base + "/status", "lan_url": "http://%s:%s/status" % (lan_ip(), s.get("port")),
                         "remote": bool(s.get("remote_enabled")), "credit": bool(s.get("credit_link")), "preview": public_status()})
 
     def post_statuspage(self, q):
@@ -13560,6 +14228,13 @@ class Handler(BaseHTTPRequestHandler):
             upd["statuspage_players"] = bool(b["players"])
         if "title" in b:
             upd["statuspage_title"] = clean_msg(b["title"])[:80]
+        if "about" in b:
+            upd["statuspage_about"] = "\n".join(clean_msg(x) for x in str(b["about"] or "").splitlines()).strip()[:500]
+        if "discord" in b:
+            inv = str(b["discord"] or "").strip()
+            if inv and not DISCORD_INVITE_RE.fullmatch(inv):
+                return self.fail(400, "Paste a Discord invite link like https://discord.gg/abc123")
+            upd["statuspage_discord"] = inv
         if "mods" in b:
             upd["statuspage_mods"] = bool(b["mods"])
         if "address" in b:
@@ -13748,7 +14423,100 @@ class Handler(BaseHTTPRequestHandler):
         if errors:
             return self.fail(500, "; ".join(errors))
         self.send(200, {"ok": True, "note": "Backed up %d server%s." % (len(made), "" if len(made) == 1 else "s") +
-                        (" Copying them to the other place now…" if APP.settings.get("backup_copy") else "")})
+                        (" Copying them to the other place now…" if APP.settings.get("backup_copy") else "") +
+                        (" Copying them to Google Drive now…" if APP.settings.get("gdrive_on") and gdrive_connected() else "")})
+
+    # ---------- Google Drive copies and rescue
+    def get_gdrive(self, q):
+        s = APP.settings
+        d = {"ready": gdrive_ready(), "own_app": bool(s.get("gdrive_client_id")), "own_client_id": s.get("gdrive_client_id") or "",
+             "connected": gdrive_connected(), "on": bool(s.get("gdrive_on")), "account": s.get("gdrive_account") or "",
+             "estimate": gdrive_estimate(), "last": APP.state.get("gdrive_last"), "folder": GDRIVE_FOLDER_NAME,
+             "flow": None, "drive": None, "files": [], "error": "", "computer": backup_tag(), "backups_on": bool(s.get("backup_on"))}
+        f = _GD["flow"]
+        if f and (f["state"] != "waiting" or now() < f["until"]):
+            d["flow"] = {k: f[k] for k in ("code", "url", "until", "state", "note")}
+        if d["connected"] and q.get("details") == "1":
+            try:
+                d["drive"] = gdrive_about()
+                fs = gdrive_list()
+                d["files"] = fs[:60]
+                d["used_by_us"] = sum(x["size"] for x in fs)
+            except Exception as e:
+                d["error"] = str(e) if isinstance(e, RuntimeError) else short_err(e)
+        self.send(200, d)
+
+    def post_gdrive(self, q):
+        b = self.body_json()
+        act = b.get("action")
+        try:
+            if act == "connect":
+                if not gdrive_ready():
+                    return self.fail(400, "Google Drive isn't set up in this version yet - use your own Google app (below).")
+                f = gdrive_flow_start()
+                return self.send(200, {"ok": True, "flow": {k: f[k] for k in ("code", "url", "until", "state", "note")}})
+            if act == "cancel":
+                _GD["flow"] = None
+                return self.send(200, {"ok": True})
+            if act == "disconnect":
+                gdrive_disconnect()
+                return self.send(200, {"ok": True, "note": "Disconnected. The copies already in your Drive stay there."})
+            if act == "on":
+                if b.get("on") and not gdrive_connected():
+                    return self.fail(400, "Connect Google Drive first")
+                APP.settings.update({"gdrive_on": bool(b.get("on"))})
+                return self.send(200, {"ok": True, "note": "Saved."})
+            if act == "now":
+                if not gdrive_connected():
+                    return self.fail(400, "Connect Google Drive first")
+                files = [x["file"] for x in newest_backups()]
+                if not files:
+                    files, errors = APP.run_backups(bool(APP.settings.get("backup_mods")))
+                    if errors:
+                        return self.fail(500, "; ".join(errors))
+                    if APP.settings.get("gdrive_on"):
+                        return self.send(200, {"ok": True, "note": "Made a backup and copying it to Google Drive now…"})
+                threading.Thread(target=APP.copy_backups, args=(files, "gdrive"), daemon=True).start()
+                return self.send(200, {"ok": True, "note": "Copying the newest backups to Google Drive now…"})
+            if act == "own_app":
+                cid = str(b.get("client_id") or "").strip()
+                if cid and not re.fullmatch(r"[0-9]{6,20}-[a-z0-9]{10,64}\.apps\.googleusercontent\.com", cid):
+                    return self.fail(400, "That doesn't look like a Google client ID (it ends in .apps.googleusercontent.com)")
+                sec = str(b.get("client_secret") or "").strip()
+                if cid and not sec and not APP.secrets.has("GDRIVE_SECRET"):
+                    return self.fail(400, "Paste the client secret too")
+                if gdrive_connected():
+                    gdrive_disconnect()
+                if sec or not cid:
+                    APP.secrets.set("GDRIVE_SECRET", sec if cid else "")
+                APP.settings.update({"gdrive_client_id": cid, "gdrive_folder": ""})
+                return self.send(200, {"ok": True, "note": "Saved - now press Connect Google Drive." if cid else "Back to the built-in Google app."})
+            if act == "restore":
+                if not gdrive_connected():
+                    return self.fail(400, "Connect Google Drive first")
+                fid = str(b.get("id") or "")
+                f = next((x for x in gdrive_list() if x["id"] == fid), None)
+                if not f:
+                    return self.fail(404, "That backup isn't in the Drive folder any more")
+                fd, tmp = tempfile.mkstemp(suffix=".zip", dir=DATA_DIR)
+                os.close(fd)
+                try:
+                    gdrive_download(fid, tmp)
+                    try:
+                        undo = make_backup(I(), False)
+                    except Exception as e:
+                        return self.fail(500, "Couldn't save the current settings first, so nothing was restored (%s)" % short_err(e))
+                    self._restore_undo = undo
+                    return self._import_zip(tmp, {"settings": "1", "mods": "1" if b.get("mods") is True else "0",
+                                                  "games": "1"})
+                finally:
+                    try:
+                        os.remove(tmp)
+                    except OSError:
+                        pass
+        except GDriveError as e:
+            return self.fail(502, str(e))
+        self.fail(400, "unknown action")
 
     def get_backups_download(self, q):
         name = str(q.get("file") or "")
@@ -14813,8 +15581,11 @@ class Handler(BaseHTTPRequestHandler):
         for e in events_cfg(I()):
             st = event_next_start(e, now()) if e.get("on", True) else None
             evs.append(dict(e, next=st))
+        last = I().meta.get("event_last")
         self.send(200, {"events": evs, "maps": avail, "mods": [m["name"] for m in list_mods()],
                         "days": list(EVENT_DAYS), "active": act if isinstance(act, dict) else None,
+                        "games": [{"id": k, "label": v} for k, v in EVENT_GAMES.items()],
+                        "last": last if isinstance(last, dict) else None, "today": time.strftime("%Y-%m-%d"),
                         "has_webhook": bool(webhook_parts()[0])})
 
     def post_events(self, q):
@@ -14832,8 +15603,19 @@ class Handler(BaseHTTPRequestHandler):
             if not name:
                 return self.fail(400, "Give every event a name")
             days = sorted({int(d) for d in (e.get("days") or []) if str(d).isdigit() and 0 <= int(d) <= 6})
-            if not days:
+            date = str(e.get("date") or "").strip()
+            if date:
+                try:
+                    dt = time.strptime(date, "%Y-%m-%d")
+                    assert 2020 <= dt.tm_year <= 2100
+                except (ValueError, AssertionError):
+                    return self.fail(400, "Enter the date of %s like 2026-12-31" % name)
+                days = []
+            elif not days:
                 return self.fail(400, "Pick at least one day for %s" % name)
+            game = str(e.get("game") or "")
+            if game and game not in EVENT_GAMES:
+                return self.fail(400, "bad game")
             at = str(e.get("at") or "").strip()
             if not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", at):
                 return self.fail(400, "Enter the start time of %s like 20:00" % name)
@@ -14852,7 +15634,8 @@ class Handler(BaseHTTPRequestHandler):
             out.append({"id": re.sub(r"[^a-z0-9]", "", str(e.get("id") or ""))[:12] or uuid.uuid4().hex[:8],
                         "name": name, "days": days, "at": "%02d:%s" % (int(at.split(":")[0]), at.split(":")[1]),
                         "minutes": minutes, "map": mp, "mods": mods, "announce": ann, "ping": bool(e.get("ping")),
-                        "text": clean_msg(e.get("text"))[:200], "on": bool(e.get("on", True))})
+                        "text": clean_msg(e.get("text"))[:200], "on": bool(e.get("on", True)),
+                        "date": date, "game": game, "results": bool(e.get("results"))})
         before = {e.get("id") for e in events_cfg(I())}
         set_server_meta(I().id, events=out)
         note = "Saved %d event%s." % (len(out), "" if len(out) == 1 else "s")
@@ -14863,6 +15646,13 @@ class Handler(BaseHTTPRequestHandler):
                 use_server(inst.id)
                 for e in evs:
                     st = event_next_start(e, now())
+                    if e.get("date"):
+                        if not st:
+                            continue
+                        broadcast("🎉 New event: %s" % e["name"], "<t:%d:F> (<t:%d:R>) on %s%s.%s" % (
+                            st, st, inst.name, (" - map " + e["map"]) if e.get("map") else "",
+                            (" " + e["text"]) if e.get("text") else ""))
+                        continue
                     days = ", ".join(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][d] for d in e["days"])
                     broadcast("🎉 New event: %s" % e["name"], "Every %s at %s on %s%s. First one: <t:%d:F>.%s" % (
                         days, e["at"], inst.name, (" - map " + e["map"]) if e.get("map") else "", st or now(),

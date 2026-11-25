@@ -137,6 +137,7 @@ function Profile({ name, close, onBan }) {
           <Stat label="Sessions" value={p.sessions} />
           <Stat label="Last seen" value={p.online ? "Now" : p.last_seen ? L.ago(p.last_seen) : "-"} />
         </div>
+        {(p.elsewhere || []).length > 0 && <div className="small" style={{ marginTop: 8 }}><b>On your other servers</b>{p.elsewhere.map(o => <div key={o.id} className="muted">{`${o.server}: ${L.fmtDur(o.seconds)} played · ${o.online ? "online now" : o.last_seen ? "last seen " + L.ago(o.last_seen) : "-"}${o.laps[0] ? ` · best lap ${o.laps[0].time} on ${o.laps[0].track}` : ""}${o.drift ? ` · best drift ${o.drift.score}` : ""}`}</div>)}</div>}
         {p.first_seen && <p className="small muted" style={{ margin: "4px 0 0" }}>{`First played ${L.fmtTime(p.first_seen)}${p.reports_by ? ` · sent ${p.reports_by === 1 ? "1 report" : p.reports_by + " reports"}` : ""}`}</p>}
         <div className="row" style={{ gap: 6, marginTop: 12 }}>
           {p.online && <><button className="btn sm" onClick={() => act({ action: "mute", name: p.name, minutes: 10 })}>Mute 10 min</button>
