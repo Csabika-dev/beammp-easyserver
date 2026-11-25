@@ -9,7 +9,7 @@
 
 **▶ [Watch the setup video on YouTube](https://youtu.be/DWD9HcW1OIc)** - from download to a running server in about 2 minutes.
 
-**Host your own BeamNG.drive multiplayer (BeamMP) server in one click, on Windows or Linux - and run it from a web dashboard on your PC or phone.**
+**Host your own BeamNG.drive multiplayer (BeamMP) server in one click, on Windows, Linux or a Mac - and run it from a web dashboard on your PC or phone.**
 
 No config files and no command line needed. The installer downloads the newest official BeamMP server, asks a few simple questions (name, map, player count), sets everything up and starts it. After that you do everything in the dashboard: mods, maps, players, moderation, Discord, backups, health checks and more.
 
@@ -17,12 +17,29 @@ No config files and no command line needed. The installer downloads the newest o
 
 > Not affiliated with or endorsed by the BeamMP team. This only automates the setup of the official [BeamMP server](https://github.com/BeamMP/BeamMP-Server).
 
+## What you get (30-second version)
+
+- **⚡ Set up in about 5 minutes** - one installer for Windows or Linux (Mac is experimental). No config files, no command line.
+- **📱 Dashboard on your PC or phone** - start / stop / restart, switch the map in one click, see who's online.
+- **🧩 Mods made easy** - drag & drop, every mod virus-checked, browse the BeamNG mod repository, one-click updates.
+- **🔌 Friends can join** - a health check tells you what's wrong (AuthKey, port, firewall) and can open the port on your router in one click.
+- **🛡️ Moderation** - kick, mute, ban, friends-only or invite-only, anti-bot and chat filter presets, in-game admin commands.
+- **🎮 Extras for players** - `/tp`, `/repair`, map votes, events, map rotation, playtime stats and records.
+- **🚗 Vehicle rules** - block props, big physics props, trailers or any car; heavy mod cars are found automatically; stop spawn spam. Presets: Racing, Roleplay, No chaos.
+- **🔌 Server plugins** - install community plugins (CareerMP, freeRoamMP, BeamJoy …) from their authors' GitHub pages in a few clicks, turn them off and on, see their errors.
+- **🔔 Notifications & Discord** - crashes, joins and updates on Discord, email, phone or Telegram; a Discord bot with `/status`, `/start`, `/join`.
+- **💾 Safe by default** - automatic backups, encrypted keys, two-step login, a team with roles (admin / moderator / viewer or your own), invite links, per-server access, Sign in with Discord and internet logins with two-step login.
+- **💸 Free** - open source, no ads, no account.
+
+Details for every item are further down - or watch the [setup video](https://youtu.be/DWD9HcW1OIc).
+
 ## Quick start
 
 1. **Get a free AuthKey** at [keymaster.beammp.com](https://keymaster.beammp.com) (log in with Discord → **Keys** → **+** → copy it).
 2. **Install:**
    - **Windows:** download `BeamMP-EasyServer-Windows.zip` from the [latest release](https://github.com/Csabika-dev/beammp-easyserver/releases/latest), extract it, double-click `Install-BeamMP-Server.bat`.
    - **Linux:** `curl -fsSL https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/stable/linux/install.sh | sudo bash`
+   - **Mac (experimental, Rolling release only - not in Stable):** `curl -fsSL https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/main/mac/install.sh | bash` - see [Mac](#mac-experimental).
 
    **Which version?** Everyone gets **Stable** - the tested version (the release marked *Latest*, and the commands above).
 3. **Open the dashboard** at `http://localhost:30815` on the server computer (Windows: the **BeamMP Dashboard** shortcut), create your password, and you're running. From other devices at home use `http://<server-ip>:30815`.
@@ -31,12 +48,13 @@ Then work through the [guides](#-guides) below - start with [Let friends join ov
 
 ## Contents
 
+- [What you get (30-second version)](#what-you-get-30-second-version)
 - [The dashboard at a glance](#️-the-dashboard-at-a-glance)
-- [Installing](#installing) - [Windows](#windows) · [Linux](#linux-recommended-for-a-dedicated-server)
+- [Installing](#installing) - [Windows](#windows) · [Linux](#linux-recommended-for-a-dedicated-server) · [Mac](#mac-experimental)
 - [📖 Guides](#-guides) - step by step for every feature
 - [Feature reference](#feature-reference) - cars & chat, moderation, anti-bot, privacy
 - [Mod virus check](#️-mod-virus-check) · [Encrypted keys](#-your-keys-are-encrypted) · [Security](#how-its-built-security)
-- [Roadmap](#️-roadmap) · [Support](#️-support-the-project)
+- [Roadmap](#️-roadmap) · [Credits](#-credits) · [Support](#️-support-the-project)
 
 ---
 
@@ -47,7 +65,7 @@ Then work through the [guides](#-guides) below - start with [Let friends join ov
 | **Overview** | Status, who's online, uptime, start / stop / restart, switch the map in one click, **Copy invite** (a ready-to-paste Discord message with the address) |
 | **Servers** | Run several servers on one computer, copy a server, CPU / RAM / download limits per server |
 | **Config** | Every server setting in a simple form (or as text) with plain-English checks; who can join, map vote, events, map rotation, templates, **security presets**, **teleport & repair**, announcements, restarts, moderation & anti-bot, and **"What changed?"** with one-click undo |
-| **Mods** | Drag & drop mods (each one virus-checked), **browse and install mods from the BeamNG repository**, turn them on/off, **light mode** for map mods, one-click mod updates, **modpacks** |
+| **Mods** | Drag & drop mods (each one virus-checked), **browse and install mods from the BeamNG repository**, turn them on/off, **mod sets** (switch between saved groups of mods), disk space, **light mode** for map mods, one-click mod updates, **modpacks** |
 | **Players** | Players per day, busiest hours, top players, server records, **per-map statistics**, kick / mute / ban, **maintenance mode** |
 | **Health** | **Health report** (internet, BeamMP backend, server, port, config, AuthKey, plugin, mods, reachability, disk, memory), **diagnostic reports**, the **"someone can't join?"** doctor, the port checker and **automatic port forwarding (UPnP)** |
 | **Updates** | New BeamMP server and EasyServer versions, one-click server update |
@@ -55,7 +73,7 @@ Then work through the [guides](#-guides) below - start with [Let friends join ov
 | **Notifications** | Crashes, updates, blocked mods, failed logins, joins, health problems ... sent to Discord, email, phone, Telegram or any webhook if you like |
 | **Settings** | Alerts, password, two-step login, **users & roles**, internet access (HTTPS), hide your IP, backups, DuckDNS, Discord bot, phone app, **public status page**, sleep & wake-up |
 
-Dark and light mode, works on phones (Android app, or add it to the iPhone home screen). Before anything changes your network the dashboard shows exactly what will change and asks first. Your router is only changed if you click "Open port automatically" (and closed again when you turn it off).
+In English, German, Spanish, Hungarian and Polish (more languages are one file each - see `dashboard/lang/README.md`). Dark and light mode, works on phones (Android app, or add it to the iPhone home screen). Before anything changes your network the dashboard shows exactly what will change and asks first. Your router is only changed if you click "Open port automatically" (and closed again when you turn it off).
 
 ---
 
@@ -152,7 +170,7 @@ beammp uninstall   remove everything (also undoes laptop mode)
 | Linux Mint 21 / 22, Pop!_OS, Zorin, elementary | ✅ official build |
 | Debian 12 / 13, LMDE 6+ | ✅ official build |
 | Fedora, Arch, openSUSE | ⚠️ best effort |
-| 64-bit x86 and ARM64 (e.g. Raspberry Pi 4/5 with 64-bit OS) | ✅ |
+| 64-bit x86 and ARM64 (e.g. Raspberry Pi 4/5 with the **64-bit** Raspberry Pi OS - 4 GB or more is best) | ✅ |
 
 #### Advanced (no questions asked)
 
@@ -166,6 +184,31 @@ Run `bash install.sh --help` for all options.
 ---
 
 ---
+
+### Mac (experimental)
+
+> **Experimental:** Mac support is only in the Rolling release for now - it isn't part of Stable yet and hasn't been tested on many Macs. Expect rough edges.
+
+BeamMP doesn't make a server for macOS, so EasyServer runs the **official Linux server in a small Linux VM** ([Lima](https://lima-vm.io), free and open source) that starts with your Mac. Players and the dashboard connect to your Mac as usual - the Mac passes the game port on to the VM. Good for a Mac mini that's on all day anyway.
+
+Needs macOS 13 or newer (Apple Silicon or Intel). [Homebrew](https://brew.sh) is used if you have it; without it the installer downloads Lima itself (checksum-verified) and automatic port opening isn't offered. Open **Terminal** and paste - as your normal user, not with sudo:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/main/mac/install.sh | bash
+```
+
+It installs Lima and miniupnpc with Homebrew, makes the VM (2 CPU cores, 2 GB of memory, up to 20 GB of disk; it can't see your Mac's files), runs the normal Linux installer inside it, and asks:
+
+- **How friends outside your home get in.** *Do it for me*: your Mac asks the router to keep the game port open to the Mac (UPnP), checked every 20 minutes. Or set up port forwarding yourself (TCP + UDP to your Mac's address) - the installer shows what to type.
+- **Keep the Mac awake while plugged in** - a sleeping Mac kicks everyone.
+
+Then open the **BeamMP Dashboard** shortcut on your desktop (`http://localhost:30815`), or `http://<your-mac-ip>:30815` from your phone.
+
+Update: run the same command again. Remove everything (the VM, with its mods and settings): add `-s -- --uninstall`, so `... | bash -s -- --uninstall`.
+
+**Security on a Mac:** every connection reaches the VM through the Mac, so players and dashboard visitors all look like the same local address. That means: **never forward the dashboard port (30815) on your router** (the "home network only" rules can't tell the internet from your Wi-Fi there, and "Internet access" is switched off on a Mac), bans by IP address and the per-connection player limit don't work (bans by name do), and wrong-password lockouts apply to everyone at once.
+
+Good to know: the BeamMP-only guard isn't available on a Mac (every player reaches the VM through the Mac, so they all look like the same address), and "Only open the port when needed" is replaced by "keep it open while the Mac is on". The Mac version is experimental - [tell us](https://github.com/Csabika-dev/beammp-easyserver/discussions) how it goes.
 
 ## 📖 Guides
 
@@ -242,6 +285,10 @@ From Discord (with the bot): `/whitelist add name`, `/whitelist remove name`, `/
 - Turn on **Light mode**: only the map mod for the map being played is sent. The other map mods wait (badge *waiting - light mode*) and come back by themselves when you switch to their map - from Config, a map vote, rotation or an event. Mods that aren't maps are always sent.
 - Turn on **Show the download size in the server description** so players see it in the server list.
 
+**Mod sets:** turn on the mods you want for one kind of night, click **Save as a set…** and give it a name. Later, **Switch to this set** turns on exactly those mods and turns the rest off (nothing is deleted). **Update** saves the mods that are on now into that set.
+
+**Running out of space:** the top card shows how much room the mods take and how much is free on the drive. Sort the list **Biggest first** to see what to turn off or delete. An upload that won't fit is refused before it starts. On a Raspberry Pi, a USB 3 stick or SSD is faster and bigger than the SD card.
+
 **Share or move mods:** **Mods → Modpack → Download modpack** gives you one .zip of all enabled mods with checksums. On another EasyServer: **Import a modpack…** (virus-checked again). Players on slow internet can copy the files from the modpack's `mods` folder into `Documents\BeamNG.drive\mods\multiplayer` before joining.
 
 **Updates:** mods from the BeamNG repository are checked daily. An **Update** button appears when there's a new version.
@@ -295,6 +342,8 @@ The helper only moves or repairs the player's own car, and only when the server 
 
 - **Players → Online now & moderation**: **Mute 10 min**, **Kick** or **Ban…** (1 hour to forever, with a reason the player sees). Unban under **Banned players**. Send a message to everyone in the game chat.
 - **In-game admins:** **Config → Moderation & anti-bot → Admins**: their BeamMP names. They can then type `/kick name`, `/ban name 1d reason`, `/mute name 10`, `/unmute name`, `/unban name` in the game chat. Their bans are saved in the dashboard.
+- **Reports:** players type `/report name what happened`; it shows up under **Players → Reports** with the chat before it, and as an alert. **Vote kick** (`/votekick name reason`, then `/yes`) can be turned on for when no admin is online.
+- **Chat history:** **Players → Chat history** - search by word or player, click a message to see the conversation around it.
 - **Chat filter, anti-spam and anti-bot** are on the same card - see the [feature reference](#moderation--anti-bot-config-and-players-pages).
 - Every ban, kick and mute (from the dashboard, Discord or the game) is in **Logs → Activity log**.
 </details>
@@ -324,19 +373,23 @@ Moderators can do this too.
 <summary><b>Give friends their own login (admins, moderators, viewers)</b></summary>
 
 **Settings → Users & roles** (only you, the owner, see this):
-1. Type a name, pick a role, set a password (at least 10 characters) → **Add**. Give them the name, the password and the dashboard address.
+1. **Invite someone:** pick a role (and, with several servers, which server) → **Make invite link** → send it. They choose their own name and password - you never see it. The link works once and stops working after 1 hour, so a leaked link is useless soon; open invites can be revoked. Or add an account yourself under *Or add an account yourself*.
 2. Roles:
 
 | Role | Can |
 |---|---|
 | **Viewer** | Look at everything, change nothing |
 | **Moderator** | Kick, mute, ban, unban, who can join, restart the server, maintenance mode, chat messages |
-| **Admin** | Everything except users, passwords, two-step login, internet access and the status page |
+| **Admin** | Everything except users, passwords, two-step login, internet access, the status page and server plugins |
+| **Custom roles** | Whatever you tick: Players · Start & stop · Maps & events · Mods · Server config · Dashboard settings |
 | **Owner** (you) | Everything |
 
-3. Change a role, reset a password, disable or delete someone at any time on the same card.
+3. **Only some servers:** with more than one server, **Servers…** gives an account a role per server (e.g. admin on the drift server, nothing on the others). Such an account can't change dashboard-wide settings.
+4. **From the internet:** tick *From the internet* for an account. It then needs its own two-step login (set up under **My account** - click your name at the bottom left - or right away when they accept an internet invite), and internet access to the dashboard must be on. Untick it and they're logged out at once.
+5. Change a role, reset a password or two-step login, disable or delete someone at any time on the same card. Everyone can change their own password and two-step login under **My account**.
+6. **Sign in with Discord** (team members only - the owner always uses the password): tick *Let team members sign in with Discord* on the same card. Each member links their Discord once under **My account**, then presses **Sign in with Discord** on the login page instead of typing a password. Their two-step code is still asked for, and the internet rules above still apply. It goes through a small EasyServer sign-in service that stores nothing ([how it works](login-service/README.md)).
 
-Extra accounts can only log in from your home network. **Logs → Activity log** shows who did what, when and from where - including Discord commands and in-game admin actions.
+**Logs → Activity log** shows who did what, when and from where - including Discord commands and in-game admin actions.
 </details>
 
 <details>
@@ -462,7 +515,7 @@ Forgot the password or lost your phone? Linux: `sudo beammp reset-login`. Window
 <details>
 <summary><b>Backups and moving to a new computer</b></summary>
 
-- **Nightly backups** (on by default, Settings → Automatic backups): every server's settings, invite list, bans, moderation, messages and rotation at 03:30, optionally with mods. The last 7 are kept - download one any time.
+- **Nightly backups** (on by default, Settings → Automatic backups): every server's settings, invite list, bans, moderation, messages and rotation at 03:30, optionally with mods. The last 7 are kept - download one any time, or click **Restore** to put it back (the owner; how things are right now is saved first, so it can be undone).
 - **Move or restore:** **Settings → Backup / move to another computer → Export settings** (or **+ mods**). On the new EasyServer: **Import…** the file. Mods are virus-checked again; keys and passwords are never exported, so paste the AuthKey again.
 </details>
 
@@ -486,6 +539,10 @@ All of this runs in the small EasyServerStats plugin on the server, so players d
 
 - **Kick, mute and ban** from the Players page: bans can be for an hour, a day, 7 or 30 days, or forever, with a reason players see. Send a message to everyone in the game chat.
 - **Admins** you name can use `/kick`, `/ban name 1d reason`, `/mute name 10`, `/unmute` and `/unban` in the game chat. Their bans are saved in the dashboard too.
+- **Kick words:** players who write one of these words are removed at once - kicked, or banned for 1 hour, 1 day, 7 days or forever. Whole words only, admins are never removed, works even with the chat filter off.
+- **Player reports** (on by default): players type `/report name what happened`. You get an alert wherever your notifications go (dashboard, Discord, email, phone) with the chat just before it, admins in the game see it at once, and it waits under **Players → Reports** until someone marks it handled. One report a minute per player.
+- **Vote kick** (off by default): when no admin is online, `/votekick name reason` starts a vote. If more than half of the other players type `/yes` within 90 seconds, that player is out for 10 minutes. It needs a minimum number of players online (4 by default), admins can't be voted out, players who joined in the last 2 minutes can't vote, and each player can start one vote every 5 minutes.
+- **Chat history** (Players page, on by default): search the game chat by word or player, click a message to see what was said around it. Messages players didn't see (muted, caught by the filter) are marked *hidden*. It stays on this computer (up to 10 MB); admins can delete it. Moderators can read it, viewers can't.
 - **Chat filter** (off by default): hides blocked words, @everyone and Discord invite links, and refuses player names with links. Repeat offenders are muted for 5 minutes.
 - **Anti-spam** (off by default): too many messages in 10 seconds = a 2 minute mute.
 - **Anti-bot** (off by default) stops bots from filling your server. Cloudflare can only protect websites, not a game server, so this works inside the game:
@@ -494,6 +551,23 @@ All of this runs in the small EasyServerStats plugin on the server, so players d
   - **Max players from one internet connection** (your own network is never limited)
   - **Max new players per minute:** above it, new joins pause for 2 minutes and you get a security alert
 
+### Vehicle rules (Config page)
+
+Also runs in the EasyServerStats plugin: no restart, nothing for players to download. Off until you turn it on or pick a preset (*Anything goes*, *No chaos*, *Racing*, *Roleplay*).
+
+- **Block props** (cones, barrels, ramps …), **big physics props** (crushers, spinners, shipping containers, bridges - the usual cause of server-wide lag) and **trailers**, or **any car by name**. **Only these cars** turns it around for one-make racing.
+- **Heavy mod cars are found automatically:** EasyServer counts the nodes and beams of every car in your mods and marks very complex ones. Prop and trailer mods are recognised too, and new mods are covered as soon as you add them.
+- **Seconds between spawns** and **max spawns per minute** stop spawn spam.
+- A blocked spawn is refused before anyone sees the car, and the player gets a chat message saying why. Admins can be exempt.
+- The page lists what players actually spawned in the last 7 days, with a **Block** button, and what was refused.
+
+### Server plugins (Mods page)
+
+- **Community plugins** (CareerMP, freeRoamMP, BeamJoy Sandbox, Environment Sync, CobaltEssentials): **Install…** downloads the plugin from its author's GitHub page and shows exactly what goes where - server folders and the mods players will download - before anything is installed. Client mods get the virus check.
+- **Update, turn off / on, remove** in one click; **Lua errors** from the server log are shown next to the plugin that caused them. Plugins you copied into `Resources/Server` by hand are listed too.
+- **From a .zip file:** possible after ticking that you trust the author.
+- Only the owner can install plugins: a plugin can do anything the server can. Restart the server after a change.
+- **Mod pack code** (Mods → Share code): a short `ES1-…` code with your BeamNG repository mods - paste it into another EasyServer to get the same mods.
 
 ### Privacy
 
@@ -559,6 +633,22 @@ Suggestions are welcome; open an issue.
 **Worried about DDoS / your home IP?** Turn on **Settings → Hide your IP** and see [PROTECT-YOUR-IP.md](PROTECT-YOUR-IP.md).
 
 **Found a security bug?** Please don't open a public issue - report it privately with the **Report a vulnerability** button on the [Security tab](https://github.com/Csabika-dev/beammp-easyserver/security) or email **beammp.easyserver.security@gmail.com**. See [SECURITY.md](SECURITY.md).
+
+## 🙏 Credits
+
+EasyServer is glue around other people's great work. Thank you to:
+
+- **[BeamMP](https://beammp.com)** - the BeamMP team made multiplayer for BeamNG.drive and the server EasyServer installs ([BeamMP-Server](https://github.com/BeamMP/BeamMP-Server), AGPL-3.0). EasyServer downloads it from their GitHub; it isn't changed or shipped here.
+- **[BeamNG GmbH](https://www.beamng.com)** for BeamNG.drive, and every **mod author** on the [BeamNG repository](https://www.beamng.com/resources/). The mod browser only links to and downloads from their pages - mods stay theirs.
+- **Server plugin authors** in the plugin list ([docs/plugins.json](docs/plugins.json)), shown with their name, page and licence in the dashboard. EasyServer downloads each plugin from its author's own GitHub page and doesn't ship any of them:
+  - **StanleyDudek** - [CareerMP](https://github.com/StanleyDudek/CareerMP), [freeRoamMP](https://github.com/StanleyDudek/freeRoamMP), and the maintained [CobaltEssentials](https://github.com/StanleyDudek/CobaltEssentials) by **Preston Elam (CobaltTetra)**
+  - **Samaël (my-name-is-samael)** and **CaptainNugget** - [BeamJoy](https://github.com/my-name-is-samael/BeamJoy) / [BeamJoy Revived](https://github.com/foodcache3/BeamJoy-Revived)
+  - **Evan Mulawski** - [BeamMP Environment Sync](https://github.com/EvanMulawski/BeamMP-EnvSync)
+- **[Lima](https://github.com/lima-vm/lima)** (Apache-2.0) runs the Linux server on a Mac.
+- **[Python](https://www.python.org)** (PSF licence) - the dashboard is plain Python; Windows gets the official signed Python from python.org.
+- **[VirusTotal](https://www.virustotal.com)** (optional mod check), **[ntfy](https://ntfy.sh)** (phone notifications), **[DuckDNS](https://www.duckdns.org)** (optional address), **[GoatCounter](https://www.goatcounter.com)** (privacy-friendly visit counter on the website).
+
+Want your plugin in the list? Open a pull request that adds it to `docs/plugins.json` (name, author, GitHub repo, a one-line description and any notes).
 
 ## ❤️ Support the project
 

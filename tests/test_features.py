@@ -123,6 +123,21 @@ class Invite(unittest.TestCase):
         self.assertNotIn("\r", d["note"])
         D.APP.settings.update({"invite_note": ""})
 
+    def test_credit_line_can_be_turned_off(self):
+        with mock.patch.object(D, "public_ip", lambda: "203.0.113.7"):
+            d = self.owner.call("/api/invite")[1]
+            self.assertTrue(d["credit"])
+            self.assertIn(D.SITE_URL, d["text"])
+            self.assertEqual(self.owner.call("/api/invite", {"credit": False})[0], 200)
+            d = self.owner.call("/api/invite")[1]
+        try:
+            self.assertFalse(d["credit"])
+            self.assertNotIn(D.SITE_URL, d["text"])
+            self.assertIn("beammp.com", d["text"])
+            self.assertEqual(D.APP.settings.get("invite_note"), "")     # changing one thing doesn't wipe the note
+        finally:
+            self.owner.call("/api/invite", {"credit": True})
+
 
 if __name__ == "__main__":
     unittest.main()

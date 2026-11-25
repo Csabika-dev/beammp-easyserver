@@ -1,0 +1,25 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+html,body{margin:0}
+body{width:1200px;height:630px;overflow:hidden;background:#202328;color:#e6e8eb;font-family:"Bahnschrift","DejaVu Sans Condensed","Arial Narrow",sans-serif;font-stretch:condensed;position:relative}
+.glow{position:absolute;inset:0;background:radial-gradient(700px 420px at 92% 20%,rgba(47,140,255,.35),transparent 70%)}
+.words{position:absolute;left:72px;top:76px;width:560px}
+.brand{display:flex;align-items:center;gap:18px;font-size:34px;font-weight:700}
+.brand img{width:68px;height:68px}
+h1{font-size:60px;line-height:1.08;margin:40px 0 0;font-weight:700;max-height:290px}
+.road{position:absolute;left:0;right:0;bottom:0;height:86px;background:#2a2d33;border-top:4px solid #5b616b}
+.road i{position:absolute;top:38px;height:10px;width:90px;border-radius:5px;background:#f2c230}
+.shot{position:absolute;right:-60px;top:110px;width:620px;border-radius:14px;box-shadow:0 30px 70px rgba(0,0,0,.6);transform:perspective(1400px) rotateY(-14deg) rotateX(4deg);border:2px solid #3a3f47}
+.url{margin-top:26px;font-size:24px;color:#a0a8b2;font-family:"DejaVu Sans",sans-serif}
+</style></head><body>
+<div class="glow"></div>
+<img class="shot" src="../../docs/img/overview-dark.webp">
+<div class="words">
+<div class="brand"><img src="../../docs/img/logo.svg">BeamMP EasyServer</div>
+<h1 id="h"></h1>
+<div class="url">csabika-dev.github.io/beammp-easyserver</div>
+</div>
+<div class="road"><i style="left:40px"></i><i style="left:200px"></i><i style="left:360px"></i><i style="left:520px"></i><i style="left:680px"></i><i style="left:840px"></i><i style="left:1000px"></i><i style="left:1160px"></i></div>
+<script>document.getElementById("h").textContent=new URLSearchParams(location.search).get("t");
+for(var h=document.getElementById("h"),f=60;h.scrollHeight>290&&f>30;f-=2)h.style.fontSize=f+"px"</script>
+</body></html>

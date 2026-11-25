@@ -33,6 +33,8 @@ jobs:
           luac5.3 -p dashboard/EasyServerStats/main.lua
       - name: Tests (dashboard, attacks, root helper, game plugin)
         run: python -m unittest discover -s tests -v
+      - name: Discord sign-in service (with a fake Discord)
+        run: node tests/login_service.test.mjs
 
   windows:
     name: Windows

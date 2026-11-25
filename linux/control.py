@@ -29,7 +29,7 @@ SERVER_DIR = "/opt/beammp-server"
 INSTALL_ENV = "/etc/beammp-easyserver/install.env"
 SERVERS = SERVER_DIR + "/servers"              # extra servers: servers/<id>/
 LIMITS_DIR = "/etc/beammp-easyserver/limits"   # upload limits, re-applied when a server starts
-SECRET_NAMES = {"MODS_PASSWORD", "VT_API_KEY", "DISCORD_WEBHOOK", "SMTP_PASSWORD", "TOTP_SECRET", "BEAMMP_AUTH_KEY", "DISCORD_BOT_TOKEN", "DUCKDNS_TOKEN", "NTFY_TOPIC", "WAKE_TOPIC", "USERS_KEY", "TELEGRAM_TOKEN", "CUSTOM_WEBHOOK", "SUPPORTER_KEY"}
+SECRET_NAMES = {"MODS_PASSWORD", "VT_API_KEY", "DISCORD_WEBHOOK", "SMTP_PASSWORD", "TOTP_SECRET", "BEAMMP_AUTH_KEY", "DISCORD_BOT_TOKEN", "DUCKDNS_TOKEN", "NTFY_TOPIC", "WAKE_TOPIC", "USERS_KEY", "TELEGRAM_TOKEN", "CUSTOM_WEBHOOK", "SUPPORTER_KEY", "GDRIVE_SECRET", "GDRIVE_REFRESH"}
 ID_RE = re.compile(r"[a-z0-9]{1,12}")
 RELEASE_BASE = "https://github.com/BeamMP/BeamMP-Server/releases/latest/download/"
 
@@ -130,8 +130,9 @@ def _create_server(server, config, start, base):
         with open(os.path.join(d, "Resources/Server/EasyServerStats/main.lua"), "w", encoding="utf-8") as f:
             f.write(lua)
     os.chmod(os.path.join(d, "ServerConfig.toml"), 0o660)
-    for sub in ("Resources/Client", "Resources/Client-disabled", "Resources/Server/EasyServerStats", "Resources/Quarantine"):
-        os.chmod(os.path.join(d, sub), 0o2775)
+    for sub in ("Resources/Client", "Resources/Client-disabled", "Resources/Server", "Resources/Server/EasyServerStats",
+                "Resources/Quarantine"):
+        os.chmod(os.path.join(d, sub), 0o2775)    # Resources/Server: the dashboard installs plugins there
     q = os.path.join(d, "Resources/Quarantine")
     for root, dirs, files in os.walk(d):
         for x in dirs + files:

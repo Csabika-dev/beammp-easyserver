@@ -12,6 +12,7 @@ Standard library only. Runs on Linux (systemd service, as the unprivileged
 Not affiliated with the BeamMP team.
 """
 import base64
+import binascii
 import hashlib
 import hmac
 from html import escape as html_escape
@@ -36,10 +37,11 @@ import urllib.parse
 import urllib.request
 import uuid
 import zipfile
+import zlib
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-EASY_VERSION = "1.14.0"
+EASY_VERSION = "1.15.0"
 # Paid extras (supporter licence, Experimental for supporters only). Off = EasyServer is fully free:
 # no supporter box, and everyone can pick the Rolling release (newest code). Turn on again later.
 PAID_FEATURES = False
@@ -53,6 +55,7 @@ JOIN_OPEN = 2 * 3600      # Discord /join keeps the port open this long
 LS_STORE_ID = 0
 LS_API = "https://api.lemonsqueezy.com/v1/licenses/"
 SUPPORT_URL = "https://csabika-dev.github.io/beammp-easyserver/#support"
+SITE_URL = "https://csabika-dev.github.io/beammp-easyserver/"
 SUPPORTER_GRACE = 14 * 86400        # keep supporter features when the check can't reach Lemon Squeezy
 IS_WIN = os.name == "nt"
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -76,6 +79,7 @@ SERVERS_DIR = os.path.join(SERVER_DIR, "servers")   # extra servers live in serv
 UPLOAD_TMP = os.path.join(DATA_DIR, "uploading")
 TLS_DIR = os.path.join(DATA_DIR, "tls")
 SETTINGS_FILE = os.path.join(DATA_DIR, "dashboard.json")
+HOST_FILE = os.path.join(DATA_DIR, "host.json")   # written by the Mac installer when this Linux runs in a small VM on a Mac
 NOTIF_FILE = os.path.join(DATA_DIR, "notifications.json")
 STATE_FILE = os.path.join(DATA_DIR, "state.json")
 os.environ.setdefault("MODSCAN_CACHE", os.path.join(DATA_DIR, "scancache.json"))
@@ -90,7 +94,7 @@ BUILTIN_MAPS = ["gridmap_v2", "west_coast_usa", "east_coast_usa", "utah", "italy
 
 SECRET_NAMES = ("MODS_PASSWORD", "VT_API_KEY", "DISCORD_WEBHOOK", "SMTP_PASSWORD", "TOTP_SECRET",
                 "BEAMMP_AUTH_KEY", "DISCORD_BOT_TOKEN", "DUCKDNS_TOKEN", "NTFY_TOPIC", "WAKE_TOPIC", "USERS_KEY",
-                "TELEGRAM_TOKEN", "CUSTOM_WEBHOOK", "SUPPORTER_KEY")
+                "TELEGRAM_TOKEN", "CUSTOM_WEBHOOK", "SUPPORTER_KEY", "GDRIVE_SECRET", "GDRIVE_REFRESH")
 
 DEFAULT_SETTINGS = {
     "port": 30815,
@@ -99,7 +103,7 @@ DEFAULT_SETTINGS = {
     "notify": {"crash": True, "stopped": True, "update": True, "mod_blocked": True,
                "login_failed": True, "player_join": False, "player_denied": True,
                "moderation": True, "network": True, "restart": False,
-               "resources": True, "backup": True, "rotation": False, "mod_update": True,
+               "resources": True, "backup": True, "rotation": False, "mod_update": True, "report": True,
                "sleep": False},
     "discord_enabled": False,
     "email_enabled": False,
@@ -124,6 +128,9 @@ DEFAULT_SETTINGS = {
     "backup_on": True,             # nightly backup of every server's settings (keeps the last 7)
     "backup_at": "03:30",
     "backup_mods": False,          # ...including the mods (can be big)
+    "backup_copy": "",             # also keep a copy: "" (no), "folder" (a USB drive or folder), "computer" (a paired one)
+    "backup_copy_path": "",
+    "backup_copy_ip": "",
     "duckdns_domain": "",          # name.duckdns.org - a fixed address even when the home IP changes
     "upload_mbit": 0,              # the user's upload speed from a speed test (0 = unknown)
     "discord_status_msg": False,   # a status message in the webhook channel that updates itself every minute
@@ -132,6 +139,7 @@ DEFAULT_SETTINGS = {
     "ntfy_enabled": False,         # push notifications to phones through the free ntfy app
     "ntfy_server": "https://ntfy.sh",
     "mod_update_check": True,      # look for newer versions of repository mods once a day
+    "mod_auto_update": False,      # ...and install them by themselves while nobody is playing
     "sleep_on": False,             # the computer goes to sleep when nobody has played for sleep_idle minutes
     "sleep_idle": 30,
     "sleep_from": "",              # ...only between these times (HH:MM, empty = any time)
@@ -144,13 +152,21 @@ DEFAULT_SETTINGS = {
     "statuspage_on": False,        # public page /status: is the server up, players, uptime - no login
     "statuspage_players": False,   # ...also show the names of online players
     "statuspage_title": "",
+    "gdrive_on": False,            # a copy of the nightly backups in the owner's Google Drive (secret GDRIVE_REFRESH)
+    "gdrive_client_id": "",        # an own Google app instead of the built-in one (its secret: GDRIVE_SECRET)
+    "gdrive_folder": "",
+    "gdrive_account": "",
+    "statuspage_about": "",
+    "statuspage_discord": "",
     "statuspage_mods": True,       # ...and the mod list with the download size
+    "statuspage_address": False,   # ...and the address to join with (the relay's when "Hide my IP" is on)
     "event_ads": False,            # advertise events: Discord/Telegram/webhook post when planned + a day before, in-game reminders
     "upnp_on": False,              # ask the router (UPnP) to forward the game ports - no router settings page needed
     "upnp_mapped": [],             # [port, "TCP"/"UDP"] pairs this dashboard opened, so old ones can be closed again
     "upnp_mode": "needed",         # "needed" = only while players are on, after an invite or /join; "always" = keep the port open
     "upnp_open_until": 0,          # "needed" mode: keep the port open until this time
     "invite_note": "",             # an extra line for the "Copy invite" message (rules, Discord link ...)
+    "credit_link": True,           # "Hosted with BeamMP EasyServer" on the status page and at the end of the invite
     "supporter": {},               # the supporter licence (key itself is a secret): instance, plan, last check
     "early_access": True,          # supporters: Experimental versions (newest features first, pre-releases) - supporters only
     "rolling": False,              # free mode (PAID_FEATURES off): hear about the Rolling release (newest code) too
@@ -322,7 +338,7 @@ def open_shared(path, mode="r"):
     Never follows links (a hacked game server could point them at the
     dashboard's own files) and never blocks on FIFOs. Text mode is UTF-8."""
     flags = {"r": os.O_RDONLY, "rb": os.O_RDONLY, "w": os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
-             "a": os.O_WRONLY | os.O_CREAT | os.O_APPEND}[mode]
+             "wb": os.O_WRONLY | os.O_CREAT | os.O_TRUNC, "a": os.O_WRONLY | os.O_CREAT | os.O_APPEND}[mode]
     flags |= (getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0) |
               getattr(os, "O_BINARY", 0))
     fd = os.open(path, flags, 0o664)
@@ -1153,6 +1169,10 @@ def zip_maps(path):
 
 def list_mods():
     out = []
+    try:
+        needs = mod_needs()
+    except Exception:
+        needs = {}
     for folder, enabled in ((I().CLIENT_DIR, True), (I().DISABLED_DIR, False)):
         try:
             names = sorted(os.listdir(folder), key=str.lower)
@@ -1165,7 +1185,7 @@ def list_mods():
                 out.append({"name": n, "size": os.path.getsize(p), "enabled": enabled,
                             "parked": not enabled and n in parked_maps(I()), "builtin": n == TOOLS_MOD,
                             "maps": zip_maps(p) or [], "safety": r["verdict"] if r else "unchecked",
-                            "reasons": r["reasons"] if r else []})
+                            "reasons": r["reasons"] if r else [], "needs": needs.get(n, []) if enabled else []})
     return out
 
 
@@ -1661,6 +1681,2166 @@ def read_records(limit=10):
     return {"speed": top("speed"), "dist": top("dist"), "streak": top("streak")}
 
 
+# ----------------------------------------------------------------------------- lap times
+# The plugin times laps on tracks admins make in the game (/track) and keeps each player's
+# best lap. Here: switch it on and off, rename/delete tracks, clear times, and show them.
+LAP_RADII = (8, 10, 15, 20, 30)
+TRACK_RE = re.compile(r"^([\w\-]+)\t([^\t]+)\t([^\t]*)\t(\w+)\t([\d.,;\-]+)$")
+
+
+def laps_file(name):
+    return os.path.join(I().STATS_DIR, name)
+
+
+def read_laps_cfg():
+    d = {"on": False, "radius": 15, "public": True}
+    for line in shared_read(laps_file("laps.txt"), 4096).splitlines():
+        k, _, v = line.partition("=")
+        v = v.strip()
+        if k == "mode":
+            d["on"] = v == "on"
+        elif k == "radius" and v.isdigit():
+            d["radius"] = int(v) if int(v) in LAP_RADII else 15
+        elif k == "public":
+            d["public"] = v != "off"
+    return d
+
+
+def write_laps_cfg(d):
+    shared_write(laps_file("laps.txt"), "mode=%s\nradius=%d\npublic=%s\n" % (
+        "on" if d["on"] else "off", d["radius"], "on" if d["public"] else "off"))
+
+
+def read_track_lines():
+    return [l for l in shared_read(laps_file("tracks.tsv"), 512 * 1024).splitlines() if TRACK_RE.match(l)]
+
+
+def read_tracks():
+    out = []
+    for line in read_track_lines():
+        tid, name, mp, kind, pts = TRACK_RE.match(line).groups()
+        out.append({"id": tid, "name": name[:40], "map": map_name(mp) if mp else "", "kind": "sprint" if kind == "sprint" else "loop",
+                    "checkpoints": max(0, pts.count(";") - (1 if kind == "sprint" else 0))})
+    return out
+
+
+def read_laptimes():
+    """{track id: [{"name", "ms", "car", "t"}] fastest first}"""
+    out = {}
+    for line in shared_read(laps_file("laptimes.tsv"), 2 * 1024 * 1024).splitlines():
+        p = line.split("\t")
+        if len(p) == 5 and p[2].isdigit() and p[4].isdigit():
+            out.setdefault(p[0], []).append({"name": p[1][:64], "ms": int(p[2]), "car": p[3][:40], "t": int(p[4])})
+    for rows in out.values():
+        rows.sort(key=lambda r: r["ms"])
+    return out
+
+
+def write_laptimes(times):
+    clean = lambda x: re.sub(r"[\t\r\n]", " ", str(x))
+    shared_write(laps_file("laptimes.tsv"), "".join("%s\t%s\t%d\t%s\t%d\n" % (tid, clean(r["name"]), r["ms"], clean(r["car"]), r["t"])
+                                                   for tid, rows in times.items() for r in rows))
+
+
+def fmt_lap(ms):
+    m, s = divmod(ms, 60000)
+    return ("%d:%06.3f" % (m, s / 1000.0)) if m else ("%.3f" % (s / 1000.0))
+
+
+def laps_summary(limit=10, only_map=None):
+    times = read_laptimes()
+    out = []
+    for t in read_tracks():
+        if only_map is not None and t["map"] and t["map"] != only_map:
+            continue
+        rows = times.get(t["id"], [])
+        t.update({"drivers": len(rows), "top": [dict(r, time=fmt_lap(r["ms"])) for r in rows[:limit]]})
+        out.append(t)
+    return out
+
+
+# ----------------------------------------------------------------------------- Raspberry Pi on the same network
+# Install EasyServer on a Raspberry Pi from here: no screen, keyboard or commands on the Pi. The owner makes
+# the SD card with Raspberry Pi Imager (Wi-Fi, a user name and password, "Enable SSH") and plugs the Pi in.
+# This dashboard finds it on the home network by its network chip's maker code, logs in once with the
+# password the owner types (handed to ssh through SSH_ASKPASS - never on a command line, never saved),
+# leaves its own key there, copies the Linux installer over and runs it. Updates later use the key.
+PI_OUIS = ("b8:27:eb", "dc:a6:32", "e4:5f:01", "28:cd:c1", "d8:3a:dd", "2c:cf:67", "88:a2:9e")
+PI_DIR = os.path.join(DATA_DIR, "pi")
+PI_INSTALLER = "https://raw.githubusercontent.com/%s/main/linux/install.sh" % REPO
+PI_USER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_. -]{0,31}")
+PI_PORT = 30815
+_PI_LOCK = threading.Lock()
+_PI = {"scan": None, "scanning": False, "job": None}
+_NOWIN = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)} if IS_WIN else {}
+
+
+def pi_private(ip):
+    try:
+        a = ipaddress.ip_address(str(ip))
+    except ValueError:
+        return False
+    return a.version == 4 and a.is_private and not (a.is_loopback or a.is_link_local or a.is_unspecified)
+
+
+def pi_lan_ip():
+    """This computer's address on the home network (no packet is sent)."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("10.254.254.254", 1))
+        return s.getsockname()[0]
+    except OSError:
+        return ""
+    finally:
+        s.close()
+
+
+def pi_mac(m):
+    parts = re.split(r"[:-]", m.strip().lower())
+    return ":".join(x.zfill(2) for x in parts) if len(parts) == 6 and all(re.fullmatch(r"[0-9a-f]{1,2}", x) for x in parts) else ""
+
+
+def pi_neighbors():
+    """{ip: mac} from this computer's ARP table: the devices it talked to on the network lately."""
+    try:
+        if IS_WIN:
+            txt = subprocess.run(["arp", "-a"], capture_output=True, text=True, timeout=10, **_NOWIN).stdout
+        elif os.path.exists("/proc/net/arp"):
+            with open("/proc/net/arp") as f:
+                txt = f.read()
+        else:
+            txt = subprocess.run(["arp", "-an"], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    out = {}
+    for ip, mac in re.findall(r"\(?(\d{1,3}(?:\.\d{1,3}){3})\)?(?:\s+at)?\s+(?:0x\S+\s+0x\S+\s+)?([0-9A-Fa-f]{1,2}(?:[:-][0-9A-Fa-f]{1,2}){5})", txt):
+        m = pi_mac(mac)
+        if m and m not in ("ff:ff:ff:ff:ff:ff", "00:00:00:00:00:00"):
+            out[ip] = m
+    return out
+
+
+def pi_open(ip, port, timeout=0.7):
+    try:
+        with socket.create_connection((ip, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def pi_is_pi(mac):
+    return bool(mac) and mac[:8] in PI_OUIS
+
+
+def pi_banner(ip):
+    """The SSH greeting ("SSH-2.0-OpenSSH_9.2p1 Debian-2+deb12u3"): "" when nothing answers on port 22,
+    "?" when something does but says nothing."""
+    try:
+        with socket.create_connection((ip, 22), timeout=0.7) as c:
+            c.settimeout(1.5)
+            try:
+                return c.recv(256).decode("latin-1").split("\n")[0].strip()[:120] or "?"
+            except OSError:
+                return "?"
+    except OSError:
+        return ""
+
+
+def pi_os_from_banner(b):
+    b = (b or "").lower()
+    for key in ("windows", "raspbian", "ubuntu", "debian"):
+        if key in b:
+            return key
+    return ""
+
+
+def pi_problem(pi):
+    """Why EasyServer can't go on this computer ("" = it can)."""
+    if pi.get("os") == "windows":
+        return "" if pi.get("admin", True) else ("This Windows account isn't an administrator. Forget it and set it up again "
+                                                  "with an administrator account of that PC.")
+    if pi.get("truenas"):
+        return "TrueNAS doesn't allow installing programs on it, so EasyServer can't go there."
+    oses = set(str(pi.get("os_like", "")).split(",")) | {str(pi.get("os", ""))}
+    if pi.get("os") and not oses & {"debian", "ubuntu", "raspbian"}:
+        return "EasyServer needs Ubuntu, Debian or Raspberry Pi OS - this computer runs %s." % pi.get("os")
+    if pi.get("bits") == 32:
+        return ("This Raspberry Pi runs the 32-bit Raspberry Pi OS. The BeamMP server needs the 64-bit one - write that to the card "
+                "and set it up again.") if pi.get("kind") == "pi" else \
+            "This computer runs a 32-bit system. The BeamMP server needs a 64-bit one."
+    if pi.get("arch") and pi["arch"] not in ("x86_64", "aarch64", "amd64", "arm64"):
+        return "The BeamMP server doesn't run on this kind of processor (%s)." % pi["arch"]
+    return ""
+
+
+def pi_ps(script):
+    """A PowerShell script as one command for Windows' SSH (which starts cmd.exe)."""
+    return "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " + \
+        base64.b64encode(script.encode("utf-16-le")).decode()
+
+
+def pi_saved():
+    d = read_json(os.path.join(PI_DIR, "pis.json"), [])
+    return [x for x in d if isinstance(x, dict) and pi_private(x.get("ip")) and PI_USER_RE.fullmatch(str(x.get("user", "")))] \
+        if isinstance(d, list) else []
+
+
+def pi_store(pis):
+    os.makedirs(PI_DIR, exist_ok=True)
+    write_json(os.path.join(PI_DIR, "pis.json"), pis[:20])
+
+
+def pi_remember(ip, **kw):
+    with _PI_LOCK:
+        pis = pi_saved()
+        me = next((x for x in pis if x["ip"] == ip), None)
+        if me is None:
+            me = {"ip": ip, "added": now()}
+            pis.append(me)
+        me.update(kw)
+        pi_store(pis)
+        return dict(me)
+
+
+def pi_scan():
+    """Look for Raspberry Pis on this computer's network (one /24): who answers, and whose network chip is a Pi's."""
+    me = pi_lan_ip()
+    if not pi_private(me):
+        return {"t": now(), "found": [], "me": me,
+                "error": "This computer doesn't seem to be on a home network, so there's nothing to look through."}
+    base = me.rsplit(".", 1)[0]
+    ips = ["%s.%d" % (base, i) for i in range(1, 255) if "%s.%d" % (base, i) != me]
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(64) as ex:
+        ban = dict(zip(ips, ex.map(pi_banner, ips)))                    # also fills the ARP table
+        named = ex.submit(lambda: socket.gethostbyname("raspberrypi.local"))
+        try:
+            named_ip = named.result(timeout=4)
+        except Exception:
+            named_ip = ""
+    macs = pi_neighbors()
+    saved = pi_saved()
+    for x in saved:                     # a known Pi that got a new address from the router
+        if x.get("mac") and x["mac"] not in (macs.get(x["ip"]), None):
+            moved = next((ip for ip, m in macs.items() if m == x["mac"] and ip.startswith(base + ".")), None)
+            if moved:
+                pi_remember(x["ip"], ip=moved)
+    known = {x["ip"] for x in pi_saved()}
+    found = []
+    for ip in ips:
+        mac, os_ = macs.get(ip, ""), pi_os_from_banner(ban.get(ip))
+        is_pi = pi_is_pi(mac) or ip == named_ip or os_ == "raspbian"
+        if is_pi or os_ or ip in known:
+            found.append({"ip": ip, "mac": mac, "pi": is_pi, "os": os_, "ssh": bool(ban.get(ip)),
+                          "kind": "pi" if is_pi else ("windows" if os_ == "windows" else "pc"),
+                          "easyserver": pi_open(ip, PI_PORT), "known": ip in known})
+    with ThreadPoolExecutor(16) as ex:      # its name on the network, when the router or the computer says it
+        names = {f["ip"]: ex.submit(pi_hostname, f["ip"]) for f in found}
+        for f in found:
+            try:
+                f["name"] = names[f["ip"]].result(timeout=3)
+            except Exception:
+                f["name"] = ""
+    return {"t": now(), "me": me, "found": found, "error": ""}
+
+
+def pi_hostname(ip):
+    try:
+        n = socket.gethostbyaddr(ip)[0].split(".")[0]
+    except (OSError, UnicodeError):
+        return ""
+    return n[:40] if re.fullmatch(r"[\w-]+", n) and n != ip.split(".")[0] else ""
+
+
+def pi_ssh_exe(name="ssh"):
+    if IS_WIN:
+        p = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "OpenSSH", name + ".exe")
+        if os.path.exists(p):
+            return p
+    return shutil.which(name)
+
+
+def pi_key():
+    """This dashboard's own SSH key, made once: (private key path, public key line)."""
+    k = os.path.join(PI_DIR, "id_ed25519")
+    if not os.path.exists(k):
+        kg = pi_ssh_exe("ssh-keygen")
+        if not kg:
+            raise RuntimeError("This computer has no SSH tools. On Windows: Settings → System → Optional features → OpenSSH Client.")
+        os.makedirs(PI_DIR, exist_ok=True)
+        subprocess.run([kg, "-q", "-t", "ed25519", "-N", "", "-C", "beammp-easyserver", "-f", k],
+                       check=True, capture_output=True, timeout=30, **_NOWIN)
+        if not IS_WIN:                  # (on Windows ssh-keygen itself locks the file to this account)
+            os.chmod(k, 0o600)
+    with open(k + ".pub") as f:
+        return k, f.read().strip()
+
+
+def pi_quote(x):
+    return "'" + str(x).replace("'", "'\"'\"'") + "'"
+
+
+def pi_ssh(pi, cmd, password=None, stdin_data=None, timeout=60, on_line=None):
+    """Run a command on the Pi. With password (the first login only) ssh gets it through SSH_ASKPASS; otherwise
+    this dashboard's key. Returns (exit code, output); 255 = ssh itself failed."""
+    exe = pi_ssh_exe()
+    if not exe:
+        raise RuntimeError("This computer has no SSH client. On Windows: Settings → System → Optional features → OpenSSH Client.")
+    key, _ = pi_key()
+    args = [exe, "-T", "-o", "StrictHostKeyChecking=accept-new", "-o", 'UserKnownHostsFile="%s"' % os.path.join(PI_DIR, "known_hosts"),
+            "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4", "-o", "LogLevel=ERROR"]
+    env, tmp = dict(os.environ), None
+    if password is not None:
+        tmp = tempfile.mkdtemp(prefix="es-ask-")
+        if IS_WIN:
+            ask = os.path.join(tmp, "askpass.cmd")
+            with open(ask, "w") as f:
+                f.write('@powershell.exe -NoProfile -NonInteractive -Command "[Console]::Out.Write($env:ES_SSH_PW)"\r\n')
+        else:
+            ask = os.path.join(tmp, "askpass.sh")
+            with open(ask, "w") as f:
+                f.write('#!/bin/sh\nprintf \'%s\\n\' "$ES_SSH_PW"\n')
+            os.chmod(ask, 0o700)
+        env.update(ES_SSH_PW=password, SSH_ASKPASS=ask, SSH_ASKPASS_REQUIRE="force", DISPLAY=env.get("DISPLAY") or ":0")
+        args += ["-o", "PubkeyAuthentication=no", "-o", "PreferredAuthentications=password,keyboard-interactive",
+                 "-o", "NumberOfPasswordPrompts=1"]
+    else:
+        args += ["-i", key, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes"]
+    args += ["%s@%s" % (pi["user"], pi["ip"]), cmd]
+    out = []
+    try:
+        proc = subprocess.Popen(args, env=env, stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **_NOWIN)
+        timer = threading.Timer(timeout, proc.kill)
+        timer.start()
+        try:
+            if stdin_data is not None:
+                def feed():
+                    try:
+                        if hasattr(stdin_data, "read"):         # a file: sent in pieces
+                            shutil.copyfileobj(stdin_data, proc.stdin, 1024 * 1024)
+                        else:
+                            proc.stdin.write(stdin_data if isinstance(stdin_data, bytes) else stdin_data.encode("utf-8"))
+                        proc.stdin.close()
+                    except (OSError, ValueError):
+                        pass
+                threading.Thread(target=feed, daemon=True, name="ssh-in").start()
+            for raw_line in proc.stdout:
+                line = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]|\r", "", raw_line.decode("utf-8", "replace")).rstrip("\n")
+                out.append(line)
+                if on_line:
+                    on_line(line)
+            code = proc.wait()
+        finally:
+            timer.cancel()
+    finally:
+        if tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
+    return code, "\n".join(out)
+
+
+def pi_ssh_error(out):
+    o = out.lower()
+    if "permission denied" in o:
+        return "It said no - check the user name and password (on a Raspberry Pi: the ones you set in Raspberry Pi Imager)."
+    if "connection refused" in o:
+        return "SSH is turned off on that computer, so it can't be set up from here - the steps under it say how to turn it on."
+    if "host key verification failed" in o or "remote host identification has changed" in o:
+        return "This isn't the computer set up here before (its identity changed). If you reinstalled it or put a new card in it, press Forget and set it up again."
+    if "timed out" in o or "no route" in o or "unreachable" in o:
+        return "Couldn't reach it - is it switched on and on the same network?"
+    return "Couldn't connect: " + (out.strip().splitlines() or ["unknown error"])[-1][:200]
+
+
+PI_PAIR_WIN = r"""$ErrorActionPreference = 'Stop'
+$k = '%s'
+$admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if ($admin) {
+    $f = Join-Path $env:ProgramData 'ssh\administrators_authorized_keys'
+    if (-not ((Test-Path $f) -and ((Get-Content $f) -contains $k))) { Add-Content -Path $f -Value $k -Encoding ascii }
+    icacls.exe $f /inheritance:r /grant '*S-1-5-32-544:F' /grant '*S-1-5-18:F' | Out-Null
+}
+'ES_BITS=' + $(if ([Environment]::Is64BitOperatingSystem) { 64 } else { 32 })
+'ES_HOST=' + $env:COMPUTERNAME
+'ES_ADMIN=' + [int]$admin
+"""
+
+
+def pi_pair(ip, user, password):
+    """Log in once with the password, leave this dashboard's key there, and learn what the computer is."""
+    _, pub = pi_key()
+    pi = {"ip": ip, "user": user}
+    win = pi_os_from_banner(pi_banner(ip)) == "windows"
+    if win:
+        cmd = pi_ps(PI_PAIR_WIN % pub.replace("'", ""))
+    else:
+        cmd = ("umask 077; mkdir -p ~/.ssh && touch ~/.ssh/authorized_keys && "
+               "(grep -qxF %s ~/.ssh/authorized_keys || echo %s >> ~/.ssh/authorized_keys) && "
+               "echo ES_BITS=$(getconf LONG_BIT) ES_HOST=$(hostname) ES_ARCH=$(uname -m) ES_UID=$(id -u); "
+               ". /etc/os-release 2>/dev/null; echo \"ES_OS=$ID ES_LIKE=$(echo $ID_LIKE | tr ' ' ',')\"; "
+               "echo ES_MODEL=$(tr -d '\\0' </proc/device-tree/model 2>/dev/null | tr ' ' '_'); "
+               "[ -e /usr/bin/midclt ] && echo ES_TRUENAS=1; [ -e /usr/sbin/omv-confdbadm ] && echo ES_OMV=1; "
+               "sudo -n true 2>/dev/null && echo ES_SUDO=1; true") % (pi_quote(pub), pi_quote(pub))
+    code, out = pi_ssh(pi, cmd, password=password, timeout=60)
+    if code == 255 or "ES_BITS=" not in out:
+        raise RuntimeError(pi_ssh_error(out))
+    code2, out2 = pi_ssh(pi, "echo ES_KEY_OK", timeout=30)
+    if "ES_KEY_OK" not in out2 and not win:
+        raise RuntimeError("Logged in, but the computer didn't accept this dashboard's key: " + pi_ssh_error(out2))
+
+    def val(k, pat=r"[\w.,-]{1,63}"):
+        m = re.search(r"\b%s=(%s)" % (k, pat), out)
+        return m.group(1) if m else ""
+    bits = val("ES_BITS", r"\d+")
+    info = {"user": user, "mac": pi_neighbors().get(ip, ""), "bits": int(bits) if bits else 0, "host": val("ES_HOST")}
+    if win:
+        admin = val("ES_ADMIN") == "1"
+        # Windows only lets an admin's key in through administrators_authorized_keys, so it may still say no to
+        # the key; then updates ask for the password again.
+        info.update(os="windows", os_like="", arch="", kind="windows", admin=admin, sudo="ES_KEY_OK" in out2, root=False,
+                    truenas=False, omv=False, model="")
+    else:
+        model = val("ES_MODEL", r"[\w.,-]{1,80}").replace("_", " ")
+        info.update(os=val("ES_OS"), os_like=val("ES_LIKE"), arch=val("ES_ARCH"), root=val("ES_UID") == "0",
+                    sudo="ES_SUDO=1" in out or val("ES_UID") == "0", truenas="ES_TRUENAS=1" in out, omv="ES_OMV=1" in out,
+                    model=model, kind="pi" if "Raspberry" in model or val("ES_OS") == "raspbian" else
+                    ("nas" if "ES_OMV=1" in out or "ES_TRUENAS=1" in out else "pc"))
+    return pi_remember(ip, **info)
+
+
+def pi_job(kind, pi, name="", sudo_pw=None):
+    """Install or update EasyServer on the computer (in the background). Linux: download the installer here, copy it over,
+    run it. Windows: it downloads EasyServer itself and runs install.ps1 without the setup window."""
+    job = {"kind": kind, "ip": pi["ip"], "state": "running", "t": now(), "lines": [], "password": "", "error": "", "web": ""}
+
+    def add(line):
+        m = re.match(r"\s*Password:\s+(\S+)", line)
+        if m:
+            job["password"] = m.group(1)[:64]
+            line = line[:m.start(1)] + "(shown above)"
+        job["lines"].append(line[:300])
+        del job["lines"][:-300]
+
+    def run():
+        try:
+            if pi.get("os") == "windows":
+                return run_windows()
+            add("Downloading the installer…")
+            req = urllib.request.Request(PI_INSTALLER, headers={"User-Agent": "BeamMP-EasyServer/%s (Raspberry Pi setup)" % EASY_VERSION})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                script = r.read(2 * 1024 * 1024)
+            if not script.startswith(b"#!") or b"BeamMP EasyServer" not in script:
+                raise RuntimeError("The installer that came from GitHub doesn't look right - try again later.")
+            add("Copying it to the computer at %s…" % pi["ip"])
+            code, out = pi_ssh(pi, "umask 077; cat > ~/.easyserver-install.sh && echo ES_COPIED", stdin_data=script, timeout=60)
+            if "ES_COPIED" not in out:
+                raise RuntimeError(pi_ssh_error(out))
+            args = ["--unattended", "--mod-page", "yes", "--laptop-mode", "no"]
+            if kind == "install" and name:
+                args += ["--name", name]
+            sudo = "" if pi.get("root") else ("sudo -n " if pi.get("sudo") else "sudo -S -p '' ")
+            add("Running it - this takes 5 to 15 minutes on a Raspberry Pi, less on a PC…")
+            code, out = pi_ssh(pi, "%sbash ~/.easyserver-install.sh %s; c=$?; rm -f ~/.easyserver-install.sh; exit $c"
+                               % (sudo, " ".join(pi_quote(a) for a in args)),
+                               stdin_data=None if (pi.get("sudo") or pi.get("root")) else (sudo_pw or "") + "\n",
+                               timeout=2400, on_line=add)
+            finish(code, out)
+        except Exception as e:
+            job.update(state="failed", error=str(e) if isinstance(e, RuntimeError) else short_err(e))
+        finally:
+            job["ended"] = now()
+
+    def finish(code, out):
+        if code == 255:
+            raise RuntimeError(pi_ssh_error(out))
+        if code != 0:
+            raise RuntimeError("The installer stopped with an error - the last lines above say why.")
+        ver = re.search(r"BeamMP EasyServer v([\d.]+)", out)
+        web = pi_web(pi["ip"])
+        pi_remember(pi["ip"], version=ver.group(1) if ver else "", updated=now(), web=web)
+        job.update(state="done", web=web)
+
+    def run_windows():
+        """Windows downloads EasyServer itself and runs its installer without the setup window. The first install logs
+        in with the password: only then can Windows lock away the keys EasyServer saves (it ties them to the login)."""
+        add("Windows PC at %s: downloading EasyServer there and running its installer…" % pi["ip"])
+        args = "-Unattended" + (" -Update" if kind == "update" else "")
+        if kind == "install" and name:
+            args += " -ServerName '%s'" % name.replace("'", "''")
+        code, out = pi_ssh(pi, pi_ps(PI_WIN_RUN % (ROLLING_ZIP % REPO, args)), password=sudo_pw,
+                           timeout=2400, on_line=add)
+        finish(code, out)
+
+    _PI["job"] = job
+    threading.Thread(target=run, daemon=True, name="pi-" + kind).start()
+    return job
+
+
+PI_WIN_RUN = r"""$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+$d = Join-Path $env:TEMP 'easyserver-setup'
+Remove-Item -Recurse -Force $d -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force $d | Out-Null
+Invoke-WebRequest -Uri '%s' -OutFile (Join-Path $d 'es.zip') -UseBasicParsing
+Expand-Archive -Path (Join-Path $d 'es.zip') -DestinationPath $d -Force
+$src = Get-ChildItem $d -Directory | Select-Object -First 1
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $src.FullName 'windows\install.ps1') %s
+$c = $LASTEXITCODE
+Remove-Item -Recurse -Force $d -ErrorAction SilentlyContinue
+exit $c
+"""
+
+
+def pi_web(ip):
+    """The Pi's dashboard address (it uses https once it has made its certificate)."""
+    ctx = ssl.create_default_context()
+    ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE
+    try:
+        with socket.create_connection((ip, PI_PORT), timeout=3) as raw_sock:
+            with ctx.wrap_socket(raw_sock):
+                return "https://%s:%d/" % (ip, PI_PORT)
+    except (OSError, ssl.SSLError):
+        return "http://%s:%d/" % (ip, PI_PORT)
+
+
+def pi_here():
+    """This computer's Wi-Fi name and country, to start the SD card form with (never its Wi-Fi password)."""
+    if not IS_WIN:
+        return {"wifi": "", "country": ""}
+    if "here" not in _PI or time.time() - _PI["here"][0] > 300:
+        wifi, country = "", ""
+        try:
+            out = subprocess.run(["netsh", "wlan", "show", "interfaces"], capture_output=True, timeout=10, **_NOWIN).stdout
+            m = re.search(rb"^\s*SSID\s*:\s*(.+?)\s*$", out, re.M)
+            wifi = m.group(1).decode("utf-8", "replace")[:32] if m else ""
+        except (OSError, subprocess.SubprocessError):
+            pass
+        try:
+            out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                                  "[Globalization.RegionInfo]::CurrentRegion.TwoLetterISORegionName"],
+                                 capture_output=True, text=True, timeout=20, **_NOWIN).stdout.strip().upper()
+            country = out if PI_COUNTRY_RE.fullmatch(out) else ""
+        except (OSError, subprocess.SubprocessError):
+            pass
+        _PI["here"] = (time.time(), wifi, country)
+    return {"wifi": _PI["here"][1], "country": _PI["here"][2]}
+
+
+def pi_status():
+    pis = pi_saved()
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(8) as ex:
+        up = list(ex.map(lambda x: pi_open(x["ip"], PI_PORT, 1.5), pis))
+    for x, u in zip(pis, up):
+        x["online"] = u
+        x["problem"] = pi_problem(x)
+    return pis
+
+
+# ---- paired computers talk through files --------------------------------------------------------------------
+# A paired computer (reached over SSH with this dashboard's key) gets files in its dashboard's data folder:
+# remote/in/c-<id>.json is a command (start, stop, restart, move-in) and remote/in/move-<id>.zip a server moved
+# to it. Its dashboard does them within 10 seconds and keeps remote/status.json up to date, which is read back.
+# On Linux the files are written as the dashboard's own user, so the game server can't put commands there.
+REMOTE_DIR = os.path.join(DATA_DIR, "remote")
+REMOTE_IN = os.path.join(REMOTE_DIR, "in")
+REMOTE_LINUX = "/opt/beammp-server/.easyserver/remote"
+REMOTE_CMD_RE = re.compile(r"c-[0-9a-f]{8,32}\.json")
+REMOTE_ZIP_RE = re.compile(r"move-[0-9a-f]{8,32}\.zip")
+REMOTE_STALE = 600                   # status.json is rewritten at least every 5 minutes
+
+PI_WIN_REMOTE = r"""$ErrorActionPreference = 'Stop'
+$t = Get-ScheduledTask -TaskName 'BeamMP Dashboard (EasyServer)'
+$py = ($t.Actions | Select-Object -First 1).Arguments.Trim().Trim('"')
+$r = Join-Path (Split-Path (Split-Path $py)) 'data\remote'
+"""
+PI_WIN_STATUS = "[Console]::Out.Write([IO.File]::ReadAllText((Join-Path $r 'status.json')))\n"
+PI_WIN_PUT = r"""$in = Join-Path $r 'in'
+New-Item -ItemType Directory -Force $in | Out-Null
+$tmp = Join-Path $in '.%(n)s'
+$f = [IO.File]::Create($tmp)
+try { [Console]::OpenStandardInput().CopyTo($f) } finally { $f.Close() }
+Move-Item -Force $tmp (Join-Path $in '%(n)s')
+'ES_PUT_OK'
+"""
+
+
+def pi_key_ok(pi):
+    """Can this dashboard log in to it with its key alone? (Windows only lets an admin's key in.)"""
+    return pi.get("os") != "windows" or bool(pi.get("sudo"))
+
+
+def pi_can_remote(pi):
+    """Can its status be read and commands be sent? It needs EasyServer, the key, and (Linux) sudo without a password."""
+    return bool(pi.get("version")) and pi_key_ok(pi) and (pi.get("os") == "windows" or pi.get("root") or pi.get("sudo"))
+
+
+def pi_remote(pi, op, name="", data=None, timeout=60):
+    """op "status": read its remote/status.json. op "put": data (bytes or a file) becomes remote/in/<name>."""
+    if op == "put" and not (REMOTE_CMD_RE.fullmatch(name) or REMOTE_ZIP_RE.fullmatch(name)):
+        raise ValueError("bad name")
+    if pi.get("os") == "windows":
+        ps = PI_WIN_REMOTE + (PI_WIN_STATUS if op == "status" else PI_WIN_PUT % {"n": name})
+        return pi_ssh(pi, pi_ps(ps), stdin_data=data, timeout=timeout)
+    as_dash = "runuser -u beammp-dash -- " if pi.get("root") else "sudo -n -u beammp-dash "
+    if op == "status":
+        cmd = as_dash + "cat %s/status.json" % REMOTE_LINUX
+    else:
+        cmd = as_dash + "sh -c %s sh %s %s" % (pi_quote('cd /; umask 077; mkdir -p "$1/in" && cat > "$1/in/.$2" && '
+                                                        'mv -f "$1/in/.$2" "$1/in/$2" && echo ES_PUT_OK'), REMOTE_LINUX, name)
+    return pi_ssh(pi, cmd, stdin_data=data if data is not None else b"", timeout=timeout)
+
+
+def pi_remote_json(out):
+    try:
+        d = json.loads(out[out.index("{"):])
+    except ValueError:
+        return None
+    return d if isinstance(d, dict) else None
+
+
+def pi_remote_send(pi, action, **kw):
+    """Send a command; returns its id (the answer shows up in its status.json under "done")."""
+    cid = uuid.uuid4().hex
+    code, out = pi_remote(pi, "put", "c-%s.json" % cid, json.dumps(dict(kw, id=cid, action=action)).encode(), timeout=40)
+    if "ES_PUT_OK" not in out:
+        raise RuntimeError(pi_ssh_error(out) if code == 255 else
+                           "That computer didn't take it: " + (out.strip().splitlines() or ["no answer"])[-1][:200])
+    return cid
+
+
+def pi_overview():
+    """Every paired computer with what its EasyServer says about itself (cached for 10 seconds)."""
+    c = _PI.get("overview")
+    if c and time.time() - c[0] < 10:
+        return c[1]
+    pis = pi_status()
+
+    def one(x):
+        if not x.get("online"):
+            return {"error": "off"}
+        if not x.get("version"):
+            return {"error": "none"}
+        if not pi_can_remote(x):
+            return {"error": "nokey"}
+        try:
+            code, out = pi_remote(x, "status", timeout=25)
+        except Exception as e:
+            return {"error": "ssh", "detail": short_err(e)}
+        if code == 255:
+            return {"error": "ssh", "detail": pi_ssh_error(out)}
+        d = pi_remote_json(out)
+        if d is None:
+            return {"error": "nokey" if "password is required" in out else "old"}
+        servers = [{"id": str(v.get("id"))[:12], "name": str(v.get("name"))[:80], "state": str(v.get("state"))[:20],
+                    "players": int(v.get("players") or 0), "max": int(v.get("max") or 0), "map": str(v.get("map") or "")[:60]}
+                   for v in (d.get("servers") or [])[:10] if isinstance(v, dict)]
+        return {"servers": servers, "version": str(d.get("version") or "")[:20],
+                "stale": now() - int(d.get("t") or 0) > REMOTE_STALE}
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(8) as ex:
+        res = list(ex.map(one, pis))
+    for x, r in zip(pis, res):
+        x["remote"] = r
+    _PI["overview"] = (time.time(), pis)
+    return pis
+
+
+def remote_snapshot():
+    """This computer's servers, for status.json and the top of the All computers list."""
+    with LOCK:
+        insts = list(INSTANCES.values())
+    prev = getattr(_TL, "inst", None)
+    out = []
+    try:
+        for inst in insts:
+            use_server(inst.id)
+            try:
+                st = inst.server.status()["state"]
+            except Exception:
+                st = "unknown"
+            o = read_json(os.path.join(inst.STATS_DIR, "online.json"), None)
+            fresh = isinstance(o, dict) and now() - int(o.get("t", 0) or 0) < 120
+            try:
+                mx, mp = APP.max_players(), current_map()
+            except Exception:
+                mx, mp = 0, ""
+            out.append({"id": inst.id, "name": inst.name, "state": st, "players": len(o.get("players") or []) if fresh else 0,
+                        "max": mx, "map": mp or ""})
+    finally:
+        _TL.inst = prev
+    return out
+
+
+def moved_note(inst):
+    """'' or where this server was moved to."""
+    m = inst.meta.get("moved_to")
+    if not isinstance(m, dict):
+        return ""
+    return "%s was moved to %s (%s)" % (inst.name, m.get("host") or m.get("ip"), m.get("ip"))
+
+
+class _Capture:
+    """Stands in for a web request when a server moved here is put in place (Handler._import_zip answers through it)."""
+    _restore_undo = None
+
+    def __init__(self):
+        self.result = (500, {"ok": False, "error": "nothing happened"})
+
+    def send(self, code, obj):
+        self.result = (code, obj)
+
+    def fail(self, code, msg):
+        self.result = (code, {"ok": False, "error": msg})
+
+
+def pi_move_job(pi, iid, stop_here):
+    """Move this server to a paired computer: pack everything up, send it, let that computer put it in place,
+    then stop it here."""
+    job = {"kind": "move", "ip": pi["ip"], "state": "running", "t": now(), "lines": [], "password": "", "error": "", "web": ""}
+
+    def add(line):
+        job["lines"].append(line[:400])
+
+    def run():
+        tmp = None
+        try:
+            use_server(iid)
+            add("Packing up this server: its settings, mods, bans, stats, championships and lap times…")
+            fd, tmp = tempfile.mkstemp(suffix=".zip", dir=DATA_DIR)
+            os.close(fd)
+            build_export(tmp, True, include_games=True)
+            size = os.path.getsize(tmp)
+            mid = uuid.uuid4().hex
+            add("Sending it to %s (%d MB)…" % (pi.get("host") or pi["ip"], max(1, size // 10 ** 6)))
+            with open(tmp, "rb") as f:
+                code, out = pi_remote(pi, "put", "move-%s.zip" % mid, f, timeout=max(900, size // 10 ** 6))
+            if "ES_PUT_OK" not in out:
+                raise RuntimeError(pi_ssh_error(out) if code == 255 else
+                                   "Couldn't put it on that computer: " + (out.strip().splitlines() or ["no answer"])[-1][:200])
+            cid = pi_remote_send(pi, "move-in", file="move-%s.zip" % mid, source=server_name())
+            add("That computer is putting it in place - it checks every mod for viruses first, so this can take a while…")
+            deadline, res = time.time() + 1800, None
+            while res is None and time.time() < deadline:
+                time.sleep(10)
+                try:
+                    _, out = pi_remote(pi, "status", timeout=30)
+                except Exception:
+                    continue
+                d = pi_remote_json(out) or {}
+                res = next((x for x in d.get("done") or [] if isinstance(x, dict) and x.get("id") == cid), None)
+            if res is None:
+                raise RuntimeError("That computer didn't finish within 30 minutes. Open its dashboard to see where it got to.")
+            if not res.get("ok"):
+                raise RuntimeError("That computer said: " + str(res.get("note") or "it didn't work")[:300])
+            add(str(res.get("note") or "Done.")[:400])
+            if stop_here:
+                use_server(iid)
+                r = I().server.action("stop")
+                set_server_meta(iid, moved_to={"ip": pi["ip"], "host": str(pi.get("host") or "")[:40], "t": now()})
+                add("Stopped the server on this computer. It stays off here, even after a restart, until you press Start "
+                    "on this computer yourself." if r.get("ok") else
+                    "Couldn't stop the server on this computer (%s) - stop it yourself." % (r.get("msg") or "failed"))
+            _PI.pop("overview", None)
+            job.update(state="done", web=pi.get("web") or pi_web(pi["ip"]))
+        except Exception as e:
+            job.update(state="failed", error=str(e) if isinstance(e, RuntimeError) else short_err(e))
+        finally:
+            job["ended"] = now()
+            if tmp:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+
+    _PI["job"] = job
+    threading.Thread(target=run, daemon=True, name="pi-move").start()
+    return job
+
+
+# ---- a copy of every backup somewhere else ---------------------------------------------------------------------
+BACKUP_COPY_DIR = "BeamMP EasyServer backups"
+
+
+def backup_tag():
+    """This computer's name in the copies' file names, so two computers can copy to the same place."""
+    return re.sub(r"[^A-Za-z0-9-]", "", socket.gethostname())[:20].strip("-") or "server"
+
+
+def backup_drives():
+    """Folders worth offering: USB drives and other disks."""
+    out = []
+    if IS_WIN:
+        try:
+            import ctypes
+            k32 = ctypes.windll.kernel32
+            mask, sysd = k32.GetLogicalDrives(), (os.environ.get("SystemDrive") or "C:").upper()
+            for i in range(26):
+                if mask >> i & 1:
+                    root = "%s:\\" % chr(65 + i)
+                    t = k32.GetDriveTypeW(root)
+                    if t == 2 or (t == 3 and root[:2] != sysd):
+                        out.append({"path": root, "usb": t == 2})
+        except Exception:
+            pass
+        return out
+    for base in ("/media", "/run/media", "/mnt"):
+        try:
+            for a in sorted(os.listdir(base)):
+                p = os.path.join(base, a)
+                cands = [p] if os.path.ismount(p) else [os.path.join(p, b) for b in sorted(os.listdir(p))] if os.path.isdir(p) else []
+                out += [{"path": c, "usb": base != "/mnt"} for c in cands if os.path.ismount(c)]
+        except OSError:
+            continue
+    return out[:12]
+
+
+def backup_folder_check(path):
+    """'' if backups can be copied into the folder, otherwise why not."""
+    if not path or not os.path.isabs(path):
+        return "Enter the whole path of the folder, like E:\\ or /media/usb"
+    if not os.path.isdir(path):
+        return "%s isn't there - is the USB drive plugged in?" % path
+    test = os.path.join(path, ".easyserver-test")
+    try:
+        with open(test, "w") as f:
+            f.write("ok")
+        os.remove(test)
+    except OSError:
+        return ("The dashboard isn't allowed to write in %s." % path) + ("" if IS_WIN else
+                " On Linux it runs as the user beammp-dash - give it a folder it can write to (sudo chown beammp-dash).")
+    return ""
+
+
+def backup_put_cmd(pi, name, prefix):
+    """A command that saves stdin as ~/easyserver-backups/<name> on the computer and keeps the newest 7 <prefix>*."""
+    if pi.get("os") == "windows":
+        return pi_ps(r"""$ErrorActionPreference = 'Stop'
+$d = Join-Path $HOME 'easyserver-backups'
+New-Item -ItemType Directory -Force $d | Out-Null
+$tmp = Join-Path $d '.%(n)s'
+$f = [IO.File]::Create($tmp)
+try { [Console]::OpenStandardInput().CopyTo($f) } finally { $f.Close() }
+Move-Item -Force $tmp (Join-Path $d '%(n)s')
+Get-ChildItem $d -Filter '%(p)s*.zip' | Sort-Object Name -Descending | Select-Object -Skip %(k)d | Remove-Item -Force
+'ES_PUT_OK'
+""" % {"n": name, "p": prefix, "k": BACKUP_KEEP})
+    return ("umask 077; mkdir -p ~/easyserver-backups && cd ~/easyserver-backups && cat > .%(n)s && mv -f .%(n)s %(n)s && "
+            "echo ES_PUT_OK && ls -1 -- %(p)s*.zip | sort -r | tail -n +%(k)d | xargs -r rm -f --"
+            % {"n": name, "p": prefix, "k": BACKUP_KEEP + 1})
+
+
+def copy_backups(files):
+    """Copy the backups just made to the place in Settings → Backups. Returns a note; raises RuntimeError."""
+    s = APP.settings
+    kind, tag = s.get("backup_copy"), backup_tag()
+    if kind == "folder":
+        root = s.get("backup_copy_path") or ""
+        why = backup_folder_check(root)
+        if why:
+            raise RuntimeError(why)
+        dest = os.path.join(root, BACKUP_COPY_DIR, tag)
+        os.makedirs(dest, exist_ok=True)
+        for n in files:
+            tmp = os.path.join(dest, n + ".tmp")
+            shutil.copyfile(os.path.join(BACKUP_DIR, n), tmp)
+            os.replace(tmp, os.path.join(dest, n))
+        for iid in {n.split("-")[0] for n in files}:
+            for old in sorted((x for x in os.listdir(dest) if x.startswith(iid + "-") and x.endswith(".zip")), reverse=True)[BACKUP_KEEP:]:
+                try:
+                    os.remove(os.path.join(dest, old))
+                except OSError:
+                    pass
+        return "Copied to %s" % dest
+    if kind == "computer":
+        pi = next((x for x in pi_saved() if x["ip"] == s.get("backup_copy_ip")), None)
+        if pi is None:
+            raise RuntimeError("The computer the copies go to isn't set up here any more - pick another one.")
+        if not pi_key_ok(pi):
+            raise RuntimeError("%s doesn't let this dashboard in with its key, so copies can't go there." % (pi.get("host") or pi["ip"]))
+        for n in files:
+            name = "%s-%s" % (tag, n)
+            with open(os.path.join(BACKUP_DIR, n), "rb") as f:
+                code, out = pi_ssh(pi, backup_put_cmd(pi, name, "%s-%s-" % (tag, n.split("-")[0])), stdin_data=f,
+                                   timeout=max(600, os.path.getsize(os.path.join(BACKUP_DIR, n)) // 10 ** 6))
+            if "ES_PUT_OK" not in out:
+                raise RuntimeError(pi_ssh_error(out) if code == 255 else
+                                   "Couldn't save it there: " + (out.strip().splitlines() or ["no answer"])[-1][:200])
+        return "Copied to the easyserver-backups folder on %s" % (pi.get("host") or pi["ip"])
+    return ""
+
+
+# ---- Google Drive: a copy of the backups in the owner's own Drive ----------------------------------------------
+# Signing in works like on a TV: the dashboard shows a short code, the owner opens google.com/device on their phone,
+# types it and allows access. Only the files EasyServer makes are visible to it (drive.file), nothing else in the Drive.
+# The built-in Google app: an OAuth client of type "TVs and Limited Input devices" (Google doesn't treat its secret
+# as secret - it's in every copy of the app). Empty = not set up yet; owners can use their own in Settings instead.
+GDRIVE_CLIENT_ID = ""
+GDRIVE_CLIENT_SECRET = ""
+GDRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"
+GDRIVE_API = "https://www.googleapis.com/drive/v3"
+GDRIVE_UPLOAD = "https://www.googleapis.com/upload/drive/v3/files"
+GDRIVE_FOLDER_NAME = "BeamMP EasyServer backups"
+GDRIVE_MAX = 8 * 1024 ** 3
+GDRIVE_MIN_WAIT = 5              # seconds between asking Google whether the owner allowed access
+_GD = {"flow": None, "access": "", "exp": 0}
+
+
+class GDriveError(RuntimeError):
+    pass
+
+
+def gdrive_app():
+    """(client id, client secret) - the owner's own Google app if they set one up, otherwise the built-in one."""
+    own = (APP.settings.get("gdrive_client_id") or "").strip()
+    if own:
+        return own, APP.secrets.get("GDRIVE_SECRET")
+    return GDRIVE_CLIENT_ID, GDRIVE_CLIENT_SECRET
+
+
+def gdrive_ready():
+    return bool(gdrive_app()[0])
+
+
+def gdrive_connected():
+    return APP.secrets.has("GDRIVE_REFRESH")
+
+
+def _google(url, fields=None, method=None, body=None, headers=None, timeout=30, want_headers=False):
+    h = {"User-Agent": "BeamMP-EasyServer/" + EASY_VERSION}
+    h.update(headers or {})
+    data = body
+    if fields is not None:
+        data = urllib.parse.urlencode(fields).encode()
+        h["Content-Type"] = "application/x-www-form-urlencoded"
+    req = urllib.request.Request(url, data=data, method=method or ("POST" if data is not None else "GET"), headers=h)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            raw = r.read()
+            out = json.loads(raw) if raw else {}
+            return (out, r.headers) if want_headers else out
+    except urllib.error.HTTPError as e:            # never put a token into a message: only Google's error text
+        try:
+            j = json.loads(e.read() or b"{}")
+        except ValueError:
+            j = {}
+        err = j.get("error")
+        msg = err.get("message") if isinstance(err, dict) else (j.get("error_description") or err)
+        ex = GDriveError("Google said %d: %s" % (e.code, str(msg or "error")[:200]))
+        ex.code, ex.kind = e.code, err if isinstance(err, str) else ""
+        raise ex
+    except urllib.error.URLError as e:
+        raise GDriveError("can't reach Google (%s)" % short_err(e.reason))
+
+
+def gdrive_token():
+    if _GD["access"] and now() < _GD["exp"] - 60:
+        return _GD["access"]
+    cid, sec = gdrive_app()
+    ref = APP.secrets.get("GDRIVE_REFRESH")
+    if not cid or not ref:
+        raise GDriveError("Google Drive isn't connected")
+    try:
+        r = _google("https://oauth2.googleapis.com/token", {"client_id": cid, "client_secret": sec, "refresh_token": ref,
+                                                            "grant_type": "refresh_token"})
+    except GDriveError as e:
+        if getattr(e, "kind", "") == "invalid_grant":
+            raise GDriveError("Google Drive was disconnected (access removed in the Google account, or it expired) - "
+                              "connect it again under Settings → Automatic backups.")
+        raise
+    _GD.update(access=r["access_token"], exp=now() + int(r.get("expires_in") or 3600))
+    return _GD["access"]
+
+
+def gdrive_api(method, path, params=None, body=None, base=GDRIVE_API, headers=None, **kw):
+    url = base + path + ("?" + urllib.parse.urlencode(params) if params else "")
+    h = dict(headers or {}, Authorization="Bearer " + gdrive_token())
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode()
+        h["Content-Type"] = "application/json; charset=UTF-8"
+    return _google(url, method=method, body=data, headers=h, **kw)
+
+
+def gdrive_about():
+    """Who is connected and how full the Drive is."""
+    a = gdrive_api("GET", "/about", {"fields": "user(displayName,emailAddress),storageQuota(limit,usage)"})
+    q = a.get("storageQuota") or {}
+    lim = int(q["limit"]) if q.get("limit") else None
+    used = int(q.get("usage") or 0)
+    return {"account": (a.get("user") or {}).get("emailAddress") or (a.get("user") or {}).get("displayName") or "",
+            "limit": lim, "used": used, "free": (lim - used) if lim else None}
+
+
+def gdrive_folder():
+    """The id of the backups folder, made the first time (or again if the owner deleted it)."""
+    fid = APP.settings.get("gdrive_folder") or ""
+    if fid:
+        try:
+            f = gdrive_api("GET", "/files/" + urllib.parse.quote(fid), {"fields": "id,trashed"})
+            if not f.get("trashed"):
+                return fid
+        except GDriveError as e:
+            if getattr(e, "code", 0) != 404:
+                raise
+    f = gdrive_api("POST", "/files", {"fields": "id"}, {"name": GDRIVE_FOLDER_NAME, "mimeType": "application/vnd.google-apps.folder"})
+    APP.settings.update({"gdrive_folder": f["id"]})
+    return f["id"]
+
+
+def gdrive_list(folder=None):
+    folder = folder or gdrive_folder()
+    r = gdrive_api("GET", "/files", {"q": "'%s' in parents and trashed = false" % folder.replace("'", ""),
+                                     "fields": "files(id,name,size,createdTime)", "orderBy": "createdTime desc", "pageSize": 300})
+    out = []
+    for f in r.get("files") or []:
+        m = re.fullmatch(r"([A-Za-z0-9-]{1,20})-([a-z0-9]{1,12})-(\d{8}-\d{4}(?:\d{2})?)(-mods)?\.zip", f.get("name") or "")
+        if m:
+            out.append({"id": f["id"], "name": f["name"], "size": int(f.get("size") or 0), "computer": m.group(1),
+                        "server": m.group(2), "when": m.group(3), "mods": bool(m.group(4)),
+                        "t": int(time.mktime(time.strptime(m.group(3)[:13], "%Y%m%d-%H%M")))})
+    return out
+
+
+def gdrive_upload(path, name, folder):
+    size = os.path.getsize(path)
+    if size > GDRIVE_MAX:
+        raise GDriveError("%s is too big for the Drive copy (%s)" % (name, fmt_bytes(size)))
+    _, hdr = gdrive_api("POST", "", {"uploadType": "resumable", "fields": "id"}, {"name": name, "parents": [folder]},
+                        base=GDRIVE_UPLOAD, headers={"X-Upload-Content-Type": "application/zip", "X-Upload-Content-Length": str(size)},
+                        want_headers=True)
+    loc = hdr.get("Location")
+    if not loc or not loc.startswith("https://www.googleapis.com/"):
+        raise GDriveError("Google didn't start the upload")
+    with open(path, "rb") as f:
+        _google(loc, method="PUT", body=f, headers={"Content-Type": "application/zip", "Content-Length": str(size)},
+                timeout=max(300, size // 200000))
+
+
+def gdrive_copy(files):
+    """Upload the backups just made and keep the newest BACKUP_KEEP of each server. Returns a note."""
+    folder, tag = gdrive_folder(), backup_tag()
+    for n in files:
+        gdrive_upload(os.path.join(BACKUP_DIR, n), "%s-%s" % (tag, n), folder)
+    have = gdrive_list(folder)
+    for iid in {n.split("-")[0] for n in files}:
+        mine = [f for f in have if f["computer"] == tag and f["server"] == iid]
+        for old in mine[BACKUP_KEEP:]:
+            try:
+                gdrive_api("DELETE", "/files/" + urllib.parse.quote(old["id"]))
+            except GDriveError:
+                pass
+    return "Copied to Google Drive (%s)" % GDRIVE_FOLDER_NAME
+
+
+def gdrive_download(fid, dest):
+    url = GDRIVE_API + "/files/" + urllib.parse.quote(fid) + "?alt=media"
+    req = urllib.request.Request(url, headers={"Authorization": "Bearer " + gdrive_token(), "User-Agent": "BeamMP-EasyServer/" + EASY_VERSION})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r, open(dest, "wb") as f:
+            got = 0
+            while True:
+                chunk = r.read(1024 * 1024)
+                if not chunk:
+                    break
+                got += len(chunk)
+                if got > GDRIVE_MAX:
+                    raise GDriveError("That file is too big")
+                f.write(chunk)
+    except urllib.error.HTTPError as e:
+        raise GDriveError("Google said %d while downloading" % e.code)
+    except urllib.error.URLError as e:
+        raise GDriveError("can't reach Google (%s)" % short_err(e.reason))
+
+
+def gdrive_estimate():
+    """How much of the Drive the copies will take: the newest backup of each server x the copies kept."""
+    with LOCK:
+        ids = list(INSTANCES)
+    per = 0
+    for iid in ids:
+        b = list_backups(iid)
+        if b:
+            per += b[0]["size"]
+    return {"per_night": per, "total": per * BACKUP_KEEP, "keep": BACKUP_KEEP, "known": per > 0}
+
+
+def gdrive_flow_start():
+    """Start the TV-style sign-in: returns the code to type at google.com/device; a thread waits for the answer."""
+    cid, sec = gdrive_app()
+    if not cid:
+        raise GDriveError("Google Drive isn't set up in this version yet")
+    r = _google("https://oauth2.googleapis.com/device/code", {"client_id": cid, "scope": GDRIVE_SCOPE})
+    flow = {"code": r["user_code"], "url": r.get("verification_url") or r.get("verification_uri") or "https://www.google.com/device",
+            "until": now() + int(r.get("expires_in") or 1800), "state": "waiting", "note": ""}
+    _GD["flow"] = flow
+    dev, wait = r["device_code"], max(GDRIVE_MIN_WAIT, int(r.get("interval", 5)))
+
+    def poll():
+        while _GD["flow"] is flow and now() < flow["until"]:
+            time.sleep(wait)
+            try:
+                t = _google("https://oauth2.googleapis.com/token", {"client_id": cid, "client_secret": sec, "device_code": dev,
+                                                                    "grant_type": "urn:ietf:params:oauth:grant-type:device_code"})
+            except GDriveError as e:
+                k = getattr(e, "kind", "")
+                if k == "authorization_pending":
+                    continue
+                if k == "slow_down":
+                    time.sleep(5)
+                    continue
+                flow.update(state="failed", note="You said no on the Google page." if k == "access_denied" else str(e))
+                return
+            if not t.get("refresh_token"):
+                flow.update(state="failed", note="Google didn't give lasting access - try again.")
+                return
+            try:
+                APP.secrets.set("GDRIVE_REFRESH", t["refresh_token"])
+            except Exception as e:
+                flow.update(state="failed", note="Couldn't save the access: %s" % short_err(e))
+                return
+            _GD.update(access=t["access_token"], exp=now() + int(t.get("expires_in") or 3600))
+            upd = {"gdrive_on": True}
+            try:
+                upd["gdrive_account"] = gdrive_about()["account"]
+                APP.settings.update(upd)
+                gdrive_folder()
+            except Exception as e:
+                APP.settings.update(upd)
+                sys.stderr.write("gdrive: %s\n" % short_err(e))
+            flow.update(state="done", note="Connected.")
+            APP.notifier.add("backup", "Google Drive connected", "Every nightly backup is now also copied to your Google Drive "
+                             "(folder %s)." % GDRIVE_FOLDER_NAME, "success", send=False)
+            if APP.settings.get("backup_on") and list_backups():
+                threading.Thread(target=APP.copy_backups, args=([b["file"] for b in newest_backups()], "gdrive"), daemon=True).start()
+            return
+        if flow["state"] == "waiting":
+            flow.update(state="failed", note="The code ran out - press Connect again.")
+
+    threading.Thread(target=poll, daemon=True, name="gdrive-signin").start()
+    return flow
+
+
+def newest_backups():
+    """The newest backup of each server."""
+    out = {}
+    for b in list_backups():
+        out.setdefault(b["server"], b)
+    return list(out.values())
+
+
+def gdrive_disconnect():
+    ref = APP.secrets.get("GDRIVE_REFRESH")
+    if ref:
+        try:
+            _google("https://oauth2.googleapis.com/revoke", {"token": ref})
+        except GDriveError:
+            pass
+    APP.secrets.set("GDRIVE_REFRESH", "")
+    _GD.update(access="", exp=0, flow=None)
+    APP.settings.update({"gdrive_on": False, "gdrive_account": ""})
+
+
+# ---- a ready-to-go SD card -------------------------------------------------------------------------------------
+# Like Raspberry Pi Imager: Raspberry Pi OS Lite (64-bit) plus cloud-init files on its boot partition, so the Pi
+# joins the Wi-Fi, makes the user and lets this dashboard's key in on its first start. Then the dashboard finds it
+# and installs EasyServer. Windows only (writing a card needs Windows' permission, asked on the screen).
+PI_OS_LIST = "https://downloads.raspberrypi.com/os_list_imagingutility_v4.json"
+PI_OS_NAME = "Raspberry Pi OS Lite (64-bit)"
+PI_CARD_MIN = 4 * 1000 ** 3
+PI_CARD_MAX = 520 * 1000 ** 3        # bigger is a USB hard disk, not a card
+PI_WIFI_RE = re.compile(r"[^\x00-\x1f]{1,32}")
+PI_COUNTRY_RE = re.compile(r"[A-Z]{2}")
+_B64CRYPT = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+
+
+def sha512_crypt(password, salt=None, rounds=5000):
+    """The "$6$" password hash Linux keeps in /etc/shadow (Python 3.13 has no crypt module any more)."""
+    if salt is None:
+        salt = "".join(secrets.choice(_B64CRYPT) for _ in range(16))
+    pw, sl = password.encode("utf-8"), salt[:16].encode("ascii")
+    b = hashlib.sha512(pw + sl + pw).digest()
+    a = hashlib.sha512(pw + sl)
+    n = len(pw)
+    while n > 64:
+        a.update(b)
+        n -= 64
+    a.update(b[:n])
+    n = len(pw)
+    while n:
+        a.update(b if n & 1 else pw)
+        n >>= 1
+    a = a.digest()
+    dp = hashlib.sha512(pw * len(pw)).digest()
+    p_ = (dp * (len(pw) // 64 + 1))[:len(pw)]
+    ds = hashlib.sha512(sl * (16 + a[0])).digest()
+    s_ = (ds * (len(sl) // 64 + 1))[:len(sl)]
+    c = a
+    for i in range(rounds):
+        h = hashlib.sha512()
+        h.update(p_ if i & 1 else c)
+        if i % 3:
+            h.update(s_)
+        if i % 7:
+            h.update(p_)
+        h.update(c if i & 1 else p_)
+        c = h.digest()
+    order = [(0, 21, 42), (22, 43, 1), (44, 2, 23), (3, 24, 45), (25, 46, 4), (47, 5, 26), (6, 27, 48), (28, 49, 7),
+             (50, 8, 29), (9, 30, 51), (31, 52, 10), (53, 11, 32), (12, 33, 54), (34, 55, 13), (56, 14, 35),
+             (15, 36, 57), (37, 58, 16), (59, 17, 38), (18, 39, 60), (40, 61, 19), (62, 20, 41)]
+    out = []
+    for x, y, z in order:
+        v = (c[x] << 16) | (c[y] << 8) | c[z]
+        out += [_B64CRYPT[(v >> (6 * k)) & 63] for k in range(4)]
+    v = c[63]
+    out += [_B64CRYPT[(v >> (6 * k)) & 63] for k in range(2)]
+    head = "$6$" if rounds == 5000 else "$6$rounds=%d$" % rounds
+    return head + sl.decode() + "$" + "".join(out)
+
+
+def pi_psk(ssid, password):
+    """The Wi-Fi key worked out from the Wi-Fi password (what WPA2 really uses): the card gets this, not the password."""
+    return hashlib.pbkdf2_hmac("sha1", password.encode("utf-8"), ssid.encode("utf-8"), 4096, 32).hex()
+
+
+def pi_yaml(x):
+    return json.dumps(str(x), ensure_ascii=False)       # a JSON string is a valid double-quoted YAML string
+
+
+def pi_card_files(host, user, pw_hash, pub, ssid="", psk="", country=""):
+    """The boot partition files that set the Pi up on its first start (cloud-init, the way Raspberry Pi Imager does)."""
+    iid = "beammp-easyserver-%d" % int(time.time() * 1000)
+    ud = ["#cloud-config", "hostname: " + pi_yaml(host), "manage_etc_hosts: true", "",
+          "user:", "  name: " + pi_yaml(user), "  shell: /bin/bash", "  lock_passwd: false", "  passwd: " + pi_yaml(pw_hash),
+          "  ssh_authorized_keys:", "    - " + pi_yaml(pub), "  sudo: ALL=(ALL) NOPASSWD:ALL", "",
+          "ssh_pwauth: true", "", "runcmd:", "  - [ systemctl, enable, --now, ssh ]", ""]
+    files = {"user-data": "\n".join(ud), "meta-data": "instance-id: %s\n" % iid}
+    if ssid:
+        nc = ["network:", "  version: 2", "  ethernets:", "    eth0:", "      dhcp4: true", "      dhcp6: true",
+              "      optional: true", "  wifis:", "    wlan0:", "      dhcp4: true"]
+        if country:
+            nc.append("      regulatory-domain: " + pi_yaml(country))
+        nc += ["      access-points:", "        %s:" % pi_yaml(ssid)]
+        nc += ["          password: " + pi_yaml(psk)] if psk else ["          auth:", "            key-management: none"]
+        nc += ["      optional: true", ""]
+        files["network-config"] = "\n".join(nc)
+    return files, " ds=nocloud;i=" + iid
+
+
+def pi_card_image():
+    """Where the newest Raspberry Pi OS Lite (64-bit) is, from the list Raspberry Pi Imager uses."""
+    req = urllib.request.Request(PI_OS_LIST, headers={"User-Agent": "BeamMP-EasyServer/%s" % EASY_VERSION})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        data = json.loads(r.read(8 * 1024 * 1024))
+
+    def walk(items):
+        for it in items or []:
+            if isinstance(it, dict):
+                if it.get("name") == PI_OS_NAME and it.get("url"):
+                    return it
+                hit = walk(it.get("subitems"))
+                if hit:
+                    return hit
+        return None
+    it = walk(data.get("os_list"))
+    if not it:
+        raise RuntimeError("Couldn't find Raspberry Pi OS Lite (64-bit) in Raspberry Pi's list - try again later.")
+    u = urllib.parse.urlsplit(it["url"])
+    if u.scheme != "https" or u.hostname != "downloads.raspberrypi.com" or not u.path.endswith(".img.xz"):
+        raise RuntimeError("Raspberry Pi's list points somewhere unexpected - not downloading it.")
+    if it.get("init_format") not in ("cloudinit", "cloudinit-rpi"):
+        raise RuntimeError("This Raspberry Pi OS version is set up a way this dashboard doesn't know yet - use Raspberry Pi Imager.")
+    return {"url": it["url"], "sha256": str(it.get("extract_sha256", "")).lower(), "size": int(it.get("extract_size") or 0),
+            "download": int(it.get("image_download_size") or 0), "date": str(it.get("release_date", ""))}
+
+
+def pi_disks():
+    """Removable cards and sticks in this computer (never the one Windows or the server is on)."""
+    if not IS_WIN:
+        return []
+    ps = ("Get-CimInstance Win32_DiskDrive | ForEach-Object { $d = $_; "
+          "$l = @(Get-CimAssociatedInstance -InputObject $d -ResultClassName Win32_DiskPartition | "
+          "ForEach-Object { Get-CimAssociatedInstance -InputObject $_ -ResultClassName Win32_LogicalDisk } | ForEach-Object { $_.DeviceID }); "
+          "[pscustomobject]@{n=[int]$d.Index; model=[string]$d.Model; size=[int64]$d.Size; media=[string]$d.MediaType; "
+          "bus=[string]$d.InterfaceType; letters=$l} } | ConvertTo-Json -Compress -Depth 3")
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True, text=True,
+                           timeout=40, **_NOWIN)
+        rows = json.loads(r.stdout or "[]")
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return []
+    return pi_disk_filter(rows if isinstance(rows, list) else [rows])
+
+
+def pi_disk_filter(rows):
+    keep = (os.environ.get("SystemDrive", "C:").upper(), os.path.splitdrive(os.path.abspath(DATA_DIR))[0].upper())
+    out = []
+    for d in rows:
+        if not isinstance(d, dict):
+            continue
+        letters = [str(x).upper() for x in (d.get("letters") or []) if x]
+        removable = "removable" in str(d.get("media", "")).lower() or str(d.get("bus", "")).upper() == "USB"
+        size = int(d.get("size") or 0)
+        if removable and PI_CARD_MIN <= size <= PI_CARD_MAX and not set(letters) & set(keep):
+            out.append({"n": int(d.get("n", -1)), "model": str(d.get("model", ""))[:60], "size": size, "letters": letters})
+    return [d for d in out if d["n"] >= 0]
+
+
+def pi_card_job(o):
+    """Download Raspberry Pi OS, check it, have Windows write it to the card (with permission), then wait for the Pi."""
+    job = {"kind": "card", "ip": "", "state": "running", "t": now(), "lines": [], "password": "", "error": "", "web": "",
+           "progress": 0, "host": o["host"]}
+
+    def add(line):
+        job["lines"].append(line[:300])
+        del job["lines"][:-300]
+
+    def run():
+        tmp = None
+        try:
+            img = pi_card_image()
+            add("Raspberry Pi OS Lite (64-bit) from %s" % img["date"])
+            path = pi_card_download(img, job, add)
+            add("Checking the download…")
+            pi_card_check(path, img, job)
+            tmp = tempfile.mkdtemp(prefix="card-", dir=PI_DIR)
+            files, cmdline = pi_card_files(o["host"], o["user"], o["pw_hash"], pi_key()[1], o["ssid"], o["psk"], o["country"])
+            spec = {"disk": o["disk"]["n"], "size": o["disk"]["size"], "image": path, "extract_size": img["size"],
+                    "sha256": img["sha256"], "files": files, "cmdline": cmdline, "status": os.path.join(tmp, "status.json")}
+            write_json(os.path.join(tmp, "card.json"), spec)
+            helper = os.path.join(tmp, "cardwriter.py")
+            with open(helper, "w", encoding="utf-8") as f:
+                f.write(PI_CARD_HELPER)
+            add("Windows asks for permission to write the card - press Yes on this computer's screen.")
+            job["progress"] = 0
+            pi_card_elevate(helper, os.path.join(tmp, "card.json"), spec["status"], job, add)
+            add("The card is ready. Take it out, put it in the Raspberry Pi and plug in the power.")
+            add("It shows up here by itself in about 3 to 5 minutes, then EasyServer gets installed.")
+            job.update(state="waiting", progress=0)
+            pi_card_wait(o, job, add)
+        except Exception as e:
+            job.update(state="failed", error=str(e) if isinstance(e, RuntimeError) else short_err(e))
+        finally:
+            if tmp:
+                shutil.rmtree(tmp, ignore_errors=True)       # it held the Wi-Fi key
+            job["ended"] = now()
+
+    _PI["job"] = job
+    threading.Thread(target=run, daemon=True, name="pi-card").start()
+    return job
+
+
+def pi_card_download(img, job, add):
+    d = os.path.join(PI_DIR, "images")
+    os.makedirs(d, exist_ok=True)
+    name = os.path.basename(urllib.parse.urlsplit(img["url"]).path)
+    path = os.path.join(d, name)
+    for old in os.listdir(d):                   # keep only the newest one (about 500 MB each)
+        if old != name:
+            try:
+                os.remove(os.path.join(d, old))
+            except OSError:
+                pass
+    if os.path.isfile(path) and (not img["download"] or os.path.getsize(path) == img["download"]):
+        add("Already downloaded")
+        return path
+    add("Downloading it (about %d MB)…" % ((img["download"] or 500 * 1024 * 1024) // (1024 * 1024)))
+    req = urllib.request.Request(img["url"], headers={"User-Agent": "BeamMP-EasyServer/%s" % EASY_VERSION})
+    part = path + ".part"
+    done, total = 0, img["download"] or 1
+    with urllib.request.urlopen(req, timeout=60) as r, open(part, "wb") as f:
+        while True:
+            chunk = r.read(1 << 20)
+            if not chunk:
+                break
+            f.write(chunk)
+            done += len(chunk)
+            job["progress"] = min(99, done * 100 // total)
+    if img["download"] and done != img["download"]:
+        os.remove(part)
+        raise RuntimeError("The download stopped half way - try again.")
+    os.replace(part, path)
+    return path
+
+
+def pi_card_check(path, img, job):
+    """Unpack it once without writing anything, to be sure it's whole before the card is erased."""
+    import lzma
+    h, done, total = hashlib.sha256(), 0, img["size"] or 1
+    dec = lzma.LZMADecompressor()
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(1 << 20)
+            if not chunk:
+                break
+            while chunk:
+                out = dec.decompress(chunk)
+                h.update(out)
+                done += len(out)
+                chunk = dec.unused_data if dec.eof else b""
+                if dec.eof:
+                    dec = lzma.LZMADecompressor()
+            job["progress"] = min(99, done * 100 // total)
+    if img["sha256"] and h.hexdigest() != img["sha256"]:
+        os.remove(path)
+        raise RuntimeError("The download was damaged (it doesn't match Raspberry Pi's checksum) and was deleted - try again.")
+
+
+def pi_card_elevate(helper, spec, status, job, add):
+    """Run the card writer with Windows' permission (the UAC question on this computer's screen) and follow it."""
+    py = sys.executable
+    if py.lower().endswith("python.exe") and os.path.exists(py[:-10] + "pythonw.exe"):
+        py = py[:-10] + "pythonw.exe"
+    q = lambda x: x.replace("'", "''")
+    ps = ("Start-Process -FilePath '%s' -ArgumentList @('\"%s\"', '\"%s\"') -Verb RunAs -Wait -WindowStyle Hidden"
+          % (q(py), q(helper), q(spec)))
+    proc = subprocess.Popen(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, **_NOWIN)
+    seen = ""
+    while proc.poll() is None:
+        time.sleep(1)
+        st = read_json(status, {})
+        if st.get("step") and st["step"] != seen:
+            seen = st["step"]
+            add({"erase": "Erasing the card…", "write": "Writing Raspberry Pi OS to the card - a few minutes…",
+                 "setup": "Adding your Wi-Fi, user and this dashboard's key…"}.get(seen, seen))
+        if st.get("progress") is not None:
+            job["progress"] = st["progress"]
+    out = proc.stdout.read().decode("utf-8", "replace") if proc.stdout else ""
+    st = read_json(status, {})
+    if st.get("step") == "done":
+        return
+    if st.get("error"):
+        raise RuntimeError(st["error"])
+    if proc.returncode or "cancel" in out.lower():
+        raise RuntimeError("Windows didn't get permission (No was pressed), so nothing was written. Press the button again and choose Yes.")
+    raise RuntimeError("Writing the card stopped without saying why - nothing may have been written. Try again.")
+
+
+def pi_card_wait(o, job, add):
+    """Wait for the new Pi to turn up (its name on the network, or a Pi that lets this dashboard's key in), then
+    set it up with the key - no password needed."""
+    host, user, end = o["host"], o["user"], time.time() + 40 * 60
+    last_scan = 0
+    while time.time() < end and _PI["job"] is job:
+        cands = []
+        try:
+            cands.append(socket.gethostbyname(host + ".local"))
+        except OSError:
+            pass
+        if time.time() - last_scan > 60:
+            last_scan = time.time()
+            try:
+                _PI["scan"] = pi_scan()
+                cands += [f["ip"] for f in _PI["scan"]["found"] if f["pi"] and f["ssh"] and not f["known"]]
+            except Exception:
+                pass
+        for ip in dict.fromkeys(cands):
+            if not pi_private(ip):
+                continue
+            try:
+                code, out = pi_ssh({"ip": ip, "user": user}, "echo ES_KEY_OK", timeout=20)
+            except Exception:
+                continue
+            if "ES_KEY_OK" in out:
+                add("Found it at %s - setting it up." % ip)
+                pi = pi_pair(ip, user, None)
+                job.update(state="done", ip=ip)
+                if pi_problem(pi):
+                    raise RuntimeError(pi_problem(pi))
+                if _PI["job"] is job:
+                    pi_job("install", pi, name=o["name"])
+                return
+        time.sleep(10)
+    if _PI["job"] is job:
+        raise RuntimeError("The Raspberry Pi didn't show up within 40 minutes. Is it plugged in, and is the Wi-Fi name and "
+                           "password right? It might be on the network already: press Look again.")
+
+
+PI_CARD_HELPER = r"""# BeamMP EasyServer: writes Raspberry Pi OS to an SD card. Started by the dashboard with Windows' permission.
+import hashlib, json, lzma, os, subprocess, sys, time
+
+NOWIN = 0x08000000
+BLOCK = 4 << 20
+
+
+def status(path, **k):
+    with open(path + ".tmp", "w") as f:
+        json.dump(k, f)
+    os.replace(path + ".tmp", path)
+
+
+def ps(cmd):
+    return subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd], capture_output=True, text=True,
+                          timeout=180, creationflags=NOWIN)
+
+
+def blocks(image):
+    dec = lzma.LZMADecompressor()
+    buf = bytearray()
+    with open(image, "rb") as f:
+        while True:
+            chunk = f.read(1 << 20)
+            if not chunk:
+                break
+            while chunk:
+                buf += dec.decompress(chunk)
+                chunk = dec.unused_data if dec.eof else b""
+                if dec.eof:
+                    dec = lzma.LZMADecompressor()
+            while len(buf) >= BLOCK:
+                yield bytes(buf[:BLOCK])
+                del buf[:BLOCK]
+    if buf:
+        yield bytes(buf) + b"\0" * (-len(buf) % 512)
+
+
+def write_image(image, device, total, sha, progress=lambda p: None):
+    # The first block (with the partition table) goes on last, so Windows doesn't find the new partitions and
+    # get in the way while the rest is written - Raspberry Pi Imager does the same.
+    h, done, first = hashlib.sha256(), 0, None
+    with open(device, "r+b", buffering=0) as dev:
+        for b in blocks(image):
+            h.update(b if done + len(b) <= total else b[:max(0, total - done)])
+            if first is None:
+                first = b
+                dev.seek(len(b))
+            else:
+                dev.write(b)
+            done += len(b)
+            progress(min(99, done * 100 // max(total, 1)))
+        dev.seek(0)
+        dev.write(first)
+        try:
+            os.fsync(dev.fileno())
+        except OSError:
+            pass
+    if sha and h.hexdigest() != sha:
+        raise RuntimeError("The card didn't take the data correctly - it may be worn out. Try again or use another card.")
+
+
+def main(spec_path):
+    spec = json.load(open(spec_path, encoding="utf-8"))
+    st = spec["status"]
+    try:
+        n = int(spec["disk"])
+        r = ps("$d = Get-Disk -Number %d; @{bus=[string]$d.BusType; boot=[bool]$d.IsBoot; system=[bool]$d.IsSystem; size=[int64]$d.Size} | ConvertTo-Json -Compress" % n)
+        d = json.loads(r.stdout or "{}")
+        if not d or d.get("boot") or d.get("system") or d.get("bus") not in ("SD", "USB", "MMC") or abs(int(d.get("size", 0)) - int(spec["size"])) > (1 << 20):
+            raise RuntimeError("That card was taken out or swapped, or isn't a removable card - nothing was written.")
+        if int(spec["size"]) < int(spec["extract_size"]):
+            raise RuntimeError("The card is too small for Raspberry Pi OS - use one with 8 GB or more.")
+        status(st, step="erase")
+        dp = os.path.join(os.path.dirname(spec_path), "erase.txt")
+        with open(dp, "w") as f:
+            f.write("select disk %d\nclean\n" % n)
+        r = subprocess.run(["diskpart", "/s", dp], capture_output=True, text=True, timeout=180, creationflags=NOWIN)
+        if r.returncode:
+            raise RuntimeError("Windows couldn't erase the card: " + ((r.stdout or "").strip().splitlines() or ["?"])[-1][:200])
+        time.sleep(2)
+        status(st, step="write", progress=0)
+        write_image(spec["image"], r"\\.\PhysicalDrive%d" % n, int(spec["extract_size"]), spec["sha256"],
+                    lambda p: status(st, step="write", progress=p))
+        status(st, step="setup", progress=100)
+        ps("Update-Disk -Number %d" % n)
+        letter = ""
+        for _ in range(30):
+            r = ps("$p = Get-Partition -DiskNumber %d -PartitionNumber 1 -ErrorAction Stop; if (-not $p.DriveLetter) { $p | Add-PartitionAccessPath -AssignDriveLetter -ErrorAction SilentlyContinue; $p = Get-Partition -DiskNumber %d -PartitionNumber 1 }; [string]$p.DriveLetter" % (n, n))
+            letter = (r.stdout or "").strip()[:1]
+            if letter.isalpha() and os.path.exists(letter + ":\\cmdline.txt"):
+                break
+            letter = ""
+            time.sleep(2)
+        if not letter:
+            raise RuntimeError("Raspberry Pi OS is on the card, but Windows didn't open its boot part to add your settings. "
+                               "Take the card out, put it back in and press the button again.")
+        root = letter + ":\\"
+        for name, text in spec["files"].items():
+            with open(root + name, "w", encoding="utf-8", newline="\n") as f:
+                f.write(text)
+        with open(root + "cmdline.txt", encoding="utf-8") as f:
+            line = f.read().strip()
+        if "ds=nocloud" not in line:
+            with open(root + "cmdline.txt", "w", encoding="utf-8", newline="\n") as f:
+                f.write(line + spec["cmdline"])
+        status(st, step="done", progress=100)
+    except Exception as e:
+        status(st, step="failed", error=str(e)[:300] if isinstance(e, RuntimeError) else "Writing the card failed: %s" % e)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1])
+"""
+
+
+# ----------------------------------------------------------------------------- games
+# The plugin runs races, cops and robbers, speed traps, badges and seasons in the game. Here: which
+# are on and their rules (games.txt), the results and leaderboards, the live map, and a weekly recap.
+GAME_SWITCHES = ("race", "cnr", "traps", "badges", "seasons", "champ", "drift")
+CHAMP_POINTS = {"f1": (25, 18, 15, 12, 10, 8, 6, 4, 2, 1), "simple": (10, 8, 6, 5, 4, 3, 2, 1)}
+CNR_MINUTES = (3, 5, 10, 15, 20, 30)
+CNR_CATCH = (6, 8, 10, 15, 20)
+CNR_HOLD = (2, 3, 5)
+GAME_COUNTS = ("laps", "races", "wins", "busts", "escapes", "cnr")
+BADGES = [
+    ("first_lap", "First lap", "Set a lap time"), ("laps_25", "Lap regular", "Drive 25 timed laps"),
+    ("record", "Record breaker", "Set a track record"), ("race_win", "Race winner", "Win a race against other players"),
+    ("race_5", "Champion", "Win 5 races"), ("sheriff", "Sheriff", "Bust 5 robbers"),
+    ("getaway", "Getaway driver", "Stay free as a robber until the time runs out"), ("speed_demon", "Speed demon", "Set a speed trap record"),
+    ("flat_out", "Flat out", "Drive 200 km/h"), ("km_100", "100 km club", "Drive 100 km"), ("km_1000", "Road tripper", "Drive 1000 km"),
+    ("night_owl", "Night owl", "Drive between 2 and 5 in the morning"), ("season_champ", "Season champion", "Win a season leaderboard"),
+]
+TRAP_RE = re.compile(r"^([\w\-]+)\t([^\t]+)\t([^\t]*)\t(-?[\d.]+),(-?[\d.]+),(-?[\d.]+)$")
+LIVEMAP_ASK = 20            # the plugin keeps writing positions this long after the last look
+
+
+def read_games_cfg():
+    d = {"race": True, "race_who": "everyone", "cnr": True, "cnr_who": "everyone", "cnr_minutes": 10, "cnr_catch": 10,
+         "cnr_hold": 3, "cnr_busted": "out", "traps": True, "badges": True, "seasons": False,
+         "champ": False, "champ_name": "", "champ_points": "f1", "champ_started": 0, "drift": False}
+    for line in shared_read(laps_file("games.txt"), 4096).splitlines():
+        k, _, v = line.partition("=")
+        v = v.strip()
+        if k in GAME_SWITCHES:
+            d[k] = v == "on"
+        elif k in ("race_who", "cnr_who"):
+            d[k] = "admins" if v == "admins" else "everyone"
+        elif k == "cnr_busted":
+            d[k] = "cop" if v == "cop" else "out"
+        elif k in ("cnr_minutes", "cnr_catch", "cnr_hold", "champ_started") and v.isdigit():
+            d[k] = int(v)
+        elif k == "champ_name":
+            d[k] = v[:60]
+        elif k == "champ_points":
+            d[k] = "simple" if v == "simple" else "f1"
+    return d
+
+
+def write_games_cfg(d):
+    lines = ["%s=%s" % (k, "on" if d[k] else "off") for k in GAME_SWITCHES]
+    lines += ["race_who=%s" % d["race_who"], "cnr_who=%s" % d["cnr_who"], "cnr_busted=%s" % d["cnr_busted"],
+              "cnr_minutes=%d" % d["cnr_minutes"], "cnr_catch=%d" % d["cnr_catch"], "cnr_hold=%d" % d["cnr_hold"],
+              "champ_name=%s" % re.sub(r"[\x00-\x1f]", "", d["champ_name"])[:60], "champ_points=%s" % d["champ_points"],
+              "champ_started=%d" % d["champ_started"]]
+    shared_write(laps_file("games.txt"), "# Managed by the dashboard (Games page)\n" + "\n".join(lines) + "\n")
+
+
+def read_champ():
+    """The championship standings the plugin keeps (champ.tsv), best first, and how many races counted."""
+    rows, rounds = [], 0
+    for line in shared_read(laps_file("champ.tsv"), 512 * 1024).splitlines():
+        p = line.split("\t")
+        if len(p) == 2 and p[0] == "#rounds" and p[1].isdigit():
+            rounds = int(p[1])
+        elif len(p) == 5 and p[0] and not p[0].startswith("#") and all(x.isdigit() for x in p[1:]):
+            rows.append({"name": p[0][:64], "points": int(p[1]), "races": int(p[2]), "wins": int(p[3]), "podiums": int(p[4])})
+    rows.sort(key=lambda r: (-r["points"], -r["wins"], r["name"].lower()))
+    return rows, rounds
+
+
+def read_champ_history():
+    """Finished championships, newest first: name <TAB> winner <TAB> points <TAB> races <TAB> started <TAB> ended."""
+    out = []
+    for line in shared_read(laps_file("champs.tsv"), 256 * 1024).splitlines():
+        p = line.split("\t")
+        if len(p) == 6 and all(x.isdigit() for x in p[2:]):
+            out.append({"name": p[0][:60], "winner": p[1][:64], "points": int(p[2]), "races": int(p[3]), "started": int(p[4]), "ended": int(p[5])})
+    return out[::-1][:20]
+
+
+def end_champ(cfg):
+    """Keep the finished championship's winner (if it had a race) and empty the standings."""
+    rows, rounds = read_champ()
+    if rows and rounds:
+        clean = lambda x: re.sub(r"[\t\r\n]", " ", str(x))
+        old = shared_read(laps_file("champs.tsv"), 256 * 1024)
+        shared_write(laps_file("champs.tsv"), old + "%s\t%s\t%d\t%d\t%d\t%d\n" % (
+            clean(cfg["champ_name"] or "Championship"), clean(rows[0]["name"]), rows[0]["points"], rounds, cfg["champ_started"], now()))
+    shared_write(laps_file("champ.tsv"), "")
+    return rows[0]["name"] if rows and rounds else None
+
+
+def read_drift():
+    """Best drift per player per map (drift.tsv, kept by the plugin): [{"raw_map", "name", "score", "car", "t"}]"""
+    out = []
+    for line in shared_read(laps_file("drift.tsv"), 2 * 1024 * 1024).splitlines():
+        p = line.split("\t")
+        if len(p) == 5 and p[1] and p[2].isdigit() and p[4].isdigit():
+            out.append({"raw_map": p[0], "name": p[1][:64], "score": int(p[2]), "car": p[3][:40], "t": int(p[4])})
+    return out
+
+
+def write_drift(rows):
+    clean = lambda x: re.sub(r"[\t\r\n]", " ", str(x))
+    shared_write(laps_file("drift.tsv"), "".join("%s\t%s\t%d\t%s\t%d\n" % (clean(r["raw_map"]), clean(r["name"]), r["score"], clean(r["car"]), r["t"])
+                                                for r in rows))
+
+
+def drift_boards():
+    """One leaderboard per map, the map with the best drift first."""
+    by = {}
+    for r in read_drift():
+        by.setdefault(r["raw_map"], []).append(r)
+    out = [{"id": m, "map": map_name(m) if m else "", "drivers": len(rows),
+            "top": [{k: r[k] for k in ("name", "score", "car", "t")} for r in sorted(rows, key=lambda r: -r["score"])[:10]]}
+           for m, rows in by.items()]
+    return sorted(out, key=lambda b: -b["top"][0]["score"])
+
+
+def read_game_counts(season=False):
+    out = []
+    for line in shared_read(laps_file("seasonstats.tsv" if season else "gamestats.tsv"), 2 * 1024 * 1024).splitlines():
+        p = line.split("\t")
+        if len(p) == 7 and p[0] and all(x.isdigit() for x in p[1:]):
+            out.append(dict(zip(("name",) + GAME_COUNTS, [p[0][:64]] + [int(x) for x in p[1:]])))
+    return out
+
+
+def read_badges():
+    """{lower-case name: {"name", "badges": {badge id: unix time}}}"""
+    out = {}
+    for line in shared_read(laps_file("badges.tsv"), 2 * 1024 * 1024).splitlines():
+        p = line.split("\t")
+        if len(p) == 3 and p[2].isdigit() and re.fullmatch(r"\w+", p[1]):
+            me = out.setdefault(p[0].lower(), {"name": p[0][:64], "badges": {}})
+            me["badges"].setdefault(p[1], int(p[2]))
+    return out
+
+
+def read_traps():
+    out = []
+    for line in shared_read(laps_file("traps.tsv"), 256 * 1024).splitlines():
+        m = TRAP_RE.match(line)
+        if m:
+            tid, name, mp, x, y, z = m.groups()
+            out.append({"id": tid, "name": name[:40], "map": map_name(mp) if mp else "", "raw_map": mp, "x": float(x), "y": float(y)})
+    return out
+
+
+def read_trap_speeds():
+    out = {}
+    for line in shared_read(laps_file("trapspeeds.tsv"), 2 * 1024 * 1024).splitlines():
+        p = line.split("\t")
+        if len(p) == 5 and p[4].isdigit():
+            try:
+                out.setdefault(p[0], []).append({"name": p[1][:64], "kmh": float(p[2]), "car": p[3][:40], "t": int(p[4])})
+            except ValueError:
+                continue
+    for rows in out.values():
+        rows.sort(key=lambda r: -r["kmh"])
+    return out
+
+
+def write_trap_speeds(speeds):
+    clean = lambda x: re.sub(r"[\t\r\n]", " ", str(x))
+    shared_write(laps_file("trapspeeds.tsv"), "".join("%s\t%s\t%.1f\t%s\t%d\n" % (tid, clean(r["name"]), r["kmh"], clean(r["car"]), r["t"])
+                                                      for tid, rows in speeds.items() for r in rows))
+
+
+SEASON_CATS = {"lap": "Fastest lap", "trap": "Speed trap", "wins": "Most race wins", "busts": "Most busts", "escapes": "Most escapes"}
+
+
+def read_seasons():
+    """Past seasons, newest first: [{"season", "winners": [{"cat", "what", "name", "value", "shown"}]}]"""
+    by = {}
+    for line in shared_read(laps_file("seasons.tsv"), 512 * 1024).splitlines():
+        p = line.split("\t")
+        if len(p) != 5 or not re.fullmatch(r"\d{4}-\d\d", p[0]) or p[1] not in SEASON_CATS:
+            continue
+        try:
+            v = float(p[4])
+        except ValueError:
+            continue
+        shown = fmt_lap(int(v)) if p[1] == "lap" else ("%d km/h" % v) if p[1] == "trap" else str(int(v))
+        by.setdefault(p[0], []).append({"cat": p[1], "label": SEASON_CATS[p[1]], "what": p[2][:40], "name": p[3][:64], "shown": shown})
+    return [{"season": s, "winners": by[s]} for s in sorted(by, reverse=True)]
+
+
+def season_info():
+    cur = shared_read(laps_file("season.txt"), 64).strip()[:7]
+    lt = time.localtime()
+    nxt = time.mktime((lt.tm_year + (lt.tm_mon == 12), lt.tm_mon % 12 + 1, 1, 0, 0, 0, 0, 0, -1))
+    return {"season": cur if re.fullmatch(r"\d{4}-\d\d", cur) else time.strftime("%Y-%m"), "days_left": max(0, int((nxt - now() + 86399) // 86400))}
+
+
+def track_shapes(only_map):
+    """Tracks on this map with their points, for the live map."""
+    out = []
+    for line in read_track_lines():
+        tid, name, mp, kind, pts = TRACK_RE.match(line).groups()
+        if mp and only_map and map_name(mp) != only_map:
+            continue
+        xy = []
+        for p in pts.split(";"):
+            try:
+                x, y, _z = (float(v) for v in p.split(","))
+                xy.append([round(x, 1), round(y, 1)])
+            except ValueError:
+                continue
+        if len(xy) >= 2:
+            out.append({"name": name[:40], "kind": "sprint" if kind == "sprint" else "loop", "pts": xy})
+    return out
+
+
+def games_summary():
+    cfg = read_games_cfg()
+    t_now = now()
+    evs = [e for e in read_events(t_now - 120 * 86400) if e.get("ev") in ("race", "cnr", "badge", "trap", "season")]
+    races, cnr, recent_badges = [], [], []
+    for e in reversed(evs):
+        ev = e["ev"]
+        if ev == "race" and len(races) < 15 and isinstance(e.get("results"), list):
+            res = []
+            for r in e["results"][:12]:
+                if isinstance(r, dict) and isinstance(r.get("ms"), int):
+                    item = {"name": str(r.get("name"))[:64], "time": fmt_lap(r["ms"])}
+                    if res:
+                        item["gap"] = "+%.3f" % ((r["ms"] - res[0]["ms"]) / 1000.0)
+                    item["ms"] = r["ms"]
+                    res.append(item)
+            races.append({"t": e["t"], "track": str(e.get("track"))[:40], "laps": int(e.get("laps") or 1), "results": res,
+                          "dnf": [str(x)[:64] for x in (e.get("dnf") or [])[:12]], "by": str(e.get("by") or "")[:64]})
+        elif ev == "cnr" and len(cnr) < 10:
+            names = lambda k: [str(x)[:64] for x in (e.get(k) or [])[:30] if isinstance(x, str)]
+            busts = [{"cop": str(b.get("cop"))[:64], "robber": str(b.get("robber"))[:64]} for b in (e.get("busts") or [])[:40] if isinstance(b, dict)]
+            cnr.append({"t": e["t"], "winner": "cops" if e.get("winner") == "cops" else "robbers", "seconds": int(e.get("seconds") or 0),
+                        "cops": names("cops"), "robbers": names("robbers"), "escaped": names("escaped"), "busts": busts})
+        elif ev == "badge" and len(recent_badges) < 12:
+            recent_badges.append({"t": e["t"], "name": str(e.get("name"))[:64], "badge": str(e.get("badge"))[:20]})
+    season = read_game_counts(season=True)
+    board = lambda k: [{"name": r["name"], "n": r[k]} for r in sorted(season, key=lambda r: -r[k]) if r[k] > 0][:10]
+    owners = read_badges()
+    badge_list = [{"id": b[0], "title": b[1], "how": b[2], "owners": sum(1 for o in owners.values() if b[0] in o["badges"])} for b in BADGES]
+    top_owners = sorted(({"name": o["name"], "n": len(o["badges"])} for o in owners.values()), key=lambda r: -r["n"])[:10]
+    speeds = read_trap_speeds()
+    g = toml_parse(APP.read_config_text())[0].get("General", {})
+    here = map_name(g.get("Map")) or ""
+    traps = [dict(t, drivers=len(speeds.get(t["id"], [])), top=[dict(r, shown="%d km/h" % r["kmh"]) for r in speeds.get(t["id"], [])[:10]])
+             for t in read_traps()]
+    for t in traps:
+        t.pop("raw_map", None)
+    return dict(cfg, minutes=list(CNR_MINUTES), catches=list(CNR_CATCH), holds=list(CNR_HOLD), map=here,
+                plugin=os.path.exists(os.path.join(I().STATS_DIR, "main.lua")), races=races, cnr_games=cnr,
+                wins=board("wins"), busts=board("busts"), escapes=board("escapes"), trap_boards=traps, badge_list=badge_list,
+                badge_leaders=top_owners, recent_badges=recent_badges, season_archive=read_seasons(), season=season_info(),
+                players_with_badges=len(owners), champ_table=read_champ()[0][:50], champ_rounds=read_champ()[1],
+                champ_history=read_champ_history(), champ_scales={k: list(v) for k, v in CHAMP_POINTS.items()},
+                drift_boards=drift_boards())
+
+
+def game_counts_for(name):
+    lname = name.lower()
+    out = {"all": None, "season": None}
+    for k, season in (("all", False), ("season", True)):
+        out[k] = next((r for r in read_game_counts(season) if r["name"].lower() == lname), None)
+    b = read_badges().get(lname)
+    titles = dict((x[0], x[1]) for x in BADGES)
+    out["badges"] = [{"id": k, "title": titles.get(k, k), "t": v} for k, v in sorted((b or {}).get("badges", {}).items(), key=lambda kv: kv[1])
+                     if k in titles]
+    return out
+
+
+def live_map():
+    """Ask the plugin for positions (for the next LIVEMAP_ASK seconds) and return the newest it wrote."""
+    inst = I()
+    t = now()
+    if t - getattr(inst, "livemap_asked", 0) >= 5:
+        inst.livemap_asked = t
+        shared_write(laps_file("livemap.txt"), "until=%d\n" % (t + LIVEMAP_ASK))
+    g = toml_parse(APP.read_config_text())[0].get("General", {})
+    here = map_name(g.get("Map")) or ""
+    d = read_json(laps_file("livemap.json"), None)
+    fresh = isinstance(d, dict) and isinstance(d.get("t"), int) and t - d["t"] <= 5
+    cars = []
+    for c in (d.get("cars") if fresh and isinstance(d.get("cars"), list) else [])[:200]:
+        if not isinstance(c, dict):
+            continue
+        try:
+            cars.append({"n": str(c.get("n"))[:64], "x": float(c["x"]), "y": float(c["y"]), "v": int(c.get("v") or 0),
+                         "car": str(c.get("car") or "")[:40], "role": c.get("role") if c.get("role") in ("cop", "robber", "out", "race") else ""})
+        except (KeyError, TypeError, ValueError):
+            continue
+    traps = [{"name": x["name"], "x": x["x"], "y": x["y"]} for x in read_traps() if not x["map"] or x["map"] == here]
+    game = {}
+    if fresh:
+        if isinstance(d.get("race"), dict):
+            game["race"] = {"track": str(d["race"].get("track"))[:40], "laps": int(d["race"].get("laps") or 1), "state": str(d["race"].get("state"))[:12]}
+        if isinstance(d.get("cnr"), dict):
+            game["cnr"] = {"state": str(d["cnr"].get("state"))[:8], "left": int(d["cnr"].get("left") or 0)}
+    return {"t": t, "fresh": fresh, "map": here, "cars": cars, "tracks": track_shapes(here), "traps": traps, "game": game,
+            "running": inst.server.status()["state"] == "running",
+            "plugin": os.path.exists(os.path.join(inst.STATS_DIR, "main.lua"))}
+
+
+# ----------------------------------------------------------------------------- weekly recap
+RECAP_DAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+
+
+def recap_cfg(inst=None):
+    v = (inst or I()).meta.get("recap")
+    d = {"on": False, "day": 6, "hour": 19}
+    if isinstance(v, dict):
+        d["on"] = bool(v.get("on"))
+        if isinstance(v.get("day"), int) and 0 <= v["day"] <= 6:
+            d["day"] = v["day"]
+        if isinstance(v.get("hour"), int) and 0 <= v["hour"] <= 23:
+            d["hour"] = v["hour"]
+    return d
+
+
+def fmt_hours(sec):
+    h = sec / 3600.0
+    return ("%d h" % round(h)) if h >= 10 else ("%.1f h" % h) if h >= 1 else ("%d min" % max(1, round(sec / 60.0)))
+
+
+def weekly_recap(t_end=None):
+    """The week in one Discord post: who played, records, races, chases, badges. None if nobody played."""
+    t_end = t_end or now()
+    t0 = t_end - 7 * 86400
+    evs = read_events(t_end - 365 * 86400)
+    sessions, _ = event_sessions(evs, t_end)
+    week = [(n, max(a, t0), min(b, t_end)) for n, a, b in sessions if b >= t0 and a <= t_end]
+    if not week:
+        return None
+    esc = discord_escape
+    first = {}
+    for n, a, b in sessions:
+        first[n.lower()] = min(first.get(n.lower(), a), a)
+    per = {}
+    days = {}
+    for n, a, b in week:
+        per[n] = per.get(n, 0) + (b - a)
+        days.setdefault(time.strftime("%A", time.localtime(a)), set()).add(n.lower())
+    new = sum(1 for n in set(x.lower() for x, _, _ in week) if first.get(n, 0) >= t0)
+    total = sum(per.values())
+    lines = ["👥 %d player%s%s · %s played%s" % (
+        len(per), "" if len(per) == 1 else "s", (", %d new" % new) if new else "", fmt_hours(total),
+        (" · busiest day: %s" % max(days, key=lambda d: len(days[d]))) if days else "")]
+    top = sorted(per.items(), key=lambda kv: -kv[1])[:3]
+    lines.append("🏆 Most time on the server: " + ", ".join("%s %s" % (esc(n), fmt_hours(s)) for n, s in top))
+    wk = [e for e in evs if e["t"] >= t0]
+    recs = {}
+    for e in wk:
+        if e.get("ev") == "lap" and e.get("record") is True and isinstance(e.get("ms"), int):
+            recs[str(e.get("track"))[:40]] = (str(e.get("name"))[:64], e["ms"])
+    if recs:
+        lines.append("🏁 New lap records: " + "; ".join("%s – %s %s" % (esc(t), esc(n), fmt_lap(ms)) for t, (n, ms) in list(recs.items())[:6]))
+    races = [e for e in wk if e.get("ev") == "race" and isinstance(e.get("results"), list) and e["results"]]
+    if races:
+        wins = {}
+        for e in races:
+            if len(e["results"]) + len(e.get("dnf") or []) >= 2:
+                w = str(e["results"][0].get("name"))[:64]
+                wins[w] = wins.get(w, 0) + 1
+        lines.append("🏎️ %d race%s%s" % (len(races), "" if len(races) == 1 else "s",
+                                        (" – wins: " + ", ".join("%s %d" % (esc(n), k) for n, k in sorted(wins.items(), key=lambda kv: -kv[1])[:4])) if wins else ""))
+    chases = [e for e in wk if e.get("ev") == "cnr"]
+    if chases:
+        busts, gone = {}, {}
+        for e in chases:
+            for b in e.get("busts") or []:
+                if isinstance(b, dict):
+                    c = str(b.get("cop"))[:64]
+                    busts[c] = busts.get(c, 0) + 1
+            for n in e.get("escaped") or []:
+                gone[str(n)[:64]] = gone.get(str(n)[:64], 0) + 1
+        bits = []
+        if busts:
+            n, k = max(busts.items(), key=lambda kv: kv[1])
+            bits.append("most busts: %s (%d)" % (esc(n), k))
+        if gone:
+            bits.append("got away: " + ", ".join(esc(n) for n in list(gone)[:4]))
+        lines.append("🚓 Cops and robbers: %d game%s%s" % (len(chases), "" if len(chases) == 1 else "s", (" – " + ", ".join(bits)) if bits else ""))
+    traps = {}
+    for e in wk:
+        if e.get("ev") == "trap" and e.get("record") is True:
+            traps[str(e.get("trap"))[:40]] = (str(e.get("name"))[:64], e.get("kmh") or 0)
+    if traps:
+        lines.append("📸 Speed trap records: " + "; ".join("%s – %s %d km/h" % (esc(t), esc(n), v) for t, (n, v) in list(traps.items())[:5]))
+    nb = sum(1 for e in wk if e.get("ev") == "badge")
+    if nb:
+        lines.append("🏅 %d badge%s earned" % (nb, "" if nb == 1 else "s"))
+    title = "The week on %s (%s – %s)" % (server_name() or I().name, time.strftime("%d %b", time.localtime(t0 + 1)), time.strftime("%d %b", time.localtime(t_end)))
+    return title, "\n".join(lines)
+
+
+def recap_channels():
+    out = []
+    if webhook_parts()[0]:
+        out.append("Discord")
+    if APP.settings.get("telegram_enabled") and APP.secrets.has("TELEGRAM_TOKEN") and APP.settings.get("telegram_chat"):
+        out.append("Telegram")
+    if APP.settings.get("webhook_enabled") and APP.secrets.has("CUSTOM_WEBHOOK"):
+        out.append("webhook")
+    return out
+
+# ----------------------------------------------------------------------------- player profiles
+NOTES_MAX = 50
+PROFILE_EVENTS = ("kick", "ban", "unban", "mute", "report", "votekick", "vehblock", "vehspam", "refused", "denied", "lap",
+                  "racepos", "bust", "badge", "trap")
+
+
+def player_profile(name):
+    """Everything known about one player on this server: play time, what happened to them, notes."""
+    lname = name.lower()
+    t_now = now()
+    evs = read_events(t_now - 365 * 86400)
+    sessions, _ = event_sessions(evs, t_now)
+    mine = [(a, b) for n, a, b in sessions if n.lower() == lname]
+    real = next((n for n, a, b in sessions if n.lower() == lname), name)
+    hist = []
+    reports_by = 0
+    for e in evs:
+        ev = e.get("ev")
+        if ev not in PROFILE_EVENTS:
+            continue
+        who, target = str(e.get("name") or ""), str(e.get("target") or "")
+        if ev == "report":
+            if who.lower() == lname:
+                reports_by += 1
+            if target.lower() != lname:
+                continue
+        elif ev == "bust":
+            if lname not in (who.lower(), target.lower()):
+                continue
+        elif who.lower() != lname:
+            continue
+        item = {"t": e["t"], "ev": ev}
+        if ev == "bust":
+            item.update({"cop": who[:64], "robber": target[:64], "me": "cop" if who.lower() == lname else "robber"})
+        for k in ("by", "reason", "minutes", "until", "jbm", "track", "ms", "car", "record", "why", "pos", "of", "title", "trap", "kmh"):
+            if k in e:
+                item[k] = e[k]
+        if ev == "report":
+            item["by"] = who
+        if ev in ("lap", "racepos") and isinstance(e.get("ms"), int):
+            item["time"] = fmt_lap(e["ms"])
+        hist.append(item)
+    hist.reverse()
+    ban = next((b for b in read_bans() if b["name"].lower() == lname), None)
+    online = lname in [n.lower() for n in online_names()]
+    laps = []
+    times = read_laptimes()
+    for t in read_tracks():
+        rows = times.get(t["id"], [])
+        for i, r in enumerate(rows):
+            if r["name"].lower() == lname:
+                laps.append({"track": t["name"], "time": fmt_lap(r["ms"]), "pos": i + 1, "of": len(rows), "car": r["car"]})
+    rec = None
+    try:
+        with open_shared(I().RECORDS_FILE) as f:
+            for line in f.read(2 * 1024 * 1024).splitlines():
+                p = line.split("\t")
+                if len(p) == 4 and p[0].lower() == lname:
+                    rec = {"speed": round(float(p[1])), "dist": round(float(p[2]), 1), "streak": int(float(p[3]))}
+    except (OSError, ValueError):
+        pass
+    d30 = t_now - 30 * 86400
+    return {
+        "name": real, "online": online, "seen": bool(mine) or bool(hist),
+        "first_seen": min((a for a, b in mine), default=None), "last_seen": max((b for a, b in mine), default=None),
+        "sessions": len(mine), "seconds": int(sum(b - a for a, b in mine)),
+        "seconds_30d": int(sum(b - max(a, d30) for a, b in mine if b >= d30)),
+        "ban": ban, "history": hist[:100], "reports_by": reports_by, "laps": laps, "records": rec,
+        "notes": player_notes().get(lname, []), "games": game_counts_for(real),
+    }
+
+
+def player_card(name):
+    """The public side of a player on this server (no bans, reports or notes): for Discord and the other servers' profiles."""
+    lname = name.lower()
+    p = player_profile(name)
+    laps = sorted(p["laps"], key=lambda x: x["pos"])[:5]
+    drift = max((r for r in read_drift() if r["name"].lower() == lname), key=lambda r: r["score"], default=None)
+    rows, rounds = read_champ()
+    pos = next((i + 1 for i, r in enumerate(rows) if r["name"].lower() == lname), None)
+    b = read_badges().get(lname) or {}
+    return {"name": p["name"], "online": p["online"], "seen": p["seen"], "seconds": p["seconds"], "seconds_30d": p["seconds_30d"],
+            "sessions": p["sessions"], "first_seen": p["first_seen"], "last_seen": p["last_seen"], "laps": laps,
+            "drift": {"score": drift["score"], "car": drift["car"]} if drift else None,
+            "champ": {"pos": pos, "of": len(rows), "points": rows[pos - 1]["points"]} if pos and rounds else None,
+            "badges": len(b.get("badges") or {}), "records": p["records"]}
+
+
+def player_everywhere(name, ids):
+    """player_card() on each of these servers where the player has been. Puts the current server back."""
+    here = I().id
+    out = []
+    try:
+        for sid in ids:
+            with LOCK:
+                inst = INSTANCES.get(sid)
+            if not inst:
+                continue
+            use_server(sid)
+            c = player_card(name)
+            if c["seen"] or c["online"]:
+                out.append(dict(c, server=inst.name, id=sid))
+    finally:
+        use_server(here)
+    return out
+
+
+def player_notes():
+    v = I().meta.get("player_notes")
+    return v if isinstance(v, dict) else {}
+
+
+# ----------------------------------------------------------------------------- first-time setup checklist
+def setup_checklist():
+    """The steps a new server owner should do once, each ticked off by itself when it's done."""
+    inst = I()
+    g = toml_parse(APP.read_config_text())[0].get("General", {})
+    name = str(g.get("Name") or "")
+    private = g.get("Private") is True
+    s = APP.settings
+    played = any(e.get("ev") == "join" for e in read_events(now() - 365 * 86400)[-5000:])
+    reach = (APP.state.get("reach_ok") or {}).get(inst.id)
+    items = [
+        {"id": "name", "done": bool(name.strip()) and not re.search(r"BeamMP Server$|^BeamMP Server|^My Server$", name.strip()),
+         "go": "config"},
+        {"id": "authkey", "done": private or inst.has_authkey(), "go": "config"},
+        {"id": "mods", "done": any(x["enabled"] for x in list_mods() if x["name"] != TOOLS_MOD), "go": "mods"},
+        {"id": "reach", "done": bool(reach) or played, "go": "network"},
+        {"id": "invite", "done": played or bool(inst.meta.get("invited")), "go": "invite"},
+        {"id": "alerts", "done": any(s.get(k) for k in ("discord_enabled", "email_enabled", "ntfy_enabled", "telegram_enabled", "webhook_enabled"))
+                 , "go": "settings"},
+    ]
+    skipped = inst.meta.get("setup_skipped") if isinstance(inst.meta.get("setup_skipped"), list) else []
+    for it in items:
+        it["skipped"] = it["id"] in skipped
+    return {"items": items, "hidden": bool(inst.meta.get("setup_hidden")),
+            "done": sum(1 for it in items if it["done"] or it["skipped"]), "total": len(items)}
+
+
+# ----------------------------------------------------------------------------- performance history
+PERF_FILE = os.path.join(DATA_DIR, "performance.json")
+PERF_KEEP = 7 * 1440        # a week of one-minute samples
+
+
+def perf_series(hist, bucket):
+    """[t, cpu %, memory used %, upload Mbit/s, players, ping ms] averaged over `bucket` seconds."""
+    out, cur, key = [], [], None
+    def flush():
+        if not cur:
+            return
+        avg = lambda k: (lambda v: round(sum(v) / len(v), 1) if v else None)([x[k] for x in cur if x.get(k) is not None])
+        mem = [100.0 * (x["mem_total"] - x["mem_free"]) / x["mem_total"] for x in cur
+               if x.get("mem_total") and x.get("mem_free") is not None]
+        up = avg("up_kbps")
+        out.append([key, avg("cpu"), round(sum(mem) / len(mem), 1) if mem else None,
+                    round(up / 1000.0, 2) if up is not None else None,
+                    max(x.get("players") or 0 for x in cur), avg("ping")])
+    for x in hist:
+        k = int(x["t"] // bucket * bucket)
+        if k != key:
+            flush()
+            cur, key = [], k
+        cur.append(x)
+    flush()
+    return out
+
+
 MOD_DESC_RE = re.compile(r"\s*\|\s*(Mods: [\d.]+ [KMGT]?B|No mods to download)$")
 
 
@@ -1674,6 +3854,10 @@ def fmt_bytes(n):
 def refresh_mod_desc():
     """Keep "| Mods: 1.2 GB" at the end of the server description up to date
     (when that's turned on), so players see the download size before joining."""
+    try:
+        veh_sync()
+    except Exception as e:
+        print("vehicle rules: couldn't update for the new mods: %s" % short_err(e), file=sys.stderr)
     on = bool(I().meta.get("desc_modsize"))
     text = APP.read_config_text()
     desc = toml_parse(text)[0].get("General", {}).get("Description", "")
@@ -1691,7 +3875,10 @@ def refresh_mod_desc():
 
 # ----------------------------------------------------------------------------- moderation
 MOD_DEFAULTS = {"admins": [], "filter": False, "words": [], "spam": False, "spam_limit": 5,
-                "antibot": False, "verify": True, "per_ip": 3, "join_flood": 8, "guests": True}
+                "antibot": False, "verify": True, "per_ip": 3, "join_flood": 8, "guests": True,
+                "report": True, "votekick": False, "votekick_min": 4, "chatlog": True,
+                "kickwords": [], "kickwords_action": "kick"}
+KICKWORD_ACTIONS = ("kick", "ban60", "ban1440", "ban10080", "banperm")
 NAME_RE = re.compile(r"[^\t\r\n,]{1,64}")
 
 
@@ -1729,10 +3916,14 @@ def read_mod():
         if not m:
             continue
         k, v = m.groups()
-        if k in ("admins", "words"):
+        if k in ("admins", "words", "kickwords"):
             d[k] = [x.strip() for x in v.split(",") if x.strip()][:500]
-        elif k in ("filter", "spam", "antibot", "verify"):
+        elif k == "kickwords_action" and v in KICKWORD_ACTIONS:
+            d[k] = v
+        elif k in ("filter", "spam", "antibot", "verify", "report", "votekick", "chatlog"):
             d[k] = v.lower() == "on"
+        elif k == "votekick_min" and v.isdigit() and 3 <= int(v) <= 20:
+            d[k] = int(v)
         elif k == "guests":
             d["guests"] = v.lower() != "block"
         elif k in ("spam_limit", "per_ip", "join_flood") and v.isdigit() and int(v) <= 100:
@@ -1744,10 +3935,63 @@ def write_mod(d):
     onoff = lambda b: "on" if b else "off"
     shared_write(I().MOD_FILE,
                  "# Managed by the BeamMP EasyServer dashboard (Config -> Moderation).\n"
-                 "admins=%s\nfilter=%s\nwords=%s\nspam=%s\nspam_limit=%d\nantibot=%s\nverify=%s\nper_ip=%d\njoin_flood=%d\nguests=%s\n" % (
+                 "admins=%s\nfilter=%s\nwords=%s\nspam=%s\nspam_limit=%d\nantibot=%s\nverify=%s\nper_ip=%d\njoin_flood=%d\nguests=%s\n"
+                 "report=%s\nvotekick=%s\nvotekick_min=%d\nchatlog=%s\nkickwords=%s\nkickwords_action=%s\n" % (
                      ",".join(d["admins"]), onoff(d["filter"]), ",".join(d["words"]), onoff(d["spam"]), d["spam_limit"],
                      onoff(d["antibot"]), onoff(d["verify"]), d["per_ip"], d["join_flood"],
-                     "allow" if d["guests"] else "block"))
+                     "allow" if d["guests"] else "block", onoff(d["report"]), onoff(d["votekick"]), d["votekick_min"],
+                     onoff(d["chatlog"]), ",".join(d["kickwords"]), d["kickwords_action"]))
+
+
+# ----------------------------------------------------------------------------- reports + chat history
+REPORT_KEEP = 200
+_REPORT_LOCK = threading.Lock()
+CHAT_FILES = ("chat.log.1", "chat.log")
+
+
+def _reports_path(inst):
+    return os.path.join(DATA_DIR, "reports-%s.json" % inst.id)
+
+
+def load_reports(inst):
+    d = read_json(_reports_path(inst), [])
+    return [x for x in d if isinstance(x, dict) and isinstance(x.get("id"), str)] if isinstance(d, list) else []
+
+
+def chat_text(t):
+    """Player chat for alerts: no control characters, no clickable [masked](links) in Discord."""
+    return re.sub(r"[\x00-\x1f\x7f]", " ", str(t if t is not None else "")).replace("[", "(").replace("]", ")").strip()[:300]
+
+
+def read_chat(inst, since=0, until=None):
+    """Chat history (oldest first) from the plugin's chat.log and chat.log.1."""
+    out = []
+    for name in CHAT_FILES:
+        raw = shared_read(os.path.join(inst.STATS_DIR, name), 6 * 1024 * 1024)
+        for line in raw.splitlines():
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(e, dict) or not isinstance(e.get("t"), int) or e["t"] < since or (until and e["t"] > until):
+                continue
+            out.append({"t": e["t"], "name": clean_player_name(e.get("name")),
+                        "msg": re.sub(r"[\x00-\x1f\x7f]", " ", str(e.get("msg") or ""))[:300], "hid": bool(e.get("hid"))})
+    out.sort(key=lambda x: x["t"])
+    return out
+
+
+def add_report(inst, e):
+    """A /report from the game: kept for the Players page, with the chat just before it."""
+    t = e["t"]
+    ctx = [c for c in read_chat(inst, t - 180, t + 5) if not c["msg"].lstrip().lower().startswith("/report")][-15:]
+    item = {"id": uuid.uuid4().hex[:12], "t": t, "by": clean_player_name(e.get("name")),
+            "target": clean_player_name(e.get("target")), "reason": chat_text(e.get("reason"))[:150], "chat": ctx, "open": True}
+    with _REPORT_LOCK:
+        items = load_reports(inst)
+        items.insert(0, item)
+        write_json(_reports_path(inst), items[:REPORT_KEEP])
+    return item
 
 
 def read_bans():
@@ -1859,28 +4103,53 @@ TEMPLATES = {
               "about": "Open map, short car cleanup, drift tags and countdowns for tandem runs",
               "extras": {"clear": True, "every": 4, "afk": True, "afk_minutes": 10, "countdown": True, "tag": True, "top": True,
                          "tags": ["DRIFT", "TANDEM", "LEAD", "CHASE", "CHILL", "AFK"]},
-              "welcome": "Welcome {name}! Drift server - use /tag DRIFT and /countdown 3 for tandems. Be nice in the chat.",
-              "messages": ["Want to tandem? Pick a lead driver and use /countdown 3.", "Type /top to see the best drifters' speeds and distances."]},
+              "welcome": "Welcome {name}! Drift server - slide sideways for points, /drift for the leaderboard. /countdown 3 for tandems.",
+              "messages": ["Want to tandem? Pick a lead driver and use /countdown 3.", "Bigger angle and more speed = more points. /drift shows the best."],
+              "games": {"drift": True, "race": False, "cnr": False, "traps": True, "badges": True, "champ": False}, "laps": False,
+              "search": "drift"},
     "racing": {"label": "Racing", "map": "hirochi_raceway", "max_players": 10,
                "about": "Race track, countdowns, records, strict anti-spam and no AFK cars on track",
                "extras": {"clear": True, "every": 2, "afk": True, "afk_minutes": 3, "countdown": True, "tag": True, "top": True,
                           "tags": ["RACE", "QUALI", "PIT", "SPECTATE"]},
                "spam": True,
-               "welcome": "Welcome {name}! Racing server - start races with /countdown 5. No ramming, please.",
-               "messages": ["Race starts: line up and type /countdown 5.", "Records: /top. Cars that stand still for 3 minutes are removed."]},
+               "welcome": "Welcome {name}! Racing server - /race starts a race, /laps shows the lap records. No ramming, please.",
+               "messages": ["Every race counts for the championship - /champ shows the standings.", "Cars that stand still for 3 minutes are removed."],
+               "games": {"race": True, "champ": True, "traps": True, "badges": True, "drift": False, "cnr": False}, "laps": True,
+               "champ_name": "Season 1", "search": "race car"},
+    "cops": {"label": "Cops and robbers", "map": "west_coast_usa", "max_players": 16,
+             "about": "City map, cops and robbers rounds, speed traps, COP / ROBBER tags",
+             "extras": {"clear": True, "every": 6, "afk": True, "afk_minutes": 10, "countdown": True, "tag": True, "top": True,
+                        "tags": ["COP", "ROBBER", "CHILL", "AFK"]},
+             "spam": True,
+             "welcome": "Welcome {name}! /cnr starts cops and robbers - robbers escape, cops bust them. /traps for the speed traps.",
+             "messages": ["Cops: stay close to a robber to bust them.", "Robbers: get away and stay away until the time runs out."],
+             "games": {"cnr": True, "race": True, "traps": True, "badges": True, "drift": False, "champ": False}, "laps": False,
+             "search": "police"},
+    "offroad": {"label": "Off-road", "map": "johnson_valley", "max_players": 10,
+                "about": "Desert trails, dunes and rocks, timed trail runs, long AFK time",
+                "extras": {"clear": True, "every": 12, "afk": True, "afk_minutes": 15, "countdown": True, "tag": True, "top": True,
+                           "tags": ["CRAWL", "TRAIL", "DUNES", "AFK"]},
+                "welcome": "Welcome {name}! Off-road server - find a trail, or time a run with /track. Stuck? Ask for a tow.",
+                "messages": ["Set up a timed trail run with /track - /laps shows the best times."],
+                "games": {"race": True, "traps": False, "badges": True, "cnr": False, "drift": False, "champ": False}, "laps": True,
+                "search": "off-road"},
     "roleplay": {"label": "Roleplay", "map": "west_coast_usa", "max_players": 20,
                  "about": "Big city map, role tags, long AFK time, chat filter and anti-spam",
                  "extras": {"clear": True, "every": 24, "afk": True, "afk_minutes": 20, "countdown": False, "tag": True, "top": False,
                             "tags": ["COP", "EMS", "FIRE", "TOW", "TAXI", "CIV", "ROB"]},
                  "spam": True, "filter": True,
                  "welcome": "Welcome {name}! Roleplay server - pick your role with /tag (COP, EMS, TOW, TAXI, CIV...). Stay in character.",
-                 "messages": ["Pick your role with /tag - type /tag to see them all.", "Respect other players' roleplay. Admins can mute and kick."]},
+                 "messages": ["Pick your role with /tag - type /tag to see them all.", "Respect other players' roleplay. Admins can mute and kick."],
+                 "games": {"cnr": True, "race": False, "traps": True, "badges": False, "drift": False, "champ": False}, "laps": False,
+                 "search": "police"},
     "chill": {"label": "Chill", "map": "italy", "max_players": 8,
               "about": "Scenic map for cruising with friends, relaxed rules",
               "extras": {"clear": True, "every": 24, "afk": False, "afk_minutes": 5, "countdown": True, "tag": True, "top": True,
                          "tags": ["CRUISE", "CHILL", "PHOTO", "AFK"]},
-              "welcome": "Welcome {name}! Chill cruising server - enjoy the drive.",
-              "messages": ["Type /help to see the chat commands."]},
+              "welcome": "Welcome {name}! Chill cruising server - enjoy the drive. Want a race? /race",
+              "messages": ["Type /help to see the chat commands."],
+              "games": {"race": True, "traps": True, "badges": True, "cnr": False, "drift": False, "champ": False}, "laps": False,
+              "search": "car"},
 }
 
 
@@ -2188,7 +4457,44 @@ def analytics(max_players):
 
 
 # ----------------------------------------------------------------------------- network checks
+_HOST = {"t": 0.0, "v": {}}
+
+
+def host_info():
+    """What the Mac installer tells us when this Linux runs in a small VM on a Mac (host.json, refreshed by the
+    Mac's login agent): {"platform": "mac", "lan_ip": "<the Mac's address>", "ports": "auto|manual|later",
+    "upnp": "ok|failed|off", "upnp_at": <time>, "upnp_error": "..."}. Empty everywhere else."""
+    if time.time() - _HOST["t"] > 30:
+        try:
+            with open(HOST_FILE, encoding="utf-8") as f:
+                v = json.load(f)
+            _HOST["v"] = v if isinstance(v, dict) else {}
+        except (OSError, ValueError):
+            _HOST["v"] = {}
+        _HOST["t"] = time.time()
+    return _HOST["v"]
+
+
+def on_mac():
+    return host_info().get("platform") == "mac"
+
+
+# On a Mac every visitor reaches the dashboard through the Mac's port forwarder and looks like a home device,
+# so "only from the internet with two-step login" can't be enforced there: internet logins stay off.
+MAC_NO_REMOTE = "Logging in from the internet isn't available on a Mac yet - team members can log in from your home network."
+
+
+def mac_lan_ip():
+    ip = str(host_info().get("lan_ip") or "")
+    try:
+        return ip if ipaddress.ip_address(ip).version == 4 else None
+    except ValueError:
+        return None
+
+
 def lan_ip():
+    if on_mac() and mac_lan_ip():
+        return mac_lan_ip()     # players reach the Mac, which forwards to this VM
     ips = [i for i in tlsgen.local_ips() if i != "127.0.0.1"]
     return ips[0] if ips else "127.0.0.1"
 
@@ -2405,6 +4711,10 @@ def network_check(cfg, status, deep):
             c("Firewall", "info", fw["data"])
     if pip and not relay_on() and ipaddress.ip_address(pip) in ipaddress.ip_network("100.64.0.0/10"):
         tips.append("Your provider uses CGNAT (shared IP) - port forwarding won't work. Ask them for a public IPv4 address.")
+    if any(x["state"] == "ok" and (x["name"].startswith("Reachable") or x["name"] == "Public server list") for x in checks):
+        reach = dict(APP.state.get("reach_ok") or {})
+        reach[I().id] = now()
+        APP.state.update({"reach_ok": reach})
     if relay_on():
         pip = None      # don't show the home address on a page that's about the relay
     return {"port": port, "lan_ip": lip, "public_ip": pip, "checks": checks, "tips": tips,
@@ -2434,13 +4744,17 @@ def beammp_backend_ok():
         return False
 
 
+HEALTH_GO = {"process": "overview", "port": "logs", "config": "config", "authkey": "config", "plugin": "logs", "mods": "mods",
+             "external": "network", "disk": "", "memory": "", "moved": "servers", "backups": "settings", "join": "mods"}
+
+
 def health_report(deep=False):
     """Plain-language checks for the selected server: pass / warn / fail, each with what to do."""
     inst = I()
     checks = []
 
     def c(cid, title, state, detail, fix=""):
-        checks.append({"id": cid, "title": title, "state": state, "detail": detail, "fix": fix})
+        checks.append({"id": cid, "title": title, "state": state, "detail": detail, "fix": fix, "go": HEALTH_GO.get(cid, "")})
 
     st = inst.server.status()
     running = st.get("state") == "running"
@@ -2563,6 +4877,37 @@ def health_report(deep=False):
         pct = 100.0 * avail / tot
         c("memory", "Memory", "warn" if pct < 10 else "pass", "%d%% free (%s of %s)." % (pct, fmt_bytes(avail * 1048576), fmt_bytes(tot * 1048576)),
           "Close other programs or lower the player limit." if pct < 10 else "")
+    # 9. moved away, backups, how long joining takes
+    if moved_note(inst):
+        c("moved", "Moved to another computer", "warn", moved_note(inst) + ". The dashboard keeps it off here.",
+          "Nothing to do. To run it on this computer as well, press Start and confirm.")
+    s = APP.settings
+    last = APP.state.get("backup_copy") or {}
+    if not s.get("backup_on"):
+        c("backups", "Backups", "warn", "Nightly backups are off.", "Turn on Back up every night under Settings → Automatic backups.")
+    elif not s.get("backup_copy") and not (s.get("gdrive_on") and gdrive_connected()):
+        c("backups", "Backups", "warn", "The backups are only on this computer - if its disk dies, they're gone too.",
+          "Settings → Automatic backups: connect Google Drive, or keep a copy on a USB drive or another computer at home.")
+    elif s.get("gdrive_on") and gdrive_connected() and not (APP.state.get("gdrive_last") or {"ok": True}).get("ok"):
+        c("backups", "Backups", "warn", "The last copy to Google Drive failed: %s" % APP.state["gdrive_last"].get("note"),
+          "Look at Settings → Google Drive - you may need to connect it again.")
+    elif s.get("backup_copy") and last and not last.get("ok"):
+        c("backups", "Backups", "warn", "The last copy of the backups failed: %s" % last.get("note"),
+          "Check the place under Settings → Automatic backups (is the USB drive plugged in?).")
+    else:
+        c("backups", "Backups", "pass", "Nightly backups, with a copy kept somewhere else.")
+    up = float(s.get("upload_mbit") or 0) * 1000
+    lim = int((inst.meta.get("limits") or {}).get("upload_kbps") or 0)
+    kbps = min(up, lim) if up and lim else up or lim
+    if total and kbps:
+        secs = total * 8 / (kbps * 1000.0)
+        slow = secs > 300
+        c("join", "Joining time", "warn" if slow else "pass",
+          "A new player waits about %s for the mods (%s at %.1f Mbit/s)." % (fmt_secs(int(secs)), fmt_bytes(total), kbps / 1000.0),
+          "Turn off mods you don't need or use light mode (Mods page) - players often give up after a few minutes." if slow else "")
+    elif total and not up:
+        c("join", "Joining time", "warn", "Your upload speed isn't entered, so joining time and upload warnings are unknown.",
+          "Run a speed test on this computer and enter the upload number under Settings → Computer load.")
     checks.sort(key=lambda x: HEALTH_ORDER.get(x["state"], 9))
     worst = checks[0]["state"] if checks else "pass"
     return {"t": now(), "server": inst.name, "overall": worst, "checks": checks, "deep": bool(deep),
@@ -3152,6 +5497,13 @@ def ip_is_loopback(ip):
         return False
 
 
+def at_server(ip):
+    """True when the request really comes from the server computer itself. On a Mac the server runs in a
+    small VM and EVERY connection (other devices included) arrives through the Mac's port forwarder as
+    127.0.0.1 - so there, a local address proves nothing and gets no special trust."""
+    return ip_is_loopback(ip) and not on_mac()
+
+
 # ============================================================================= the app
 # ----------------------------------------------------------------------------- Discord bot (slash commands)
 # /status for everyone; /start, /stop and /restart for people with "Manage
@@ -3183,9 +5535,17 @@ def discord_api(method, path, token=None, body=None, timeout=20):
 BACKUP_DIR = os.path.join(DATA_DIR, "backups")
 BACKUP_KEEP = 7
 STATS_EXPORT = ("allowlist.txt", "extras.txt", "moderation.txt", "bans.txt", "messages.txt")
+# a move also takes the stats, lap times, championships, drift and race results the plugin keeps
+GAMES_RE = re.compile(r"[\w.-]{1,64}\.(?:tsv|txt|log|json)")
+GAMES_SKIP = {"bridge.txt", "online.json", "livemap.txt", "livemap.json"}
+GAMES_MAX = 64 * 1024 ** 2
 
 
-def build_export(path, include_mods):
+def games_name_ok(name):
+    return bool(GAMES_RE.fullmatch(name)) and name not in GAMES_SKIP and name not in STATS_EXPORT
+
+
+def build_export(path, include_mods, include_games=False):
     """A settings (and optionally mods) zip of the current server - used by Export and nightly backups."""
     app = APP
     text = app.read_config_text()
@@ -3199,7 +5559,7 @@ def build_export(path, include_mods):
                                   "discord_enabled", "email_enabled")},
             "server_meta": {k: v for k, v in I().meta.items() if k in ("restart", "rotation")},
             "mods": [{"name": m["name"], "enabled": m["enabled"], "size": m["size"]} for m in mods],
-            "includes_mods": include_mods}
+            "includes_mods": include_mods, "includes_games": include_games}
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("ServerConfig.toml", text)
         z.writestr("easyserver-export.json", json.dumps(meta, indent=1))
@@ -3212,6 +5572,21 @@ def build_export(path, include_mods):
                     z.writestr(name, f.read(256 * 1024))
             except OSError:
                 pass
+        if include_games:
+            try:
+                names = sorted(os.listdir(I().STATS_DIR))
+            except OSError:
+                names = []
+            for name in names:
+                if not games_name_ok(name):
+                    continue
+                try:
+                    with open_shared(os.path.join(I().STATS_DIR, name), "rb") as f:
+                        data = f.read(GAMES_MAX + 1)
+                except OSError:
+                    continue
+                if len(data) <= GAMES_MAX:
+                    z.writestr("games/" + name, data)
         if include_mods:
             for m in mods:
                 src = os.path.join(I().CLIENT_DIR if m["enabled"] else I().DISABLED_DIR, m["name"])
@@ -3231,7 +5606,7 @@ def list_backups(iid=None):
     except OSError:
         return out
     for n in names:
-        m = re.fullmatch(r"([a-z0-9]{1,12})-(\d{8}-\d{4})(-mods)?\.zip", n)
+        m = re.fullmatch(r"([a-z0-9]{1,12})-(\d{8}-\d{4}(?:\d{2})?)(-mods)?\.zip", n)
         if not m or (iid and m.group(1) != iid):
             continue
         try:
@@ -3248,6 +5623,8 @@ def make_backup(inst, include_mods):
     if not IS_WIN:
         os.chmod(BACKUP_DIR, 0o700)
     name = "%s-%s%s.zip" % (inst.id, time.strftime("%Y%m%d-%H%M"), "-mods" if include_mods else "")
+    if os.path.exists(os.path.join(BACKUP_DIR, name)):    # two in the same minute (a restore right after a backup)
+        name = "%s-%s%s.zip" % (inst.id, time.strftime("%Y%m%d-%H%M%S"), "-mods" if include_mods else "")
     tmp = os.path.join(BACKUP_DIR, name + ".tmp")
     build_export(tmp, include_mods)
     os.replace(tmp, os.path.join(BACKUP_DIR, name))
@@ -3431,6 +5808,62 @@ def mod_updates_for(inst, force=False):
     for k in [k for k in cache if k.startswith("f:") and k[2:].split("|")[0] not in {m["name"] for m in list_mods()}]:
         cache.pop(k, None)
     return out
+
+
+def apply_mod_update(name, u):
+    """Download the newest version of one repository mod of the current server, virus-check it and replace the
+    old file. Returns (200, {"version"}) or (an HTTP status, {"error"} / {"blocked", "reasons"})."""
+    url = REPO_DL % (u["resource_id"], u["latest_id"])
+    tdir = tempfile.mkdtemp(dir=UPLOAD_TMP, prefix=".up-")
+    tmp = os.path.join(tdir, name)
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "BeamMP-EasyServer/%s (mod update)" % EASY_VERSION})
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r, open(tmp, "wb") as f:
+                total = 0
+                while True:
+                    chunk = r.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > 4 * 1024 ** 3:
+                        raise ValueError("too big")
+                    f.write(chunk)
+        except Exception as e:
+            return 502, {"error": "Couldn't download it (%s). Get it yourself from %s and upload it here." % (short_err(e), u["page"])}
+        if not zipfile.is_zipfile(tmp):
+            return 502, {"error": "beamng.com didn't send a zip file (it may want you to log in). Download it from %s and upload it here." % u["page"]}
+        got = mod_repo_info(tmp)
+        if not got or got["resource_id"] != u["resource_id"]:
+            return 502, {"error": "The downloaded file isn't the same mod - not installed."}
+        result = modscan.scan(tmp)
+        if result["verdict"] == "blocked":
+            APP.alerts.raise_("mod:%s:%s" % (I().id, name), "A mod update failed the virus check: %s" % name,
+                              "\n".join(result["reasons"]) + "\nThe old version is still installed.")
+            return 422, {"ok": False, "blocked": True, "reasons": result["reasons"], "error": "The update failed the virus check - the old version stays."}
+        dest = os.path.join(I().CLIENT_DIR if u["enabled"] else I().DISABLED_DIR, name)
+        if not IS_WIN:
+            os.chmod(tmp, 0o664)
+        os.replace(tmp, dest) if os.path.dirname(tmp) == os.path.dirname(dest) else shutil.move(tmp, dest)
+        modscan.remember(dest, result.get("sha256"))
+        u.update({"update": False, "have": got["version"], "have_id": got["version_id"]})
+        return 200, {"version": got["version"]}
+    finally:
+        shutil.rmtree(tdir, ignore_errors=True)
+
+
+def update_mods(names, ups):
+    """Update several mods of the current server one by one. Returns ([names updated], [(name, error)])."""
+    done, failed = [], []
+    for i, n in enumerate(names):
+        if i:
+            time.sleep(1)                      # be polite to beamng.com
+        st, r = apply_mod_update(n, ups[n])
+        if st == 200:
+            done.append(n)
+        else:
+            failed.append((n, r.get("error") or "failed"))
+    return done, failed
 
 
 # ----------------------------------------------------------------------------- mod browser (BeamNG repository)
@@ -3630,7 +6063,7 @@ def ntfy_send(title, message, level="info", click=None):
 # ----------------------------------------------------------------------------- in-game tools: /tp and /repair
 TOOLS_MOD = "easyserver_tools.zip"
 TOOLS_DEFAULTS = {"tp": False, "tp_cd": 60, "repair": "free", "repair_cd": 5, "suggest": True}
-TOOLS_MODSCRIPT = """-- BeamMP EasyServer: in-game tools (/tp, /repair). Loaded by BeamNG when you join a server that uses it.
+TOOLS_MODSCRIPT = """-- BeamMP EasyServer: in-game tools (/tp, /repair, games on screen). Loaded by BeamNG when you join a server that uses it.
 load("easyserverTools")
 setExtensionUnloadMode("easyserverTools", "manual")
 """
@@ -3639,7 +6072,9 @@ TOOLS_CLIENT_LUA = r"""-- BeamMP EasyServer in-game tools (client side).
 -- only moves or repairs YOUR OWN car when the server tells it to, and turns
 -- off the reset keys while the server has "repair with cooldown" or "no
 -- repairs" switched on. It also shows the server's chat commands as you type
--- "/" in the chat. It does nothing on other servers or in single player.
+-- "/" in the chat, and the server's games on screen (race checkpoints, a lap
+-- timer, cops and robbers above their cars). It does nothing on other servers
+-- or in single player.
 local M = {}
 
 -- Command suggestions in the BeamMP chat box: the server sends the commands this
@@ -3788,6 +6223,311 @@ local function clearCmds()
   if cmdList ~= "[]" then cmdList = "[]" pushCmds() end
 end
 
+-- Games on screen: the server sends this player's race / lap / cops-and-robbers state (esHud)
+-- and which cars are cops and robbers (esTags). A small panel at the top shows the timer and
+-- position; the next checkpoint is drawn on the road, and COP / ROBBER above those cars.
+local HUD_JS = [==[(function (s) {
+  var H = window.__esHud;
+  if (!H) {
+    H = window.__esHud = { s: null, at: 0, dist: -1, box: null, big: null };
+    var css = document.createElement("style");
+    css.textContent = "#es-hud{position:fixed;top:64px;left:50%;transform:translateX(-50%);z-index:2147482000;min-width:240px;" +
+      "max-width:560px;padding:8px 18px 10px;border-radius:10px;background:rgba(14,16,22,.82);border:1px solid rgba(255,255,255,.12);" +
+      "color:#eee;font:14px/1.35 'Noto Sans',sans-serif;text-align:center;pointer-events:none;box-shadow:0 6px 20px rgba(0,0,0,.45)}" +
+      "#es-hud .t{font-size:30px;font-weight:700;letter-spacing:.5px;font-variant-numeric:tabular-nums;color:#fff}" +
+      "#es-hud .l{font-size:15px;font-weight:600;margin-top:1px}#es-hud .s{color:#b8b8b8;margin-top:2px}" +
+      "#es-hud .bar{height:6px;border-radius:3px;background:rgba(255,255,255,.15);margin-top:6px;overflow:hidden}" +
+      "#es-hud .bar i{display:block;height:100%;width:0}" +
+      "#es-hud.cop .t{color:#5aa2ff}#es-hud.robber .t{color:#ff5a5a}#es-hud.out .t{color:#9a9a9a}" +
+      "#es-big{position:fixed;top:30%;left:50%;transform:translate(-50%,-50%);z-index:2147482000;pointer-events:none;" +
+      "font:800 120px/1 'Noto Sans',sans-serif;color:#fff;text-shadow:0 4px 18px rgba(0,0,0,.7)}";
+    document.head.appendChild(css);
+    var el = function (id) { var d = document.createElement("div"); d.id = id; d.style.display = "none"; document.body.appendChild(d); return d; };
+    H.box = el("es-hud"); H.big = el("es-big");
+    var pad = function (n, w) { n = String(n); while (n.length < w) n = "0" + n; return n; };
+    H.time = function (ms) {
+      ms = Math.max(0, Math.floor(ms));
+      var m = Math.floor(ms / 60000), sec = Math.floor(ms / 1000) % 60;
+      return m + ":" + pad(sec, 2) + "." + pad(ms % 1000, 3);
+    };
+    H.clock = function (sec) { sec = Math.max(0, Math.ceil(sec)); return Math.floor(sec / 60) + ":" + pad(sec % 60, 2); };
+    H.m = function () { return H.dist >= 0 ? " · " + Math.round(H.dist) + " m" : ""; };
+    H.row = function (cls, text) { var d = document.createElement("div"); d.className = cls; d.textContent = text; H.box.appendChild(d); return d; };
+    H.t = function (k) {                // the server's language (event esLang); {} and {1} like the chat
+      var a = arguments, i = 1, L = window.__esLang || {};
+      return String(L[k] || k).replace(/\{(\d*)\}/g, function (_, d) { var v = d ? a[+d] : a[i++]; return v == null ? "" : String(v); });
+    };
+    H.cp = function (s) {
+      if (!s.cp) return "";
+      if (s.cpn === 0) return H.t("Start line") + H.m();
+      return (s.fin ? H.t(s.last ? "Finish line" : "Lap line") : H.t("Checkpoint {}/{}", s.cpn, s.cps - 1)) + H.m();
+    };
+    H.draw = function () {
+      var s = H.s, now = Date.now(), dt = (now - H.at) / 1000;
+      if (!s) { H.big.style.display = "none"; H.box.style.display = "none"; return; }
+      H.box.textContent = ""; H.box.className = ""; H.big.style.display = "none";
+      var left = Math.max(0, (s.left || 0) - dt), go = (s.go || 0) - dt;
+      if (s.k === "race") {
+        if (s.st === "join") {
+          H.row("l", H.t(s.laps === 1 ? "Race on {} · {} lap" : "Race on {} · {} laps", s.track, s.laps));
+          H.row("s", H.t("Starts in {} - drive to the start line", H.clock(left)) + H.m());
+        } else if (s.st === "countdown") {
+          H.row("l", H.t("Race on {}", s.track));
+          H.row("s", H.t("Get ready") + H.m());
+          H.big.style.display = "block"; H.big.textContent = go > 0 ? String(Math.ceil(go)) : H.t("GO!");
+        } else if (s.st === "done") {
+          H.row("t", H.time(s.ms));
+          H.row("l", H.t("Finished P{}", s.pos) + (s.of > 1 ? "/" + s.of : "") + " · " + s.track);
+        } else {
+          H.row("t", H.time((s.ms || 0) + dt * 1000));
+          H.row("l", H.t("Lap {}/{}", s.lap, s.laps) + (s.of > 1 ? " · P" + s.pos + "/" + s.of : ""));
+          H.row("s", H.cp(s));
+          if (dt < 1.2 && s.lap === 1 && (s.ms || 0) < 1500) { H.big.style.display = "block"; H.big.textContent = H.t("GO!"); }
+        }
+      } else if (s.k === "lap") {
+        H.row("t", H.time((s.ms || 0) + dt * 1000));
+        H.row("l", s.track + (s.best ? " · " + H.t("Best {}", H.time(s.best)) : ""));
+        H.row("s", H.cp(s));
+      } else if (s.k === "cnr") {
+        if (s.st === "join") {
+          H.row("l", H.t("Cops and robbers"));
+          H.row("s", H.t("Starts in {}", H.clock(left)));
+        } else {
+          H.box.className = s.role;
+          H.row("t", H.t(s.role === "cop" ? "COP" : s.role === "robber" ? "ROBBER" : "OUT"));
+          if (s.role === "out") { H.row("s", H.t("Busted - watch the rest of the game")); }
+          else if (s.st === "head") {
+            H.row("l", H.t(s.role === "cop" ? "You start in {}" : "Head start: {} - get away!", H.clock(go)));
+          } else {
+            H.row("l", H.t("{} left", H.clock(left)) + " · " + H.t(s.free === 1 ? "{} robber free" : "{} robbers free", s.free));
+            if (s.who) {
+              var held = Math.min(s.need || 3, (s.held || 0) + dt);
+              H.row("s", s.role === "cop" ? H.t("Stopping {} - {}/{} s", s.who, held.toFixed(1), s.need || 3)
+                                          : H.t("{} is stopping you - drive away!", s.who));
+              var bar = H.row("bar", ""), fill = document.createElement("i");
+              fill.style.width = Math.round(100 * held / (s.need || 3)) + "%";
+              fill.style.background = s.role === "cop" ? "#5aa2ff" : "#ff5a5a";
+              bar.appendChild(fill);
+            }
+          }
+        }
+      }
+      H.box.style.display = H.box.childNodes.length ? "block" : "none";
+    };
+    H.set = function (s) {
+      H.s = s; H.at = Date.now();
+      if (!s) H.dist = -1;
+      H.draw();
+    };
+    window.__esHudD = function (d) { H.dist = d; };
+    setInterval(function () { H.draw(); }, 100);
+  }
+  H.set(s && typeof s === "object" ? s : null);
+})]==]
+
+local hud, hudJson, tags = nil, "null", {}
+local function pushHud()
+  pcall(function() be:queueJS(HUD_JS .. "(" .. hudJson .. ")") end)
+end
+local function num(x, lo, hi)
+  x = tonumber(x)
+  if not x or x ~= x then return nil end
+  return math.max(lo, math.min(hi, x))
+end
+local function str(x, n) return type(x) == "string" and x:sub(1, n) or nil end
+local function pt(x)
+  if type(x) ~= "table" then return nil end
+  local a, b, c = tonumber(x[1]), tonumber(x[2]), tonumber(x[3])
+  if a and b and c then return { a, b, c } end
+end
+local function onHud(data)
+  local ok, d = pcall(jsonDecode, data or "")
+  if not ok or type(d) ~= "table" or (d.k ~= "race" and d.k ~= "lap" and d.k ~= "cnr") then
+    hud, hudJson = nil, "null"
+  else
+    hud = { k = d.k, st = str(d.st, 12), track = str(d.track, 40), who = str(d.who, 40),
+      role = (d.role == "cop" or d.role == "robber" or d.role == "out") and d.role or nil,
+      laps = num(d.laps, 1, 99), lap = num(d.lap, 1, 99), pos = num(d.pos, 0, 999), of = num(d.of, 0, 999),
+      cpn = num(d.cpn, 0, 999), cps = num(d.cps, 0, 999), ms = num(d.ms, 0, 1e8), best = num(d.best, 0, 1e8),
+      left = num(d.left, 0, 7200), go = num(d.go, 0, 600), held = num(d.held, 0, 60), need = num(d.need, 1, 60),
+      free = num(d.free, 0, 999), cops = num(d.cops, 0, 999), rad = num(d.rad, 1, 100), fin = d.fin == true, last = d.last == true,
+      cp = pt(d.cp), cp2 = pt(d.cp2) }
+    hudJson = jsonEncode(hud)
+  end
+  pushHud()
+end
+local function onTags(data)
+  local ok, d = pcall(jsonDecode, data or "[]")
+  tags = {}
+  if ok and type(d) == "table" then
+    for _, x in ipairs(d) do
+      if type(x) == "table" and type(x.v) == "string" and x.v:match("^%d+%-%d+$") and (x.r == "cop" or x.r == "robber") then
+        tags[#tags + 1] = { v = x.v, r = x.r }
+      end
+    end
+  end
+end
+local function clearHud()
+  tags = {}
+  if hud then hud, hudJson = nil, "null" pushHud() end
+end
+
+-- The on-screen words in the server's language: { English = translation }, {} and {1} like the chat.
+local lang, langJson = {}, "{}"
+local function pushLang()
+  pcall(function() be:queueJS("window.__esLang=" .. langJson .. ";window.__esHud&&window.__esHud.draw()") end)
+end
+local function onLang(data)
+  local ok, d = pcall(jsonDecode, data or "{}")
+  lang = {}
+  if ok and type(d) == "table" then
+    local n = 0
+    for k, v in pairs(d) do
+      if type(k) == "string" and type(v) == "string" and #k <= 120 and #v <= 200 and n < 200 then lang[k] = v n = n + 1 end
+    end
+  end
+  langJson = jsonEncode(lang)
+  if langJson == "[]" or langJson == "" then langJson = "{}" end
+  pushLang()
+end
+local function L(key, ...)
+  local args, i = { ... }, 0
+  return (tostring(lang[key] or key):gsub("{(%d*)}", function(d)
+    if d == "" then i = i + 1 d = i else d = tonumber(d) end
+    return tostring(args[d] or "")
+  end))
+end
+
+local COLORS = { next = { 1, 0.78, 0.1 }, fin = { 0.25, 1, 0.45 }, start = { 0.2, 0.75, 1 } }
+local function drawMark(p, rgb, rad, strong, label)
+  local base = vec3(p[1], p[2], p[3] - 0.6)
+  local c = function(a) return ColorF(rgb[1], rgb[2], rgb[3], a) end
+  if strong then debugDrawer:drawCylinder(base, base + vec3(0, 0, 0.12), rad, c(0.2)) end
+  debugDrawer:drawCylinder(base, base + vec3(0, 0, 30), strong and 0.5 or 0.35, c(strong and 0.6 or 0.25))
+  if label then
+    debugDrawer:drawTextAdvanced(base + vec3(0, 0, 4), String(label), ColorF(1, 1, 1, 1), true, false,
+      ColorI(math.floor(rgb[1] * 160), math.floor(rgb[2] * 160), math.floor(rgb[3] * 160), 210))
+  end
+end
+
+local drawFailed, distT = false, 0
+local function drawGames(dt)
+  local mine = be:getPlayerVehicle(0)
+  local myPos = mine and vec3(mine:getPosition())
+  if hud and hud.cp then
+    local rgb = hud.cpn == 0 and COLORS.start or (hud.fin and COLORS.fin or COLORS.next)
+    local label = hud.cpn == 0 and L("START") or (hud.fin and L(hud.last and "FINISH" or "LAP") or L("CHECKPOINT {}", hud.cpn))
+    drawMark(hud.cp, rgb, hud.rad or 15, true, label)
+    if hud.cp2 then drawMark(hud.cp2, COLORS.next, hud.rad or 15, false, nil) end
+    distT = distT + (dt or 0)
+    if distT >= 0.25 then
+      distT = 0
+      if myPos then
+        local d = (myPos - vec3(hud.cp[1], hud.cp[2], hud.cp[3])):length()
+        pcall(function() be:queueJS("window.__esHudD&&window.__esHudD(" .. math.floor(d) .. ")") end)
+      end
+    end
+  end
+  if #tags > 0 and MPVehicleGE and MPVehicleGE.getGameVehicleID then
+    local cam = core_camera and core_camera.getPosition and core_camera.getPosition()
+    for _, t in ipairs(tags) do
+      local gid = MPVehicleGE.getGameVehicleID(t.v)
+      local obj = gid and gid ~= -1 and be:getObjectByID(gid)
+      if obj and not (MPVehicleGE.isOwn and MPVehicleGE.isOwn(gid)) then
+        local pos = vec3(obj:getPosition()) + vec3(0, 0, 2.4)
+        if not cam or (pos - cam):length() < 400 then
+          local cop = t.r == "cop"
+          debugDrawer:drawTextAdvanced(pos, String(L(cop and "COP" or "ROBBER")), ColorF(1, 1, 1, 1), true, false,
+            cop and ColorI(30, 90, 230, 230) or ColorI(215, 35, 35, 230))
+        end
+      end
+    end
+  end
+end
+
+-- Drift scoring, when the server has it on (esDriftCfg): points for every second the car slides
+-- sideways - more for a bigger angle and more speed. Straighten up for 1.5 s and the drift is banked
+-- and sent to the server for the leaderboard; hit something and it's lost.
+local DRIFT_JS = [==[(function (st, pts, ang, sec) {
+  var D = window.__esDrift;
+  if (!D) {
+    D = window.__esDrift = { el: null, hideAt: 0 };
+    var css = document.createElement("style");
+    css.textContent = "#es-drift{position:fixed;bottom:20%;left:50%;transform:translateX(-50%);z-index:2147482000;pointer-events:none;" +
+      "text-align:center;font:700 15px/1.2 'Noto Sans',sans-serif;color:#fff;text-shadow:0 2px 10px rgba(0,0,0,.85)}" +
+      "#es-drift .p{font-size:46px;font-weight:800;font-variant-numeric:tabular-nums}#es-drift .k{color:#ffb070;letter-spacing:2px}" +
+      "#es-drift .s{color:#d0d0d0}#es-drift.done .p{color:#5dff8a}#es-drift.lost .p{color:#ff5a5a;text-decoration:line-through}";
+    document.head.appendChild(css);
+    D.el = document.createElement("div"); D.el.id = "es-drift"; D.el.style.display = "none"; document.body.appendChild(D.el);
+    setInterval(function () { if (D.hideAt && Date.now() > D.hideAt) { D.el.style.display = "none"; D.hideAt = 0; } }, 200);
+  }
+  var t = function (k) {
+    var a = arguments, i = 1, L = window.__esLang || {};
+    return String(L[k] || k).replace(/\{(\d*)\}/g, function (_, d) { var v = d ? a[+d] : a[i++]; return v == null ? "" : String(v); });
+  };
+  if (st === "off") { D.el.style.display = "none"; D.hideAt = 0; return; }
+  D.el.className = st; D.el.textContent = "";
+  var row = function (c, x) { var d = document.createElement("div"); d.className = c; d.textContent = x; D.el.appendChild(d); };
+  row("k", t(st === "lost" ? "DRIFT LOST" : "DRIFT"));
+  row("p", (st === "done" ? "+" : "") + Math.floor(pts));
+  if (st === "on") row("s", t("Angle {}° · {} s", Math.round(ang), Number(sec).toFixed(1)));
+  D.el.style.display = "block";
+  D.hideAt = Date.now() + (st === "on" ? 1500 : 2500);
+})]==]
+local drift = { on = false, active = false, pts = 0, secs = 0, calm = 0, ang = 0, kmh = 0, push = 0, failed = false }
+local function driftPush(st)
+  pcall(function() be:queueJS(DRIFT_JS .. string.format('("%s",%d,%d,%.2f)', st, math.floor(drift.pts), math.floor(drift.ang), drift.secs)) end)
+end
+local function driftEnd(lost)
+  if drift.pts >= 50 then
+    if not lost and TriggerServerEvent then
+      TriggerServerEvent("esDrift", string.format('{"s":%d,"t":%.2f}', math.floor(drift.pts), drift.secs))
+    end
+    driftPush(lost and "lost" or "done")
+  end
+  drift.active, drift.pts, drift.secs, drift.calm = false, 0, 0, 0
+end
+
+-- cfg and myVehicle are set up below; driftStep only runs once the server has said drift is on
+local myVehicle
+local function driftStep(dt)
+  if not dt or dt <= 0 or dt > 0.25 then return end           -- paused, or a hitch: skip the frame
+  local v = myVehicle and myVehicle()
+  if not v or (hud and (hud.k == "race" or hud.k == "cnr")) then
+    if drift.active then driftEnd(true) end
+    return
+  end
+  local vel, dir = vec3(v:getVelocity()), vec3(v:getDirectionVector())
+  local kmh = vel:length() * 3.6
+  local lv, ld = math.sqrt(vel.x ^ 2 + vel.y ^ 2), math.sqrt(dir.x ^ 2 + dir.y ^ 2)
+  local ang = 0
+  if lv > 1 and ld > 0.1 then
+    ang = math.deg(math.acos(math.max(-1, math.min(1, (vel.x * dir.x + vel.y * dir.y) / (lv * ld)))))
+  end
+  local braked = (drift.kmh - kmh) / dt                       -- km/h lost per second
+  drift.kmh = kmh
+  if drift.active and braked > 150 then driftEnd(true) return end  -- that was a wall, not the brakes
+  if kmh >= 25 and ang >= 12 and ang <= 120 then
+    drift.active, drift.calm, drift.ang = true, 0, ang
+    drift.secs = drift.secs + dt
+    drift.pts = drift.pts + dt * (math.min(ang, 90) - 10) * math.min(kmh, 200) / 20
+  elseif drift.active then
+    drift.calm = drift.calm + dt
+    if drift.calm >= 1.5 then driftEnd(false) return end
+  end
+  if drift.active then
+    drift.push = drift.push + dt
+    if drift.push >= 0.1 then drift.push = 0 driftPush("on") end
+  end
+end
+local function onDriftCfg(data)
+  drift.on = data == "1"
+  if not drift.on then
+    if drift.active then driftEnd(true) end
+    driftPush("off")
+  end
+end
+
 local cfg = { tp = false, repair = "free" }
 local FILTER = "easyserver_noreset"
 local RESET_ACTIONS = { "reset_physics", "reset_all_physics", "recover_vehicle", "recover_vehicle_alt",
@@ -3804,7 +6544,7 @@ local function setBlock(on)
   end)
 end
 
-local function myVehicle()
+function myVehicle()
   local v = be:getPlayerVehicle(0)
   if v and MPVehicleGE and MPVehicleGE.isOwn and not MPVehicleGE.isOwn(v:getID()) then return nil end
   return v
@@ -3852,6 +6592,10 @@ local function register()
   AddEventHandler("esTpTo", onTpTo)
   AddEventHandler("esRepair", onRepair)
   AddEventHandler("esCmds", onCmds)
+  AddEventHandler("esHud", onHud)
+  AddEventHandler("esTags", onTags)
+  AddEventHandler("esLang", onLang)
+  AddEventHandler("esDriftCfg", onDriftCfg)
 end
 
 M.onExtensionLoaded = function() register() end
@@ -3861,9 +6605,22 @@ M.onWorldReadyState = function(state)
     if TriggerServerEvent then TriggerServerEvent("esToolsHello", "") end
   end
 end
-M.onUiReady = function() if cmdList ~= "[]" then pushCmds() end end
-M.onExtensionUnloaded = function() setBlock(false) clearCmds() end
-M.onClientEndMission = function() setBlock(false) clearCmds() end
+M.onPreRender = function(dt, dtSim)
+  if drift.on and not drift.failed then
+    local ok, err = pcall(driftStep, type(dtSim) == "number" and dtSim or dt)
+    if not ok then drift.failed = true log("E", "easyserverTools", "drift scoring failed: " .. tostring(err)) end
+  end
+  if drawFailed or (not hud and #tags == 0) then return end
+  local ok, err = pcall(drawGames, dt)
+  if not ok then drawFailed = true log("E", "easyserverTools", "drawing the games failed: " .. tostring(err)) end
+end
+M.onUiReady = function()
+  if cmdList ~= "[]" then pushCmds() end
+  if langJson ~= "{}" then pushLang() end
+  if hud then pushHud() end
+end
+M.onExtensionUnloaded = function() setBlock(false) clearCmds() clearHud() onDriftCfg("0") end
+M.onClientEndMission = function() setBlock(false) clearCmds() clearHud() onDriftCfg("0") end
 
 return M
 """
@@ -3915,11 +6672,65 @@ def tools_wanted(d):
     return bool(d["tp"] or d["repair"] != "free" or d.get("suggest", True))
 
 
+# ----------------------------------------------------------------------------- game chat language
+# What the plugin says in the chat (and the helper mod shows on screen), in the language the owner picks
+# (Config -> Welcome message & announcements). The translations are the "game" part of lang/xx.json;
+# the plugin reads chatlang.tsv: English <TAB> translation [<TAB> hud]. tools/game_i18n.py lists them.
+GAME_HUD_TEXT = (
+    "Race on {} · {} lap", "Race on {} · {} laps", "Starts in {} - drive to the start line", "Race on {}", "Get ready",
+    "Finished P{}", "Lap {}/{}", "Start line", "Finish line", "Lap line", "Checkpoint {}/{}", "Best {}",
+    "Cops and robbers", "Starts in {}", "COP", "ROBBER", "OUT", "Busted - watch the rest of the game",
+    "You start in {}", "Head start: {} - get away!", "{} left", "{} robber free", "{} robbers free",
+    "Stopping {} - {}/{} s", "{} is stopping you - drive away!", "GO!", "START", "FINISH", "LAP", "CHECKPOINT {}",
+    "DRIFT", "DRIFT LOST", "Angle {}° · {} s",
+)
+
+
+def chat_lang_text(code):
+    """chatlang.tsv for a language code ("" = English: empty)."""
+    if not code or not re.fullmatch(r"[a-z]{2}(?:-[a-z]{2})?", code):
+        return ""
+    try:
+        with open(os.path.join(LANG_DIR, code + ".json"), encoding="utf-8") as f:
+            game = json.load(f).get("game") or {}
+    except (OSError, ValueError):
+        return ""
+    clean = lambda x: re.sub(r"[\t\r\n]+", " ", str(x)).strip()
+    hud = set(GAME_HUD_TEXT)
+    lines = []
+    for en, tr in game.items():
+        if isinstance(tr, str) and clean(tr) and clean(en):
+            lines.append("%s\t%s%s" % (clean(en), clean(tr), "\thud" if en in hud else ""))
+    return "".join(l + "\n" for l in lines)
+
+
+def ensure_chat_lang(inst=None):
+    """Keep the plugin's chatlang.tsv in step with the chosen language (and with updated translations)."""
+    inst = inst or I()
+    path = os.path.join(inst.STATS_DIR, "chatlang.tsv")
+    want = chat_lang_text(inst.meta.get("chat_lang") or "")
+    if shared_read(path, 1024 * 1024) != want:
+        shared_write(path, want)
+
+
+def games_want_mod(inst):
+    """Races, cops and robbers and lap times are drawn on screen by the same mod."""
+    sd = inst.STATS_DIR
+    if re.search(r"^mode=on\s*$", shared_read(os.path.join(sd, "laps.txt"), 4096), re.M):
+        return True
+    on = {"race": True, "cnr": True, "drift": False}   # the plugin's defaults when games.txt doesn't say
+    for line in shared_read(os.path.join(sd, "games.txt"), 4096).splitlines():
+        k, _, v = line.partition("=")
+        if k in on:
+            on[k] = v.strip() == "on"
+    return any(on.values())
+
+
 def ensure_tools_mod(inst=None):
-    """Put the client mod in place when a tool is on, keep it up to date, remove it when everything is off.
+    """Put the client mod in place when a tool or a game is on, keep it up to date, remove it when everything is off.
     Returns "added", "updated", "removed" or ""."""
     inst = inst or I()
-    want = tools_wanted(read_tools(inst))
+    want = tools_wanted(read_tools(inst)) or games_want_mod(inst)
     path = os.path.join(inst.CLIENT_DIR, TOOLS_MOD)
     if not want:
         if os.path.exists(path):
@@ -3946,6 +6757,774 @@ def ensure_tools_mod(inst=None):
     except Exception:
         pass
     return how
+
+
+# ----------------------------------------------------------------------------- vehicle rules (Config -> Vehicle rules)
+# Read by the EasyServerStats plugin (vehicles.txt). The plugin cancels a spawn
+# or a swap to a blocked model, so the car never appears for anyone.
+# Base-game model names ("jbeam" names). A wrong or old name in these lists
+# does nothing - it just never matches.
+BASE_CARS = ("autobello", "barstow", "bastion", "bluebuck", "bolide", "burnside", "bx", "citybus", "covet", "etk800",
+             "etkc", "etki", "fullsize", "hopper", "lansdale", "legran", "md_series", "midsize", "midtruck", "miramar",
+             "moonhawk", "pessima", "pickup", "pigeon", "racetruck", "roamer", "rockbouncer", "sbr", "scintilla",
+             "sunburst", "us_semi", "van", "vivace", "wendover", "wigeon")
+BASE_TRAILERS = ("boxutility", "boxutility_large", "caravan", "cargotrailer", "dolly", "dryvan", "flatbed",
+                 "frameless_dump", "tanker", "tiltdeck")
+BASE_PROPS = ("ball", "barrels", "barrier", "blockwall", "bollard", "cannon", "chair", "christmas_tree", "cones", "couch",
+              "flail", "gate", "haybale", "inflated_mat", "kickplate", "mattress", "metal_box", "metal_ramp", "piano",
+              "rocks", "roadsigns", "sawhorse", "streetlight", "tirestacks", "tirewall", "trafficbarrel", "tube", "wall",
+              "weightpad", "woodcrate", "woodplanks")
+# Big physics props - the usual reason a whole server suddenly lags.
+BASE_HEAVY_PROPS = ("large_angletoy", "large_bridge", "large_cannon", "large_crusher", "large_hamster_wheel", "large_roller",
+                    "large_spinner", "large_tilt", "large_tire", "shipping_container", "suspensionbridge", "testroller")
+JBM_RE = re.compile(r"[A-Za-z0-9_.\-]{1,80}")
+VEH_DEFAULTS = {"on": False, "cooldown": 0, "spam": 0, "exempt": True, "only": False, "props": False, "trailers": False,
+                "heavyprops": False, "heavymods": False, "cars": [], "allow": []}
+VEH_PRESETS = {
+    "anything": ("Anything goes", "No limits - every car and prop is allowed.",
+                 {"on": False, "props": False, "trailers": False, "heavyprops": False, "heavymods": False, "cooldown": 0, "spam": 0}),
+    "chill": ("No chaos", "Props and heavy mod cars off, spawn spam stopped. Good for public servers.",
+              {"on": True, "props": True, "trailers": False, "heavyprops": True, "heavymods": True, "cooldown": 5, "spam": 6}),
+    "racing": ("Racing", "No props or trailers, no heavy cars, 10 s between spawns.",
+               {"on": True, "props": True, "trailers": True, "heavyprops": True, "heavymods": True, "cooldown": 10, "spam": 4}),
+    "roleplay": ("Roleplay", "Trailers allowed for jobs, props and heavy cars off, 30 s between spawns.",
+                 {"on": True, "props": True, "trailers": False, "heavyprops": True, "heavymods": True, "cooldown": 30, "spam": 4}),
+}
+# A car mod is "heavy" from these counts (all parts in the mod, so it's an upper estimate).
+HEAVY_NODES, HEAVY_BEAMS = 4000, 24000
+_MODVEH_CACHE = {}
+
+
+def clean_jbm(v):
+    v = str(v or "").strip()
+    return v if JBM_RE.fullmatch(v) else None
+
+
+def _jbeam_counts(text):
+    """Rough node and beam counts of a .jbeam file (rows of the "nodes" and "beams" tables)."""
+    nodes = beams = 0
+    for m in re.finditer(r'"(nodes|beams)"\s*:\s*\[', text):
+        i, depth, start = m.end(), 1, m.end()
+        while i < len(text) and depth:
+            c = text[i]
+            if c == "[":
+                depth += 1
+            elif c == "]":
+                depth -= 1
+            i += 1
+        body = text[start:i]
+        if m.group(1) == "nodes":
+            nodes += len(re.findall(r'\[\s*"[^"\n]+"\s*,\s*-?\d', body))
+        else:
+            beams += len(re.findall(r'\[\s*"(?!id1:")[^"\n]+"\s*,\s*"[^"\n]+"', body))
+    return nodes, beams
+
+
+def mod_vehicles(path):
+    """The vehicles in a mod zip: [{jbm, name, type, nodes, beams, heavy}]. Cached per file version."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return []
+    key = (path, st.st_size, int(st.st_mtime))
+    if key in _MODVEH_CACHE:
+        return _MODVEH_CACHE[key]
+    found = {}
+    try:
+        with zipfile.ZipFile(path) as z:
+            budget = 96 * 1024 ** 2
+            for zi in z.infolist():
+                m = re.match(r"^vehicles/([^/]+)/(.+)$", zi.filename, re.I)
+                if not m or zi.is_dir() or not JBM_RE.fullmatch(m.group(1)) or m.group(1).lower() == "common":
+                    continue
+                v = found.setdefault(m.group(1).lower(), {"jbm": m.group(1), "name": "", "type": "", "nodes": 0, "beams": 0,
+                                                          "defines": False})
+                fn = m.group(2).lower()
+                if fn.startswith("info") and fn.endswith(".json") and "/" not in fn and zi.file_size < 256 * 1024 and not v["type"]:
+                    v["defines"] = True
+                    try:
+                        raw = z.read(zi).decode("utf-8", "replace")
+                        raw = re.sub(r"(?m)^\s*//.*$", "", raw)
+                        raw = re.sub(r",\s*([}\]])", r"\1", raw)
+                        info = json.loads(raw)
+                        if isinstance(info, dict):
+                            v["type"] = str(info.get("Type") or "")[:20]
+                            v["name"] = (str(info.get("Brand") or "") + " " + str(info.get("Name") or "")).strip()[:80]
+                    except (ValueError, zipfile.BadZipFile, OSError, RuntimeError):
+                        pass
+                elif fn.endswith(".jbeam") and zi.file_size <= 8 * 1024 ** 2 and budget > 0:
+                    budget -= zi.file_size
+                    try:
+                        n, b = _jbeam_counts(z.read(zi).decode("utf-8", "replace"))
+                    except (zipfile.BadZipFile, OSError, RuntimeError):
+                        continue
+                    v["nodes"] += n
+                    v["beams"] += b
+    except (zipfile.BadZipFile, OSError):
+        return []
+    out = []
+    for v in found.values():
+        t = v["type"].lower()
+        v["kind"] = "prop" if t == "prop" else "trailer" if t == "trailer" else "car"
+        v["heavy"] = v["nodes"] >= HEAVY_NODES or v["beams"] >= HEAVY_BEAMS
+        out.append(v)
+    out.sort(key=lambda x: x["jbm"].lower())
+    if len(_MODVEH_CACHE) > 400:
+        _MODVEH_CACHE.clear()
+    _MODVEH_CACHE[key] = out
+    return out
+
+
+BASE_ALL = {j.lower() for j in BASE_CARS + BASE_TRAILERS + BASE_PROPS + BASE_HEAVY_PROPS}
+
+
+def mod_needs(inst=None):
+    """{mod file: [models it adds parts to that neither the game nor another enabled mod has]}.
+    A "mod of a mod" (extra parts for someone else's car) does nothing without that car's mod."""
+    inst = inst or I()
+    per, have = {}, set(BASE_ALL)
+    try:
+        names = os.listdir(inst.CLIENT_DIR)
+    except OSError:
+        return {}
+    for n in names:
+        p = os.path.join(inst.CLIENT_DIR, n)
+        if n.lower().endswith(".zip") and n != TOOLS_MOD and os.path.isfile(p) and not os.path.islink(p):
+            vs = mod_vehicles(p)
+            per[n] = vs
+            have.update(v["jbm"].lower() for v in vs if v.get("defines"))
+    out = {}
+    for n, vs in per.items():
+        miss = sorted({v["jbm"] for v in vs if not v.get("defines") and v["jbm"].lower() not in have}, key=str.lower)
+        if miss:
+            out[n] = miss[:10]
+    return out
+
+
+def server_mod_vehicles(inst=None):
+    """{jbm lower: vehicle + "mod"} for the enabled mods of a server (only mods that add the vehicle itself)."""
+    inst = inst or I()
+    out = {}
+    try:
+        names = sorted(os.listdir(inst.CLIENT_DIR), key=str.lower)
+    except OSError:
+        return out
+    for n in names:
+        p = os.path.join(inst.CLIENT_DIR, n)
+        if n.lower().endswith(".zip") and n != TOOLS_MOD and os.path.isfile(p) and not os.path.islink(p):
+            for v in mod_vehicles(p):
+                if v.get("defines"):
+                    out.setdefault(v["jbm"].lower(), dict(v, mod=n))
+    return out
+
+
+def read_veh(inst=None):
+    inst = inst or I()
+    d = json.loads(json.dumps(VEH_DEFAULTS))
+    for line in shared_read(os.path.join(inst.STATS_DIR, "vehicles.txt"), 256 * 1024).splitlines():
+        m = re.fullmatch(r"\s*(\w+)\s*=\s*(.*?)\s*", line)
+        if not m:
+            continue
+        k, v = m.groups()
+        if k in ("on", "only", "props", "trailers", "heavyprops", "heavymods"):
+            d[k] = v.lower() == "on"
+        elif k == "exempt":
+            d[k] = v.lower() != "off"
+        elif k == "cooldown" and v.isdigit() and int(v) <= 3600:
+            d[k] = int(v)
+        elif k == "spam" and v.isdigit() and int(v) <= 120:
+            d[k] = int(v)
+        elif k in ("car", "allow") and clean_jbm(v):
+            lst = d["cars" if k == "car" else "allow"]
+            if v.lower() not in [x.lower() for x in lst] and len(lst) < 500:
+                lst.append(v)
+    return d
+
+
+def veh_blocklist(d, inst=None):
+    """[(model, reason)] the plugin should refuse, from the settings and the server's mods."""
+    out = {}
+    if d["props"]:
+        for j in BASE_PROPS:
+            out[j] = "props are turned off"
+    if d["heavyprops"]:
+        for j in BASE_HEAVY_PROPS:
+            out[j] = "big physics props are turned off"
+    if d["trailers"]:
+        for j in BASE_TRAILERS:
+            out[j] = "trailers are turned off"
+    for v in server_mod_vehicles(inst).values():
+        if d["props"] and v["kind"] == "prop":
+            out.setdefault(v["jbm"], "props are turned off")
+        elif d["trailers"] and v["kind"] == "trailer":
+            out.setdefault(v["jbm"], "trailers are turned off")
+        elif d["heavymods"] and v["heavy"]:
+            out.setdefault(v["jbm"], "this car is too heavy for the server")
+    for j in d["cars"]:
+        out[j] = "the server owner blocked it"
+    return sorted(out.items(), key=lambda kv: kv[0].lower())
+
+
+def write_veh(d, inst=None):
+    inst = inst or I()
+    lines = ["# Managed by the BeamMP EasyServer dashboard (Config -> Vehicle rules).",
+             "on=%s" % ("on" if d["on"] else "off"), "cooldown=%d" % d["cooldown"], "spam=%d" % d["spam"],
+             "exempt=%s" % ("on" if d["exempt"] else "off"), "only=%s" % ("on" if d["only"] else "off")]
+    for k in ("props", "trailers", "heavyprops", "heavymods"):
+        lines.append("%s=%s" % (k, "on" if d[k] else "off"))
+    lines += ["car=" + j for j in d["cars"]]
+    lines += ["allow=" + j for j in d["allow"]]
+    lines += ["block=%s\t%s" % (j, why) for j, why in veh_blocklist(d, inst)]
+    shared_write(os.path.join(inst.STATS_DIR, "vehicles.txt"), "\n".join(lines) + "\n")
+
+
+def veh_sync(inst=None):
+    """Rewrite vehicles.txt after mods changed, so new prop / heavy mods are covered."""
+    inst = inst or I()
+    if os.path.exists(os.path.join(inst.STATS_DIR, "vehicles.txt")):
+        write_veh(read_veh(inst), inst)
+
+
+def veh_preset_match(d):
+    for pid, (_, _, vals) in VEH_PRESETS.items():
+        if all(d.get(k) == v for k, v in vals.items()) and (pid != "anything" or not d["cars"]):
+            return pid
+    return None
+
+
+def mod_advice(inst, days=30):
+    """Mods players download but don't use: vehicle mods nobody spawned lately, map mods for maps that aren't
+    played, and the same vehicle in two mods. With the size and joining time each one costs."""
+    t_now = now()
+    mods = [m for m in list_mods() if m["enabled"] and not m["builtin"]]
+    evs = read_events(t_now - days * 86400)
+    oldest = min((e["t"] for e in evs), default=t_now)
+    covered = (t_now - oldest) / 86400.0
+    spawned = {}
+    for e in evs:
+        if e.get("ev") == "spawn":
+            j = clean_jbm(e.get("jbm"))
+            if j:
+                spawned[j.lower()] = max(spawned.get(j.lower(), 0), e["t"])
+    cur = (current_map() or "").lower()
+    rot = rotation_cfg(inst)
+    wanted = {cur} | {str(m).lower() for m in (rot["maps"] if rot["on"] else [])} | {
+        str(e.get("map") or "").lower() for e in events_cfg(inst) if e.get("on", True)}
+    out, owners = [], {}
+    for m in mods:
+        path = os.path.join(inst.CLIENT_DIR, m["name"])
+        if m["maps"]:
+            if not ({x.lower() for x in m["maps"]} & wanted) and not inst.meta.get("light_maps"):
+                out.append({"name": m["name"], "size": m["size"], "kind": "map",
+                            "why": "A map that isn't being played (not the current map%s) - every player still downloads it." % (
+                                ", the map rotation or an event" if rot["on"] or events_cfg(inst) else "")})
+            continue
+        vehs = [v for v in mod_vehicles(path) if v.get("defines")]
+        for v in vehs:
+            owners.setdefault(v["jbm"].lower(), []).append(m["name"])
+        if vehs and covered >= 7 and not any(v["jbm"].lower() in spawned for v in vehs):
+            out.append({"name": m["name"], "size": m["size"], "kind": "unused",
+                        "why": "Nobody spawned %s in the last %d days." % (
+                            ", ".join(sorted({v["name"] or v["jbm"] for v in vehs})[:3]) + (" …" if len(vehs) > 3 else ""), min(days, int(covered)))})
+    seen = {x["name"] for x in out}
+    sizes = {m["name"]: m["size"] for m in mods}
+    for jbm, names in owners.items():
+        names = sorted(set(names), key=lambda n: sizes.get(n, 0))
+        if len(names) > 1 and names[-1] not in seen:
+            seen.add(names[-1])
+            out.append({"name": names[-1], "size": sizes.get(names[-1], 0), "kind": "double",
+                        "why": "Has the same vehicle (%s) as %s - players get it twice, and only one of them works." % (jbm, ", ".join(names[:-1]))})
+    out.sort(key=lambda x: -x["size"])
+    up = float(APP.settings.get("upload_mbit") or 0) * 1000
+    lim = int((inst.meta.get("limits") or {}).get("upload_kbps") or 0)
+    kbps = min(up, lim) if up and lim else up or lim
+    total = sum(m["size"] for m in mods)
+    save = sum(x["size"] for x in out)
+    return {"items": out[:30], "save": save, "total": total, "days": min(days, int(covered)), "enough": covered >= 7,
+            "secs_now": int(total * 8 / (kbps * 1000.0)) if kbps else None,
+            "secs_after": int((total - save) * 8 / (kbps * 1000.0)) if kbps else None}
+
+
+def veh_activity(days=7):
+    """What players spawned here lately, and what the rules refused."""
+    since = now() - days * 86400
+    seen, blocked, spam = {}, [], []
+    for e in read_events(since):
+        ev = e.get("ev")
+        if ev not in ("spawn", "vehblock", "vehspam"):
+            continue
+        name = clean_player_name(e.get("name"))
+        if ev == "vehspam":
+            spam.append({"t": e["t"], "name": name, "count": e.get("count") if isinstance(e.get("count"), int) else 0})
+            continue
+        j = clean_jbm(e.get("jbm"))
+        if not j:
+            continue
+        if ev == "spawn":
+            s = seen.setdefault(j.lower(), {"jbm": j, "count": 0, "players": set(), "last": 0})
+            s["count"] += 1
+            s["players"].add(name)
+            s["last"] = e["t"]
+        else:
+            blocked.append({"t": e["t"], "name": name, "jbm": j, "why": str(e.get("why") or "")[:80]})
+    top = sorted(seen.values(), key=lambda s: -s["count"])[:60]
+    for s in top:
+        s["players"] = len(s["players"])
+    return {"seen": top, "blocked": blocked[-30:][::-1], "spam": spam[-20:][::-1], "days": days}
+
+
+def veh_kind(j, mods):
+    lj = j.lower()
+    if lj in mods:
+        v = mods[lj]
+        return ("heavy " if v["heavy"] and v["kind"] == "car" else "") + v["kind"]
+    if lj in BASE_HEAVY_PROPS:
+        return "heavy prop"
+    if lj in BASE_PROPS:
+        return "prop"
+    if lj in BASE_TRAILERS:
+        return "trailer"
+    if lj in BASE_CARS:
+        return "car"
+    return "unknown"
+
+
+# ----------------------------------------------------------------------------- server plugins (Plugins page)
+# A curated list of community plugins (docs/plugins.json on the website, with a
+# built-in copy). EasyServer downloads a plugin from its author's own GitHub
+# page, shows what will go where, and installs it only after the owner agrees.
+# Plugins run with the server's rights, so only the owner may install them.
+PLUGIN_CATALOG_URL = "https://csabika-dev.github.io/beammp-easyserver/plugins.json"
+PLUGIN_CATALOG = {'format': 'beammp-easyserver-plugins',
+ 'version': 1,
+ 'about': 'Server plugins EasyServer can install. Each one belongs to its author - EasyServer only downloads it from '
+          "the author's own GitHub page. Want yours listed? Open a pull request that adds it here.",
+ 'plugins': [{'id': 'careermp',
+              'name': 'CareerMP',
+              'author': 'StanleyDudek',
+              'repo': 'StanleyDudek/CareerMP',
+              'source': 'release',
+              'about': "BeamNG.drive's own Career Mode on your server. Saves stay on each player's PC.",
+              'notes': ['Needs MaxCars 100 or more and the West Coast USA map.',
+                        "Its README says it doesn't work with BeamNG.drive 0.39 yet - check before installing."],
+              'license': "See the author's page"},
+             {'id': 'freeroammp',
+              'name': 'freeRoamMP',
+              'author': 'StanleyDudek',
+              'repo': 'StanleyDudek/freeRoamMP',
+              'source': 'release',
+              'about': "The game's Freeroam mode with missions: deliveries, police, stunts.",
+              'notes': ['Some missions spawn many objects - set a high MaxCars.',
+                        "Its README says it doesn't work with BeamNG.drive 0.39 yet - check before installing."],
+              'license': "See the author's page"},
+             {'id': 'envsync',
+              'name': 'BeamMP Environment Sync',
+              'author': 'Evan Mulawski',
+              'repo': 'EvanMulawski/BeamMP-EnvSync',
+              'source': 'release',
+              'about': 'Everyone sees the same time of day and weather, set by the server.',
+              'notes': ['Work in progress, says its author.'],
+              'license': 'MIT'},
+             {'id': 'cobaltessentials',
+              'name': 'CobaltEssentials',
+              'author': 'Preston Elam (CobaltTetra), maintained by StanleyDudek',
+              'repo': 'StanleyDudek/CobaltEssentials',
+              'source': 'branch',
+              'folder': 'CobaltEssentials',
+              'about': 'The classic admin toolkit: permission groups, commands, RCON.',
+              'notes': ["It has its own admins, bans and commands - they overlap with EasyServer's Moderation page. "
+                        'Use one or the other.',
+                        'After installing, type "ce setgroup YourName owner" in the server console.'],
+              'license': 'All rights reserved by the author - downloaded from their page, not shipped with '
+                         'EasyServer'},
+             {'id': 'beamjoy',
+              'name': 'BeamJoy Sandbox (Revived)',
+              'author': 'Samaël (my-name-is-samael), continued by CaptainNugget',
+              'repo': 'foodcache3/BeamJoy-Revived',
+              'source': 'release',
+              'about': 'All-in-one sandbox framework with an in-game admin menu, updated for BeamNG.drive 0.39.',
+              'notes': ["Remove any other BeamJoy version first - they don't mix.",
+                        "It has its own admin system - it overlaps with EasyServer's Moderation page."],
+              'license': "See the author's page"}]}
+PLUGIN_REPO_RE = re.compile(r"[A-Za-z0-9_.\-]{1,60}/[A-Za-z0-9_.\-]{1,100}")
+PLUGIN_FOLDER_RE = re.compile(r"[A-Za-z0-9_.\-]{1,64}")
+PLUGIN_ID_RE = re.compile(r"[a-z0-9_\-]{1,40}")
+PLUGIN_HOSTS = ("github.com", "api.github.com", "codeload.github.com", "objects.githubusercontent.com",
+                "release-assets.githubusercontent.com")
+PLUGIN_MAX = 300 * 1024 ** 2
+PLUGINS_FILE = os.path.join(DATA_DIR, "plugins.json")
+PLUGIN_JOBS = {}
+_PLUGCAT = {"t": 0, "data": None}
+OWN_PLUGIN = "EasyServerStats"
+
+
+def plugin_entry_ok(p):
+    if not isinstance(p, dict) or not PLUGIN_ID_RE.fullmatch(str(p.get("id", ""))):
+        return None
+    if not PLUGIN_REPO_RE.fullmatch(str(p.get("repo", ""))) or p.get("source", "release") not in ("release", "branch"):
+        return None
+    if p.get("folder") and not PLUGIN_FOLDER_RE.fullmatch(str(p["folder"])):
+        return None
+    txt = lambda k, n: re.sub(r"[\x00-\x1f]", " ", str(p.get(k) or ""))[:n]
+    return {"id": p["id"], "name": txt("name", 60) or p["id"], "author": txt("author", 120), "repo": p["repo"],
+            "source": p.get("source", "release"), "folder": p.get("folder") or "", "about": txt("about", 300),
+            "license": txt("license", 120), "page": "https://github.com/" + p["repo"],
+            "notes": [re.sub(r"[\x00-\x1f]", " ", str(n))[:240] for n in (p.get("notes") or [])[:5] if isinstance(n, str)]}
+
+
+def plugin_catalog():
+    """The catalog from the website (refreshed every 6 hours), or the copy built into this version."""
+    if _PLUGCAT["data"] and now() - _PLUGCAT["t"] < 6 * 3600:
+        return _PLUGCAT["data"]
+    data = PLUGIN_CATALOG
+    try:
+        req = urllib.request.Request(PLUGIN_CATALOG_URL, headers={"User-Agent": "BeamMP-EasyServer/" + EASY_VERSION})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            d = json.loads(r.read(512 * 1024).decode("utf-8"))
+        if isinstance(d, dict) and d.get("format") == "beammp-easyserver-plugins" and isinstance(d.get("plugins"), list):
+            data = d
+    except (OSError, ValueError):
+        pass
+    out = [e for e in (plugin_entry_ok(p) for p in data.get("plugins", [])[:200]) if e]
+    _PLUGCAT.update(t=now(), data=out)
+    return out
+
+
+def _plug_read():
+    try:
+        with open(PLUGINS_FILE, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _plug_write(d):
+    tmp = PLUGINS_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(d, f, indent=1)
+    os.replace(tmp, PLUGINS_FILE)
+
+
+def plugin_records(inst=None):
+    return _plug_read().get((inst or I()).id, {})
+
+
+def plugin_server_dir(inst=None):
+    return os.path.join((inst or I()).RES, "Server")
+
+
+def plugin_off_dir(inst=None):
+    return os.path.join(DATA_DIR, "plugins-off", (inst or I()).id)
+
+
+WIN_RESERVED_RE = re.compile(r"(?i)(con|prn|aux|nul|com\d|lpt\d)(\..*)?")
+
+
+def _zip_member_ok(zi):
+    n = zi.filename.replace("\\", "/")
+    if n.startswith("/") or re.match(r"^[A-Za-z]:", n) or any(p in ("..",) for p in n.split("/")):
+        return False
+    # ":" would write a hidden NTFS stream on Windows; "CON", "NUL" ... hang or fail there
+    if any(c in n for c in ':*?"<>|\x00') or any(WIN_RESERVED_RE.fullmatch(p) for p in n.split("/") if p):
+        return False
+    if (zi.external_attr >> 16) & 0o170000 == 0o120000:      # symbolic link
+        return False
+    return True
+
+
+def plugin_plan(path, folder_hint=""):
+    """What a plugin zip would install: {"server": {folder: [files]}, "client": [zip names], "skipped": n}.
+    Understands Resources/Server + Resources/Client, Server + Client, and a bare plugin folder."""
+    with zipfile.ZipFile(path) as z:
+        infos = [zi for zi in z.infolist() if not zi.is_dir()]
+        if len(infos) > 5000:
+            raise RuntimeError("This file has more than 5000 files - that's not a normal plugin.")
+        for zi in infos:
+            if not _zip_member_ok(zi):
+                raise RuntimeError("The file contains an unsafe path (%s) - not installed." % zi.filename[:120])
+        names = [zi.filename.replace("\\", "/") for zi in infos]
+    server, client, used = {}, [], set()
+    for n in names:
+        m = re.match(r"^(?:[^/]+/)*?(?:Resources/)?Server/([^/]+)/(.+)$", n)
+        if m and not re.search(r"(^|/)Client/", n.split("Server/")[0]):
+            server.setdefault(m.group(1), []).append((n, m.group(2)))
+            used.add(n)
+            continue
+        m = re.match(r"^(?:[^/]+/)*?(?:Resources/)?Client/([^/]+\.zip)$", n, re.I)
+        if m:
+            client.append((n, m.group(1)))
+            used.add(n)
+    if not server and not client:
+        # a bare plugin: the folder that holds .lua files at its top
+        tops = sorted({n.rsplit("/", 1)[0] if "/" in n else "" for n in names if n.lower().endswith(".lua")}, key=len)
+        if tops:
+            root = tops[0]
+            folder = folder_hint or (root.rsplit("/", 1)[-1] if root else "") or os.path.splitext(os.path.basename(path))[0]
+            folder = re.sub(r"-(master|main)$", "", folder)
+            pre = root + "/" if root else ""
+            for n in names:
+                if n.startswith(pre) and not re.search(r"(^|/)\.(git|github)(/|$)", n[len(pre):]):
+                    server.setdefault(folder, []).append((n, n[len(pre):]))
+                    used.add(n)
+    for f in list(server):
+        if not PLUGIN_FOLDER_RE.fullmatch(f) or WIN_RESERVED_RE.fullmatch(f) or f.strip(".") == "":
+            raise RuntimeError("The plugin folder name \"%s\" isn't allowed." % f[:60])
+        if f.lower() == OWN_PLUGIN.lower():
+            raise RuntimeError("The file tries to replace EasyServer's own plugin - not installed.")
+    for _, c in client:
+        if not safe_zip_name(c) or c == TOOLS_MOD:
+            raise RuntimeError("The client mod name \"%s\" isn't allowed." % c[:60])
+    if not server and not client:
+        raise RuntimeError("No server plugin found in this file (no .lua files, no Resources/Server folder).")
+    return {"server": {f: [m for m in v] for f, v in server.items()}, "client": client, "skipped": len(names) - len(used)}
+
+
+def plan_public(plan):
+    return {"server": [{"folder": f, "files": len(v), "lua": sum(1 for _, r in v if r.lower().endswith(".lua"))} for f, v in plan["server"].items()],
+            "client": [c for _, c in plan["client"]], "skipped": plan["skipped"]}
+
+
+def _move_new(src, dest):
+    """Move to a path that must not exist yet. A link or folder that appeared there in the meantime
+    (the game server's user can write to Resources/Server) is refused instead of being followed."""
+    if os.path.lexists(dest):
+        raise RuntimeError("%s appeared while installing - not overwritten. Try again." % os.path.basename(dest))
+    try:
+        os.rename(src, dest)
+    except OSError:
+        if os.path.lexists(dest):
+            raise
+        shutil.move(src, dest)
+
+
+def plugin_install(path, plan, rec_id, meta, inst=None, replace=False):
+    """Unpack a planned plugin. Client mods get the virus check. Returns the record."""
+    inst = inst or I()
+    sdir = plugin_server_dir(inst)
+    recs = plugin_records(inst)
+    mine = recs.get(rec_id, {})
+    for f in plan["server"]:
+        dest = os.path.join(sdir, f)
+        if os.path.exists(dest) and not (replace and f in mine.get("server", [])):
+            raise RuntimeError("A plugin folder named %s already exists in Resources/Server." % f)
+    for _, c in plan["client"]:
+        if os.path.exists(os.path.join(inst.CLIENT_DIR, c)) and not (replace and c in mine.get("client", [])):
+            raise RuntimeError("A mod named %s already exists (Mods page)." % c)
+    tdir = tempfile.mkdtemp(dir=UPLOAD_TMP, prefix=".plug-")
+    try:
+        scans = {}
+        with zipfile.ZipFile(path) as z:
+            byname = {zi.filename.replace("\\", "/"): zi for zi in z.infolist()}
+            total = 0
+            for f, files in plan["server"].items():
+                for src, rel in files:
+                    zi = byname[src]
+                    total += zi.file_size
+                    if total > 1024 ** 3:
+                        raise RuntimeError("The plugin unpacks to more than 1 GB - not installed.")
+                    out = os.path.normpath(os.path.join(tdir, "S", f, rel))
+                    if not out.startswith(os.path.join(tdir, "S", f) + os.sep):
+                        raise RuntimeError("unsafe path")
+                    os.makedirs(os.path.dirname(out), exist_ok=True)
+                    with z.open(zi) as r, open(out, "wb") as w:
+                        shutil.copyfileobj(r, w)
+            for src, c in plan["client"]:
+                out = os.path.join(tdir, "C", c)
+                os.makedirs(os.path.dirname(out), exist_ok=True)
+                total += byname[src].file_size
+                if total > 4 * 1024 ** 3:
+                    raise RuntimeError("The plugin unpacks to more than 4 GB - not installed.")
+                with z.open(byname[src]) as r, open(out, "wb") as w:
+                    shutil.copyfileobj(r, w)
+                res = scans[c] = modscan.scan(out)
+                if res["verdict"] == "blocked":
+                    APP.alerts.raise_("mod:%s:%s" % (inst.id, c), "A plugin's client mod failed the virus check: %s" % c,
+                                      "\n".join(res["reasons"]) + "\nThe plugin was not installed.")
+                    raise RuntimeError("The plugin's client mod %s failed the virus check: %s" % (c, "; ".join(res["reasons"][:3])))
+        if replace:
+            plugin_remove(rec_id, inst, keep_record=True)
+        os.makedirs(sdir, exist_ok=True)
+        for f in plan["server"]:
+            src = os.path.join(tdir, "S", f)
+            if not IS_WIN:
+                for root, dirs, files in os.walk(src):
+                    os.chmod(root, 0o2775)
+                    for fn in files:
+                        os.chmod(os.path.join(root, fn), 0o664)
+            _move_new(src, os.path.join(sdir, f))
+        for _, c in plan["client"]:
+            src, dest = os.path.join(tdir, "C", c), os.path.join(inst.CLIENT_DIR, c)
+            if not IS_WIN:
+                os.chmod(src, 0o664)
+            _move_new(src, dest)
+            modscan.remember(dest, scans[c].get("sha256"))
+    except PermissionError:
+        raise RuntimeError("EasyServer may not write to Resources/Server yet. Run the installer once more (it updates "
+                           "the folder permissions), then try again.")
+    finally:
+        shutil.rmtree(tdir, ignore_errors=True)
+    rec = dict(meta, server=sorted(plan["server"]), client=[c for _, c in plan["client"]], installed=now(), on=True)
+    d = _plug_read()
+    d.setdefault(inst.id, {})[rec_id] = rec
+    _plug_write(d)
+    if plan["client"]:
+        refresh_mod_desc()
+        APP.config_changed()
+    return rec
+
+
+def plugin_set_on(rec_id, on, inst=None):
+    inst = inst or I()
+    d = _plug_read()
+    rec = d.get(inst.id, {}).get(rec_id)
+    if not rec:
+        raise RuntimeError("Unknown plugin")
+    off = plugin_off_dir(inst)
+    for f in rec["server"]:
+        if not PLUGIN_FOLDER_RE.fullmatch(f) or f.lower() == OWN_PLUGIN.lower():
+            continue
+        a, b = os.path.join(plugin_server_dir(inst), f), os.path.join(off, f)
+        src, dest = (b, a) if on else (a, b)
+        if os.path.isdir(src) and not os.path.islink(src) and not os.path.lexists(dest):
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            _move_new(src, dest)
+    for c in rec["client"]:
+        if not safe_zip_name(c):
+            continue
+        a, b = os.path.join(inst.CLIENT_DIR, c), os.path.join(inst.DISABLED_DIR, c)
+        src, dest = (b, a) if on else (a, b)
+        if os.path.isfile(src) and not os.path.islink(src) and not os.path.lexists(dest):
+            _move_new(src, dest)
+    rec["on"] = bool(on)
+    _plug_write(d)
+    if rec["client"]:
+        refresh_mod_desc()
+        APP.config_changed()
+
+
+def plugin_remove(rec_id, inst=None, keep_record=False):
+    inst = inst or I()
+    d = _plug_read()
+    rec = d.get(inst.id, {}).get(rec_id)
+    if not rec:
+        raise RuntimeError("Unknown plugin")
+    for f in rec["server"]:
+        if PLUGIN_FOLDER_RE.fullmatch(f) and f.lower() != OWN_PLUGIN.lower():
+            for base in (plugin_server_dir(inst), plugin_off_dir(inst)):
+                p = os.path.join(base, f)
+                if os.path.isdir(p) and not os.path.islink(p):
+                    shutil.rmtree(p)
+    for c in rec["client"]:
+        for base in (inst.CLIENT_DIR, inst.DISABLED_DIR):
+            try:
+                os.remove(os.path.join(base, c))
+            except OSError:
+                pass
+    if not keep_record:
+        d[inst.id].pop(rec_id, None)
+        _plug_write(d)
+    if rec["client"] and not keep_record:
+        refresh_mod_desc()
+        APP.config_changed()
+
+
+def plugin_errors(inst=None):
+    """{plugin folder: (count, last line)} of Lua errors in the newest part of Server.log."""
+    inst = inst or I()
+    out = {}
+    try:
+        with open_shared(inst.SERVER_LOG, "rb") as f:
+            size = os.fstat(f.fileno()).st_size
+            f.seek(max(0, size - 512 * 1024))
+            text = f.read().decode("utf-8", "replace")
+    except OSError:
+        return out
+    for line in text.splitlines():
+        if not re.search(r"(?i)lua error|\[lua\].{0,80}error|threw an error|stack traceback", line):
+            continue
+        m = re.search(r"Resources[\\/]+Server[\\/]+([A-Za-z0-9_.\-]+)", line)
+        if m:
+            c, _ = out.get(m.group(1), (0, ""))
+            out[m.group(1)] = (c + 1, line.strip()[:300])
+    return out
+
+
+def plugins_overview(inst=None):
+    inst = inst or I()
+    recs = plugin_records(inst)
+    errs = plugin_errors(inst)
+    managed = {f for r in recs.values() for f in r["server"]}
+    installed = []
+    for rid, r in sorted(recs.items()):
+        e = [errs[f] for f in r["server"] if f in errs]
+        installed.append(dict(r, id=rid, errors=sum(x[0] for x in e), last_error=e[-1][1] if e else ""))
+    other = []
+    try:
+        for n in sorted(os.listdir(plugin_server_dir(inst)), key=str.lower):
+            p = os.path.join(plugin_server_dir(inst), n)
+            if os.path.isdir(p) and n != OWN_PLUGIN and n not in managed and not n.startswith("."):
+                other.append({"folder": n, "errors": errs.get(n, (0, ""))[0], "last_error": errs.get(n, (0, ""))[1]})
+    except OSError:
+        pass
+    return {"installed": installed, "other": other, "own_errors": errs.get(OWN_PLUGIN, (0, ""))[0]}
+
+
+def _plug_get(url, accept="application/vnd.github+json"):
+    req = urllib.request.Request(url, headers={"User-Agent": "BeamMP-EasyServer/%s (plugins)" % EASY_VERSION, "Accept": accept})
+    r = urllib.request.urlopen(req, timeout=30)
+    if (urllib.parse.urlparse(r.geturl()).hostname or "") not in PLUGIN_HOSTS:
+        r.close()
+        raise RuntimeError("The download was sent to an unexpected website - stopped.")
+    return r
+
+
+def plugin_fetch(job, inst_id, entry):
+    """Background job: download a catalog plugin and work out what it would install. Stops for the owner's OK."""
+    use_server(inst_id)
+    try:
+        job.update(state="Looking up the newest version…")
+        repo = entry["repo"]
+        if entry["source"] == "release":
+            with _plug_get("https://api.github.com/repos/%s/releases/latest" % repo) as r:
+                rel = json.loads(r.read(2 * 1024 * 1024).decode("utf-8"))
+            assets = [a for a in rel.get("assets") or [] if str(a.get("name", "")).lower().endswith(".zip")]
+            url = assets[0]["browser_download_url"] if assets else rel.get("zipball_url")
+            version = str(rel.get("tag_name") or "")[:40]
+        else:
+            with _plug_get("https://api.github.com/repos/%s" % repo) as r:
+                info = json.loads(r.read(2 * 1024 * 1024).decode("utf-8"))
+            br = str(info.get("default_branch") or "main")
+            with _plug_get("https://api.github.com/repos/%s/commits/%s" % (repo, urllib.parse.quote(br))) as r:
+                sha = str(json.loads(r.read(4 * 1024 * 1024).decode("utf-8")).get("sha") or "")
+            if not re.fullmatch(r"[0-9a-f]{40}", sha):
+                raise RuntimeError("Couldn't find the newest version on GitHub.")
+            url = "https://codeload.github.com/%s/zip/%s" % (repo, sha)
+            version = br + "@" + sha[:7]
+        if not url or (urllib.parse.urlparse(url).hostname or "") not in PLUGIN_HOSTS:
+            raise RuntimeError("This plugin has no download on GitHub yet.")
+        tmp = os.path.join(job["dir"], "plugin.zip")
+        h = hashlib.sha256()
+        got = 0
+        with _plug_get(url, "application/octet-stream") as r, open(tmp, "wb") as f:
+            job.update(total=int(r.headers.get("Content-Length") or 0))
+            while True:
+                chunk = r.read(1024 * 1024)
+                if not chunk:
+                    break
+                got += len(chunk)
+                if got > PLUGIN_MAX:
+                    raise RuntimeError("too big (over 300 MB)")
+                h.update(chunk)
+                f.write(chunk)
+                job.update(done=got, state="Downloading…")
+        if not zipfile.is_zipfile(tmp):
+            raise RuntimeError("GitHub didn't send a zip file.")
+        plan = plugin_plan(tmp, entry.get("folder") or "")
+        job.update(ok=True, finished=True, state="Ready to install", review=True, plan=plan_public(plan), version=version,
+                   sha256=h.hexdigest(), size=got, _plan=plan, _path=tmp, url=url)
+    except Exception as e:
+        job.update(ok=False, finished=True, state="Failed", error=str(e) if isinstance(e, RuntimeError) else short_err(e))
 
 
 # ----------------------------------------------------------------------------- log explainer
@@ -4230,6 +7809,31 @@ def uptime_summary(iid, days=30):
 _STATUS_CACHE = {"t": 0, "data": None}
 
 
+def join_info(inst):
+    """How to join, for the status page. BeamMP has no links that open the game, so: the name to
+    search in the server list, and (only if the owner turned it on) the address for Direct Connect."""
+    g = toml_parse(APP.read_config_text())[0].get("General", {})
+    name = re.sub(r"\^.", "", str(g.get("Name") or "")).strip()[:80]
+    addr = None
+    if APP.settings.get("statuspage_address"):
+        host, port, via_relay = game_address(inst)
+        if host and (via_relay or duck_host() or public_ip()):
+            addr = {"host": host, "port": port}
+    return {"name": name, "listed": not g.get("Private") and inst.has_authkey(), "address": addr}
+
+
+DISCORD_INVITE_RE = re.compile(r"https://(discord\.gg|discord\.com/invite)/[A-Za-z0-9-]{2,32}")
+
+
+def join_estimate(inst):
+    """(seconds a new player waits for the mods or None, bytes to download) - from the upload speed the owner entered."""
+    total = sum(x["size"] for x in list_mods() if x["enabled"])
+    up = float(APP.settings.get("upload_mbit") or 0) * 1000
+    lim = int((inst.meta.get("limits") or {}).get("upload_kbps") or 0)
+    kbps = min(up, lim) if up and lim else up or lim
+    return (int(total * 8 / (kbps * 1000.0)) if total and kbps else None), total
+
+
 def public_status():
     """What the public status page shows. No addresses, no admin data."""
     if now() - _STATUS_CACHE["t"] < 20 and _STATUS_CACHE["data"]:
@@ -4247,12 +7851,34 @@ def public_status():
         state = "maintenance" if m["on"] and st["state"] == "running" else ("up" if st["state"] == "running" else
                  "asleep" if APP.sleeping else "down")
         up = uptime_summary(inst.id)
-        nxt = None
+        upcoming = []
         for e in events_cfg(inst):
             if e.get("on", True):
                 t0 = event_next_start(e, now())
-                if t0 and (nxt is None or t0 < nxt["t"]):
-                    nxt = {"name": e["name"], "t": t0, "map": map_name("/levels/%s/info.json" % e["map"]) if e.get("map") else ""}
+                if t0:
+                    upcoming.append({"name": e["name"], "t": t0, "map": map_name("/levels/%s/info.json" % e["map"]) if e.get("map") else "",
+                                     "game": EVENT_GAMES.get(e.get("game") or "", "").split(" (")[0], "text": e.get("text") or ""})
+        upcoming.sort(key=lambda x: x["t"])
+        nxt = upcoming[0] if upcoming else None
+        lc = read_laps_cfg()
+        laps = [{"name": t["name"], "kind": t["kind"], "top": [{"name": r["name"], "time": r["time"], "car": r["car"]}
+                                                               for r in t["top"]]}
+                for t in laps_summary(10, map_name(g.get("Map")) or None) if t["top"]] if lc["on"] and lc["public"] else []
+        drift, champ = [], None
+        if lc["public"]:
+            gc = read_games_cfg()
+            if gc["drift"]:
+                best = {}
+                for r in read_drift():
+                    if r["raw_map"] == str(g.get("Map") or "") and r["score"] > best.get(r["name"], {"score": -1})["score"]:
+                        best[r["name"]] = r
+                drift = [{"name": r["name"], "score": r["score"], "car": r["car"]} for r in sorted(best.values(), key=lambda r: -r["score"])[:10]]
+            if gc["champ"]:
+                rows, rounds = read_champ()
+                if rows and rounds:
+                    champ = {"name": gc["champ_name"] or "Championship", "races": rounds,
+                             "top": [{"name": r["name"], "points": r["points"], "wins": r["wins"]} for r in rows[:10]]}
+        wait, dl = join_estimate(inst)
         mods = []
         if APP.settings.get("statuspage_mods"):
             mods = [{"name": re.sub(r"\.zip$", "", x["name"], flags=re.I), "size": x["size"], "map": bool(x["maps"])}
@@ -4260,16 +7886,21 @@ def public_status():
         servers.append({"name": inst.name, "state": state, "note": m["message"] if state == "maintenance" else "",
                         "mods": mods, "download": sum(x["size"] for x in mods),
                         "players": len(players), "max": g.get("MaxPlayers"), "names": players[:50] if show_names else [],
-                        "map": map_name(g.get("Map")) or "", "uptime": st.get("uptime") or 0, "history": up, "next_event": nxt})
+                        "map": map_name(g.get("Map")) or "", "uptime": st.get("uptime") or 0, "history": up, "next_event": nxt,
+                        "events": upcoming[:5], "drift": drift, "champ": champ, "join_secs": wait, "join_bytes": dl,
+                        "laps": laps, "join": join_info(inst) if st["state"] == "running" else None})
     use_server("main")
     data = {"title": APP.settings.get("statuspage_title") or server_name() or "BeamMP server", "servers": servers,
+            "about": APP.settings.get("statuspage_about") or "", "discord": APP.settings.get("statuspage_discord") or "",
             "updated": now(), "version": EASY_VERSION}
     _STATUS_CACHE.update(t=now(), data=data)
     return data
 
 
 STATUS_HTML = r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>__TITLE__ - status</title><meta http-equiv="refresh" content="60"><style>
+<title>__TITLE__</title><meta http-equiv="refresh" content="60">
+<meta property="og:type" content="website"><meta property="og:title" content="__TITLE__"><meta property="og:description" content="__DESC__">
+<meta name="description" content="__DESC__"><meta name="twitter:card" content="summary"><style>
 :root{color-scheme:light dark;--bg:#f6f7f9;--card:#fff;--ink:#16181d;--mute:#5d6470;--line:#e3e6ea;--up:#16a34a;--down:#dc2626;--warn:#d97706;--none:#d4d8de}
 @media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#171a20;--ink:#eceff3;--mute:#9aa3ae;--line:#272b33;--none:#30353e}}
 body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
@@ -4280,7 +7911,13 @@ main{max-width:760px;margin:0 auto;padding:28px 16px}h1{font-size:24px;margin:0 
 .up .dot{background:var(--up)}.down .dot{background:var(--down)}.maintenance .dot,.asleep .dot{background:var(--warn)}
 .bars{display:flex;gap:2px;margin-top:10px;height:28px}.bars i{flex:1;border-radius:2px;background:var(--none)}
 .stats{display:flex;gap:18px;margin-top:8px}.stats b{font-size:17px}
-</style></head><body><main>__BODY__<p class="small mute" style="margin-top:22px">Updated __UPDATED__ · refreshes every minute · BeamMP EasyServer</p></main></body></html>"""
+.join{margin-top:10px;padding:10px 12px;border-radius:10px;background:var(--bg);border:1px solid var(--line)}
+code.sel{user-select:all;-webkit-user-select:all;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:1px 6px}
+.laps table{border-collapse:collapse;margin-top:6px;width:100%}.laps td{padding:3px 8px 3px 0;border-top:1px solid var(--line)}
+.mono{font-variant-numeric:tabular-nums}
+.btn{display:inline-block;padding:8px 14px;border-radius:9px;font-weight:600;text-decoration:none;background:#5865f2;color:#fff}
+.ev{padding:6px 0;border-top:1px solid var(--line)}.ev:first-of-type{border-top:0}
+</style></head><body><main>__BODY__<p class="small mute" style="margin-top:22px">Updated __UPDATED__ · refreshes every minute · __CREDIT__</p></main></body></html>"""
 
 
 def render_status_page(d):
@@ -4293,7 +7930,13 @@ def render_status_page(d):
         return '<i style="background:%s" title="%s%%"></i>' % (c, p)
     def pct(p):
         return "-" if p is None else ("%g%%" % p)
-    parts = ['<h1>%s</h1><p class="mute">Server status</p>' % e(d["title"])]
+    parts = ['<h1>%s</h1>' % e(d["title"])]
+    if d.get("about"):
+        parts.append('<p style="margin:4px 0 0;white-space:pre-line">%s</p>' % e(d["about"]))
+    else:
+        parts.append('<p class="mute">Server status</p>')
+    if d.get("discord"):
+        parts.append('<p style="margin:12px 0 0"><a class="btn" href="%s" rel="noopener">Join our Discord</a></p>' % e(d["discord"]))
     for s in d["servers"]:
         extra = []
         if s["state"] == "up":
@@ -4314,17 +7957,57 @@ def render_status_page(d):
                 "".join('<li>%s <span class="mute">%s%s</span></li>' % (e(x["name"]), e(fmt_bytes(x["size"])), " · map" if x["map"] else "") for x in s["mods"])))
         elif s["state"] == "up" and APP.settings.get("statuspage_mods"):
             parts.append('<p class="small mute" style="margin:6px 0 0">No mods - nothing to download.</p>')
-        if s["next_event"]:
-            ne = s["next_event"]
-            parts.append('<p class="small" style="margin:6px 0 0">📅 Next event: <b>%s</b> %s%s</p>' % (
-                e(ne["name"]), e(time.strftime("%a %d %b %H:%M", time.localtime(ne["t"]))), (" · " + e(ne["map"])) if ne["map"] else ""))
+        if s.get("join_secs") is not None and s["state"] == "up":
+            parts.append('<p class="small mute" style="margin:6px 0 0">First join: about %s to download %s of mods. After that it\'s quick.</p>'
+                         % (e(fmt_secs(max(s["join_secs"], 5))), e(fmt_bytes(s["join_bytes"]))))
+        evs = s.get("events") or ([s["next_event"]] if s.get("next_event") else [])
+        if evs:
+            parts.append('<div class="small" style="margin-top:8px"><b>📅 Coming up</b>%s</div>' % "".join(
+                '<div class="ev"><b>%s</b> · %s%s%s%s</div>' % (
+                    e(ne["name"]), e(time.strftime("%a %d %b %H:%M", time.localtime(ne["t"]))), (" · " + e(ne["map"])) if ne.get("map") else "",
+                    (" · " + e(ne["game"])) if ne.get("game") else "", ('<br><span class="mute">%s</span>' % e(ne["text"])) if ne.get("text") else "")
+                for ne in evs))
+        j = s.get("join")
+        if j and s["state"] == "up" and (j["listed"] or j["address"]):
+            how = []
+            if j["address"]:
+                how.append('In BeamMP: <b>Direct Connect</b> &rarr; IP <code class="sel">%s</code> port <code class="sel">%s</code>'
+                           % (e(str(j["address"]["host"])), e(str(j["address"]["port"]))))
+            if j["listed"]:
+                how.append('%s <b>%s</b> in the BeamMP server list and press Join.' % ("Or search" if how else "In BeamMP: search", e(j["name"])))
+            parts.append('<div class="join small"><b>How to join</b><br>%s<br><span class="mute">Need BeamMP? '
+                         '<a href="https://beammp.com" rel="noopener" style="color:inherit">beammp.com</a></span></div>' % "<br>".join(how))
+        for t in s.get("laps") or []:
+            rows = "".join('<tr><td class="mute">%d</td><td>%s</td><td class="mono">%s</td><td class="mute">%s</td></tr>'
+                           % (i + 1, e(r["name"]), e(r["time"]), e(r["car"])) for i, r in enumerate(t["top"]))
+            parts.append('<details class="small laps" style="margin-top:8px"><summary>🏁 Lap times: <b>%s</b> (%s)</summary>'
+                         '<table>%s</table></details>' % (e(t["name"]), "sprint" if t["kind"] == "sprint" else "loop", rows))
+        if s.get("champ"):
+            c = s["champ"]
+            rows = "".join('<tr><td class="mute">%d</td><td>%s</td><td class="mono">%d pts</td><td class="mute">%d win%s</td></tr>'
+                           % (i + 1, e(r["name"]), r["points"], r["wins"], "" if r["wins"] == 1 else "s") for i, r in enumerate(c["top"]))
+            parts.append('<details class="small laps" style="margin-top:8px"><summary>🏆 <b>%s</b> standings (%d race%s)</summary><table>%s</table></details>'
+                         % (e(c["name"]), c["races"], "" if c["races"] == 1 else "s", rows))
+        if s.get("drift"):
+            rows = "".join('<tr><td class="mute">%d</td><td>%s</td><td class="mono">%d</td><td class="mute">%s</td></tr>'
+                           % (i + 1, e(r["name"]), r["score"], e(r["car"])) for i, r in enumerate(s["drift"]))
+            parts.append('<details class="small laps" style="margin-top:8px"><summary>💨 Best drifts on this map</summary><table>%s</table></details>' % rows)
         h = s["history"]
         parts.append('<div class="bars">%s</div><div class="row small mute" style="justify-content:space-between"><span>30 days ago</span><span>today</span></div>'
                      % "".join(bar(x["pct"]) for x in h["days"]))
         parts.append('<div class="stats small"><span>Last 24 h <b>%s</b></span><span>7 days <b>%s</b></span><span>30 days <b>%s</b></span></div></div>'
                      % (pct(h["d1"]), pct(h["d7"]), pct(h["d30"])))
-    return STATUS_HTML.replace("__TITLE__", e(d["title"])).replace("__BODY__", "".join(parts)).replace(
-        "__UPDATED__", e(time.strftime("%H:%M", time.localtime(d["updated"]))))
+    first = d["servers"][0] if d["servers"] else None
+    desc = (d.get("about") or "").replace("\n", " ")[:150]
+    if first:
+        live = label.get(first["state"], first["state"]).split(" - ")[0]
+        if first["state"] == "up":
+            live += " · %d/%s players%s" % (first["players"], first["max"] or "?", (" · " + first["map"]) if first["map"] else "")
+        desc = (live + (" - " + desc if desc else ""))[:200]
+    return STATUS_HTML.replace("__DESC__", e(desc or "BeamMP server")).replace("__TITLE__", e(d["title"])).replace("__BODY__", "".join(parts)).replace(
+        "__UPDATED__", e(time.strftime("%H:%M", time.localtime(d["updated"])))).replace(
+        "__CREDIT__", ('Hosted with <a href="%s" rel="noopener" style="color:inherit">BeamMP EasyServer</a>' % e(SITE_URL))
+        if APP.settings.get("credit_link") else "BeamMP EasyServer")
 
 
 # ----------------------------------------------------------------------------- timed announcements (fixed times)
@@ -4334,6 +8017,26 @@ def timed_msgs(inst):
 
 
 # ----------------------------------------------------------------------------- phone app (installable web app)
+LANG_PATH_RE = re.compile(r"/lang/([a-z]{2}(?:-[a-z]{2})?)\.json")
+LANG_DIR = os.path.join(HERE, "lang")
+
+
+def lang_index():
+    """The translations next to the dashboard (lang/xx.json): [{"code", "name"}]. Adding a language = adding a file."""
+    out = []
+    try:
+        names = sorted(os.listdir(LANG_DIR))
+    except OSError:
+        return out
+    for n in names:
+        m = LANG_PATH_RE.fullmatch("/lang/" + n)
+        if not m:
+            continue
+        d = read_json(os.path.join(LANG_DIR, n), {})
+        name = d.get("language") if isinstance(d, dict) else None
+        if isinstance(name, str) and name.strip():
+            out.append({"code": m.group(1), "name": name.strip()[:40]})
+    return out
 APP_FILES = ("/manifest.webmanifest", "/sw.js", "/icon-192.png", "/icon-512.png", "/apple-touch-icon.png")
 # Network first, so the dashboard is always live; the cached page only shows
 # when the server can't be reached. API answers are never cached.
@@ -4718,11 +8421,12 @@ def set_wake_timer(at):
 
 
 def win_sleep():
-    """Windows: put the computer to sleep (not hibernate)."""
+    """Windows: put the computer to sleep (not hibernate). Raises OSError if Windows refuses."""
     import ctypes
     from ctypes import wintypes
-    adv, k32 = ctypes.WinDLL("advapi32", use_last_error=True), ctypes.WinDLL("kernel32")
-    k32.GetCurrentProcess.restype = wintypes.HANDLE
+    adv = ctypes.WinDLL("advapi32", use_last_error=True)
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    pwr = ctypes.WinDLL("powrprof", use_last_error=True)
 
     class LUID(ctypes.Structure):
         _fields_ = [("Low", wintypes.DWORD), ("High", wintypes.LONG)]
@@ -4730,14 +8434,31 @@ def win_sleep():
     class TP(ctypes.Structure):
         _fields_ = [("Count", wintypes.DWORD), ("Luid", LUID), ("Attr", wintypes.DWORD)]
 
+    # every handle as a HANDLE: on 64-bit Windows a plain Python int is too big for the default C int
+    k32.GetCurrentProcess.restype = wintypes.HANDLE
+    k32.GetCurrentProcess.argtypes = []
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    adv.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+    adv.OpenProcessToken.restype = wintypes.BOOL
+    adv.LookupPrivilegeValueW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, ctypes.POINTER(LUID)]
+    adv.LookupPrivilegeValueW.restype = wintypes.BOOL
+    adv.AdjustTokenPrivileges.argtypes = [wintypes.HANDLE, wintypes.BOOL, ctypes.POINTER(TP), wintypes.DWORD,
+                                          ctypes.c_void_p, ctypes.c_void_p]
+    adv.AdjustTokenPrivileges.restype = wintypes.BOOL
+    pwr.SetSuspendState.argtypes = [wintypes.BOOLEAN, wintypes.BOOLEAN, wintypes.BOOLEAN]
+    pwr.SetSuspendState.restype = wintypes.BOOLEAN
+
     tok = wintypes.HANDLE()
-    adv.OpenProcessToken(k32.GetCurrentProcess(), 0x0020 | 0x0008, ctypes.byref(tok))   # ADJUST_PRIVILEGES | QUERY
-    luid = LUID()
-    adv.LookupPrivilegeValueW(None, "SeShutdownPrivilege", ctypes.byref(luid))
-    tp = TP(1, luid, 0x2)                                                                # SE_PRIVILEGE_ENABLED
-    adv.AdjustTokenPrivileges(tok, False, ctypes.byref(tp), 0, None, None)
-    k32.CloseHandle(tok)
-    ctypes.WinDLL("powrprof").SetSuspendState(False, False, False)
+    if adv.OpenProcessToken(k32.GetCurrentProcess(), 0x0020 | 0x0008, ctypes.byref(tok)):   # ADJUST_PRIVILEGES | QUERY
+        try:
+            luid = LUID()
+            if adv.LookupPrivilegeValueW(None, "SeShutdownPrivilege", ctypes.byref(luid)):
+                adv.AdjustTokenPrivileges(tok, False, ctypes.byref(TP(1, luid, 0x2)), 0, None, None)   # SE_PRIVILEGE_ENABLED
+        finally:
+            k32.CloseHandle(tok)
+    if not pwr.SetSuspendState(False, False, False):
+        raise OSError("Windows refused to sleep (error %d) - check that sleep is allowed in Power Options"
+                      % ctypes.get_last_error())
 
 
 def in_time_window(frm, to, t=None):
@@ -4845,6 +8566,96 @@ def set_mod_enabled(name, on):
     return True
 
 
+# ----------------------------------------------------------------------------- mod storage + mod sets
+UPLOAD_SPARE = 512 * 1024 ** 2     # room left over after an upload (logs, backups, the game server itself)
+MODSET_MAX = 30
+
+
+def mods_storage(inst, mods):
+    """How much room the mods take and how much is left on their drive (None when unknown)."""
+    free = total = None
+    for p in (inst.CLIENT_DIR, inst.RES, inst.SERVER_DIR):
+        try:
+            u = shutil.disk_usage(p)
+            free, total = u.free, u.total
+            break
+        except OSError:
+            continue
+    return {"free": free, "total": total, "mods": sum(m["size"] for m in mods),
+            "low": free is not None and free < 2 * 1024 ** 3, "spare": UPLOAD_SPARE}
+
+
+def upload_room_error(size):
+    """A message when an upload of size bytes won't fit (both the upload folder and the mods folder need it)."""
+    for p in {UPLOAD_TMP, I().CLIENT_DIR}:
+        try:
+            free = shutil.disk_usage(p).free
+        except OSError:
+            continue
+        if size + UPLOAD_SPARE > free:
+            return ("Not enough space on this computer: the mod needs %s and only %s is free. Delete or turn off "
+                    "mods you don't play, or use a bigger drive." % (fmt_bytes(size), fmt_bytes(max(0, free - UPLOAD_SPARE))))
+    return None
+
+
+def clean_set_name(n):
+    n = re.sub(r"\s+", " ", str(n or "")).strip()
+    if not n or len(n) > 40 or not re.fullmatch(r"[\w .,'!&()+#\-]+", n):
+        raise ValueError("Give the mod set a short name (up to 40 letters, numbers and spaces)")
+    return n
+
+
+def mod_sets(inst):
+    v = inst.meta.get("mod_sets")
+    out = []
+    for x in v if isinstance(v, list) else []:
+        if isinstance(x, dict) and isinstance(x.get("name"), str) and isinstance(x.get("mods"), list):
+            out.append({"name": x["name"], "mods": [n for n in x["mods"] if isinstance(n, str) and safe_zip_name(n) == n]})
+    return out
+
+
+def mods_in_use(mods, inst):
+    """The mods that are part of the server right now: on, or parked by light mode (they come back with their map)."""
+    parked = set(parked_maps(inst))
+    return sorted((m["name"] for m in mods if (m["enabled"] or m["name"] in parked) and m["name"] != TOOLS_MOD), key=str.lower)
+
+
+def mod_sets_view(inst, mods):
+    have = {m["name"]: m for m in mods}
+    now_on = set(mods_in_use(mods, inst))
+    out = []
+    for x in mod_sets(inst):
+        present = [n for n in x["mods"] if n in have]
+        out.append({"name": x["name"], "mods": x["mods"], "missing": [n for n in x["mods"] if n not in have],
+                    "size": sum(have[n]["size"] for n in present), "active": set(present) == now_on})
+    return out
+
+
+def apply_mod_set(inst, names):
+    """Turn on exactly the mods in names (the tools mod is left alone). Returns (turned on, turned off, missing)."""
+    want = set(names)
+    mods = list_mods()
+    have = {m["name"]: m for m in mods}
+    parked = set(parked_maps(inst))
+    on, off = [], []
+    for n, m in have.items():
+        if n == TOOLS_MOD:
+            continue
+        if n in want and not m["enabled"]:
+            if set_mod_enabled(n, True):
+                on.append(n)
+        elif n not in want and m["enabled"]:
+            if set_mod_enabled(n, False):
+                off.append(n)
+    if inst.meta.get("light_maps"):
+        set_server_meta(inst.id, parked_maps=[])
+        light_sync(inst)        # map mods of other maps go back to waiting for their map
+    elif parked:
+        set_server_meta(inst.id, parked_maps=None)
+    on = [n for n in on if n not in parked]
+    return on, off, sorted(want - set(have), key=str.lower)
+
+
 # ----------------------------------------------------------------------------- scheduled events
 EVENT_DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
@@ -4854,9 +8665,19 @@ def events_cfg(inst):
     return [e for e in ev if isinstance(e, dict)] if isinstance(ev, list) else []
 
 
+EVENT_GAMES = {"race": "Races (/race)", "drift": "Drift points (/drift)", "cnr": "Cops and robbers (/cnr)"}
+
+
 def event_next_start(e, t):
-    """The next start time (local) of a weekly event at or after t - 1 minute."""
+    """The next start time (local) of a weekly event, or of a one-off event (date), at or after t - 1 minute."""
     h, m = (int(x) for x in e["at"].split(":"))
+    if e.get("date"):
+        try:
+            y, mo, d = (int(x) for x in e["date"].split("-"))
+            st = int(time.mktime((y, mo, d, h, m, 0, 0, 0, -1)))
+        except (ValueError, OverflowError):
+            return None
+        return st if st >= t - 60 else None
     lt = time.localtime(t)
     for add in range(0, 8):
         day = time.localtime(time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday + add, 0, 0, 0, 0, 0, -1)))
@@ -4866,6 +8687,123 @@ def event_next_start(e, t):
         if st >= t - 60:
             return st
     return None
+
+
+def event_results(act, end):
+    """What happened during an event (from its start until end): players, best laps, best drifts."""
+    start = int(act.get("start") or 0)
+    if not start:
+        return None
+    names = []
+    for ev in read_events(start):
+        if ev.get("ev") == "join" and ev["t"] <= end:
+            n = str(ev.get("name") or "")[:64]
+            if n and n not in names:
+                names.append(n)
+    laps = []
+    for track, rows in read_laptimes().items():
+        rows = [r for r in rows if start <= r["t"] <= end]
+        if rows:
+            laps.append((track, rows[0]))
+    laps.sort(key=lambda x: x[1]["ms"])
+    drifts = sorted((r for r in read_drift() if start <= r["t"] <= end), key=lambda r: -r["score"])[:5]
+    return {"players": names, "laps": [{"track": tr, "name": r["name"], "time": fmt_lap(r["ms"]), "car": r["car"]} for tr, r in laps[:5]],
+            "drifts": [{"name": r["name"], "score": r["score"], "car": r["car"]} for r in drifts]}
+
+
+def event_results_text(name, res):
+    lines = ["🏁 **%s** is over - %d player%s joined." % (discord_escape(name), len(res["players"]), "" if len(res["players"]) == 1 else "s")]
+    if res["players"]:
+        lines.append("Thanks to " + ", ".join(discord_escape(n) for n in res["players"][:25]) + ("..." if len(res["players"]) > 25 else ""))
+    if res["laps"]:
+        lines.append("**Fastest laps**")
+        lines += ["%s **%s** - %s (%s%s)" % (("🥇", "🥈", "🥉", "4.", "5.")[i], discord_escape(r["name"]), r["time"], discord_escape(r["track"]),
+                                           (", " + discord_escape(r["car"])) if r["car"] else "") for i, r in enumerate(res["laps"])]
+    if res["drifts"]:
+        lines.append("**Best drifts**")
+        lines += ["%s **%s** - %d points%s" % (("🥇", "🥈", "🥉", "4.", "5.")[i], discord_escape(r["name"]), r["score"],
+                                             (" (%s)" % discord_escape(r["car"])) if r["car"] else "") for i, r in enumerate(res["drifts"])]
+    return "\n".join(lines)
+
+
+MEDALS = ("🥇", "🥈", "🥉")
+
+
+def _medal(i):
+    return MEDALS[i] if i < 3 else "%d." % (i + 1)
+
+
+def discord_player_embed(name):
+    name = name.strip()
+    if not name:
+        return {"description": "Type a BeamMP player name, for example /player Dani", "color": 0x64748B}
+    with LOCK:
+        ids = sorted(INSTANCES, key=lambda i: (i != "main", i))
+    use_server("main")
+    cards = player_everywhere(name, ids)
+    use_server("main")
+    if not cards:
+        return {"description": "%s hasn't played here in the last year." % discord_escape(name), "color": 0x64748B}
+    real = cards[0]["name"]
+    total = sum(c["seconds"] for c in cards)
+    last = max((c["last_seen"] or 0 for c in cards), default=0)
+    online = [c["server"] for c in cards if c["online"]]
+    lines = ["**Time played:** %s (%s in the last 30 days)" % (fmt_hours(total), fmt_hours(sum(c["seconds_30d"] for c in cards))),
+             "**Online now** on %s" % ", ".join(discord_escape(x) for x in online) if online else
+             ("**Last seen:** <t:%d:R>" % last if last else "")]
+    for c in cards:
+        bits = []
+        if len(cards) > 1 or len(ids) > 1:
+            bits.append("__%s__ - %s" % (discord_escape(c["server"]), fmt_hours(c["seconds"])))
+        for l in c["laps"][:3]:
+            bits.append("🏁 %s: %s (#%d of %d)" % (discord_escape(l["track"]), l["time"], l["pos"], l["of"]))
+        if c["drift"]:
+            bits.append("💨 Best drift: %d points" % c["drift"]["score"])
+        if c["champ"]:
+            bits.append("🏆 Championship: #%d of %d, %d points" % (c["champ"]["pos"], c["champ"]["of"], c["champ"]["points"]))
+        if c["records"]:
+            bits.append("⚡ Top speed %d km/h" % c["records"]["speed"])
+        if c["badges"]:
+            bits.append("🎖️ %d badge%s" % (c["badges"], "" if c["badges"] == 1 else "s"))
+        lines += bits
+    return {"title": real, "description": "\n".join(x for x in lines if x)[:3900], "color": 0x22C55E if online else 0x3B82F6}
+
+
+def discord_leaderboard_embed(inst, what):
+    here = I().id
+    use_server(inst.id)
+    try:
+        title, lines = "", []
+        suffix = (" (%s)" % inst.name) if len(INSTANCES) > 1 else ""
+        if what == "drift":
+            best = {}
+            for r in read_drift():
+                if r["score"] > best.get(r["name"], {"score": -1})["score"]:
+                    best[r["name"]] = r
+            title = "Best drifts" + suffix
+            lines = ["%s **%s** - %d points (%s)" % (_medal(i), discord_escape(r["name"]), r["score"], discord_escape(map_name(r["raw_map"]) or r["raw_map"]))
+                     for i, r in enumerate(sorted(best.values(), key=lambda r: -r["score"])[:10])]
+        elif what == "champ":
+            rows, rounds = read_champ()
+            cfg = read_games_cfg()
+            title = "%s standings%s" % (cfg["champ_name"] or "Championship", suffix)
+            lines = ["%s **%s** - %d points, %d win%s" % (_medal(i), discord_escape(r["name"]), r["points"], r["wins"], "" if r["wins"] == 1 else "s")
+                     for i, r in enumerate(rows[:10])] if rounds else []
+            if lines:
+                lines.append("_%d race%s so far_" % (rounds, "" if rounds == 1 else "s"))
+        elif what == "time":
+            title = "Most played - last 30 days" + suffix
+            lines = ["%s **%s** - %s" % (_medal(i), discord_escape(p["name"]), fmt_hours(p["seconds"])) for i, p in enumerate(playtime_top(inst))]
+            use_server(inst.id)
+        else:
+            title = "Lap records" + suffix
+            for t in sorted(laps_summary(3), key=lambda t: -t["drivers"])[:6]:
+                if t["top"]:
+                    lines.append("**%s**" % discord_escape(t["name"]))
+                    lines += ["%s %s - %s" % (_medal(i), discord_escape(r["name"]), r["time"]) for i, r in enumerate(t["top"])]
+        return {"title": title, "description": "\n".join(lines)[:3900] or "Nothing here yet - go set some records!", "color": 0xF5A524}
+    finally:
+        use_server(here)
 
 
 def upcoming_events_text():
@@ -5234,6 +9172,12 @@ class DiscordBot:
                          {"type": 3, "name": "player", "description": "BeamMP player name", "required": False,
                           "max_length": 40}] + opts},
             {"name": "events", "description": "Upcoming events on the BeamMP server", "type": 1, "contexts": [0]},
+            {"name": "player", "description": "A player's stats: time played, best laps, drifts, championship", "type": 1, "contexts": [0],
+             "options": [{"type": 3, "name": "name", "description": "BeamMP player name", "required": True, "max_length": 40}]},
+            {"name": "leaderboard", "description": "The best lap times, drifts, championship or most played", "type": 1, "contexts": [0],
+             "options": [{"type": 3, "name": "what", "description": "Which leaderboard", "required": True,
+                          "choices": [{"name": "lap times", "value": "laps"}, {"name": "drift", "value": "drift"},
+                                      {"name": "championship", "value": "champ"}, {"name": "most played", "value": "time"}]}] + opts},
             {"name": "join", "description": "Open the server so you can join (it closes again once nobody plays)", "type": 1,
              "contexts": [0], "options": opts},
             {"name": "sleep", "description": "Put the server computer to sleep to save power (/start wakes it up)",
@@ -5292,6 +9236,16 @@ class DiscordBot:
                 discord_api("POST", cb, body={"type": 5})
                 return discord_api("PATCH", edit, body={"embeds": [{"title": "Upcoming events", "color": 0x8B5CF6,
                                                                     "description": upcoming_events_text()}],
+                                                        "allowed_mentions": {"parse": []}})
+            if name == "player":
+                discord_api("POST", cb, body={"type": 5})
+                return discord_api("PATCH", edit, body={"embeds": [discord_player_embed(str(opts.get("name") or "")[:40])],
+                                                        "allowed_mentions": {"parse": []}})
+            if name == "leaderboard":
+                with LOCK:
+                    inst = INSTANCES.get(str(opts.get("server") or "main")) or INSTANCES["main"]
+                discord_api("POST", cb, body={"type": 5})
+                return discord_api("PATCH", edit, body={"embeds": [discord_leaderboard_embed(inst, str(opts.get("what") or "laps"))],
                                                         "allowed_mentions": {"parse": []}})
             if name == "join":
                 with LOCK:
@@ -5424,6 +9378,8 @@ class DiscordBot:
                         "- after that you can start it from Discord." % label)
             if st == "running":
                 return "🟢 %s is already running." % label
+            if moved_note(inst):
+                return "🚚 %s - start it on this computer from the dashboard if you really want it here too." % moved_note(inst)
         if what == "stop" and st in ("stopped", "failed"):
             return "🔴 %s is already stopped." % label
         self.busy.add(inst.id)
@@ -5456,19 +9412,23 @@ USERS_FILE = os.path.join(DATA_DIR, "users.json")
 ROLES = {"viewer": 0, "moderator": 1, "admin": 2, "owner": 3}
 USER_RE = re.compile(r"[A-Za-z0-9_.\-]{2,24}")
 # What each role may change (GET pages are open to every role unless listed in ADMIN_GET).
-MOD_WRITE = {"/api/players/act", "/api/bans/add", "/api/bans/remove", "/api/allowlist", "/api/server/action",
+MOD_GET = {"/api/chat", "/api/reports", "/api/players/profile"}         # what players wrote: not for read-only viewers
+MOD_WRITE = {"/api/reports/close", "/api/players/act", "/api/bans/add", "/api/bans/remove", "/api/allowlist", "/api/server/action",
              "/api/notifications/read", "/api/notifications/clear", "/api/security/ack", "/api/logout",
-             "/api/events/stop", "/api/map", "/api/maintenance"}
-VIEWER_WRITE = {"/api/logout", "/api/notifications/read", "/api/logs/explain", "/api/devices"}
-OWNER_WRITE = {"/api/users", "/api/password", "/api/2fa/begin", "/api/2fa/confirm", "/api/2fa/disable", "/api/remote",
-               "/api/authkey", "/api/import", "/api/power/helper", "/api/servers/delete", "/api/statuspage", "/api/supporter"}
-ADMIN_GET = {"/api/export", "/api/backups/download", "/api/phoneapp", "/api/ntfy", "/api/power/offline",
+             "/api/events/stop", "/api/map", "/api/maintenance", "/api/players/note"}
+VIEWER_WRITE = {"/api/logout", "/api/notifications/read", "/api/logs/explain", "/api/devices",
+                "/api/me/password", "/api/me/2fa/begin", "/api/me/2fa/confirm", "/api/me/2fa/disable",
+                "/api/me/discord/link", "/api/me/discord/unlink"}
+OWNER_WRITE = {"/api/roles", "/api/teaminvite", "/api/discordlogin", "/api/plugins/fetch", "/api/plugins/upload", "/api/plugins/install", "/api/plugins/toggle", "/api/plugins/remove", "/api/plugins/adopt", "/api/users", "/api/password", "/api/2fa/begin", "/api/2fa/confirm", "/api/2fa/disable", "/api/remote",
+               "/api/authkey", "/api/import", "/api/backups/restore", "/api/power/helper", "/api/servers/delete", "/api/statuspage", "/api/supporter",
+               "/api/pi", "/api/machines", "/api/gdrive"}
+ADMIN_GET = {"/api/gdrive", "/api/pi", "/api/machines", "/api/recap", "/api/export", "/api/backups/download", "/api/phoneapp", "/api/ntfy", "/api/power/offline",
              "/api/health/report", "/api/health/saved", "/api/users", "/api/activity", "/api/modpack", "/api/integrations", "/api/statuspage"}
 
 
 def required_role(method, path):
     if method in ("GET", "HEAD"):
-        return "admin" if path in ADMIN_GET else "viewer"
+        return "admin" if path in ADMIN_GET else "moderator" if path in MOD_GET else "viewer"
     if path in OWNER_WRITE:
         return "owner"
     if path in VIEWER_WRITE:
@@ -5508,7 +9468,7 @@ def load_users():
     d = read_json(USERS_FILE, {})
     if not isinstance(d, dict) or not isinstance(d.get("users"), list):
         return []
-    users = [x for x in d["users"] if isinstance(x, dict) and USER_RE.fullmatch(str(x.get("name", ""))) and x.get("role") in ROLES]
+    users = [x for x in d["users"] if isinstance(x, dict) and USER_RE.fullmatch(str(x.get("name", ""))) and role_ok(x.get("role"))]
     want = _users_sig(d["users"])
     if not want or not hmac.compare_digest(want, str(d.get("sig") or "")):
         if users and APP and not getattr(APP, "users_alerted", False):
@@ -5538,6 +9498,368 @@ def save_users(users):
 def find_user(name):
     name = str(name or "").lower()
     return next((u for u in load_users() if u["name"].lower() == name), None)
+
+
+# ----------------------------------------------------------------------------- team access: custom roles, per-server access, invites, 2FA per account
+# Permission groups a custom role can tick. Built-in roles keep their fixed rules (required_role).
+PERM_GROUPS = [
+    ("players", "Players", "Kick, mute, ban, unban, who can join"),
+    ("server", "Start & stop", "Start, stop, restart, maintenance mode, restart schedule"),
+    ("map", "Maps & events", "Switch the map, map rotation, map votes, events"),
+    ("mods", "Mods", "Add, update, turn off and delete mods"),
+    ("config", "Server config", "Config page: rules, vehicle rules, chat, messages, presets"),
+    ("settings", "Dashboard settings", "Notifications, backups, Discord, updates, sleep - for every server on this computer"),
+]
+PERM_IDS = [g[0] for g in PERM_GROUPS]
+_PG_EXACT = {
+    "/api/players/act": "players", "/api/players/clear": "players", "/api/bans/add": "players", "/api/bans/remove": "players",
+    "/api/allowlist": "players", "/api/chat": "players", "/api/reports": "players", "/api/reports/close": "players",
+    "/api/players/profile": "players", "/api/players/note": "players", "/api/laps": "config",
+    "/api/games": "config", "/api/recap": "config",
+    "/api/server/action": "server", "/api/maintenance": "server", "/api/restarts": "server",
+    "/api/map": "map", "/api/rotation": "map", "/api/mapvote": "map", "/api/events": "map", "/api/events/stop": "map",
+    "/api/modbrowser/install": "mods", "/api/modpack/code": "mods", "/api/modpack": "mods",
+    "/api/config/save": "config", "/api/config/restore": "config", "/api/config/validate": "config", "/api/preset": "config",
+    "/api/template": "config", "/api/tools": "config", "/api/vehicles": "config", "/api/vehicles/preset": "config",
+    "/api/vehicles/block": "config", "/api/moderation": "config", "/api/messages": "config", "/api/timed": "config",
+    "/api/extras": "config", "/api/joinalerts": "config", "/api/invite": "config", "/api/resources": "config",
+}
+CUSTOM_ROLE_RE = re.compile(r"c_[a-z0-9]{6,12}")
+# not about one server: an account limited to some servers may use them whichever server is picked
+TEAM_ANY_SERVER = {"/api/servers", "/api/me", "/api/me/password", "/api/me/2fa/begin", "/api/me/2fa/confirm",
+                   "/api/me/2fa/disable", "/api/devices", "/api/logout"}
+ROLES_FILE = os.path.join(DATA_DIR, "roles.json")
+INVITES_FILE = os.path.join(DATA_DIR, "team-invites.json")
+INVITE_HOURS = 1        # an invite link only works for a short time: less time for it to leak
+_TEAM_LOCK = threading.Lock()
+
+
+def perm_group(method, path):
+    """Which tick-box a request needs (None = anyone logged in, "owner" = never grantable)."""
+    need = required_role(method, path)
+    if need == "viewer":
+        return None
+    if need == "owner":
+        return "owner"
+    if path in _PG_EXACT:
+        return _PG_EXACT[path]
+    if path.startswith("/api/mods/"):
+        return "mods"
+    return "settings"
+
+
+def _team_sig(kind, data):
+    base = APP.secrets.get("USERS_KEY") if APP else ""
+    if not base:
+        return ""
+    key = hmac.new(base.encode(), kind.encode(), hashlib.sha256).digest()
+    return hmac.new(key, json.dumps(data, sort_keys=True).encode(), hashlib.sha256).hexdigest()
+
+
+def _team_load(path, kind):
+    d = read_json(path, {})
+    if not isinstance(d, dict) or not isinstance(d.get("items"), list):
+        return []
+    want = _team_sig(kind, d["items"])
+    if not want or not hmac.compare_digest(want, str(d.get("sig") or "")):
+        return []
+    return [x for x in d["items"] if isinstance(x, dict)]
+
+
+def _team_save(path, kind, items):
+    if not APP.secrets.has("USERS_KEY"):
+        APP.secrets.set("USERS_KEY", secrets.token_hex(32))
+    write_json(path, {"items": items, "sig": _team_sig(kind, items)})
+    if not IS_WIN:
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+
+
+def load_roles():
+    out = []
+    for r in _team_load(ROLES_FILE, "custom-roles"):
+        if CUSTOM_ROLE_RE.fullmatch(str(r.get("id", ""))) and isinstance(r.get("perms"), list):
+            out.append({"id": r["id"], "name": clean_msg(r.get("name"))[:40] or r["id"],
+                        "perms": [p for p in r["perms"] if p in PERM_IDS]})
+    return out
+
+
+def save_roles(roles):
+    _team_save(ROLES_FILE, "custom-roles", roles)
+
+
+def role_ok(role):
+    return role in ("admin", "moderator", "viewer") or bool(CUSTOM_ROLE_RE.fullmatch(str(role or "")))
+
+
+def user_role_for(u, server_id):
+    """The role an extra account has on one server, or None (no access)."""
+    sv = u.get("servers")
+    if isinstance(sv, dict):
+        r = sv.get(server_id)
+        return r if role_ok(r) else None
+    return u.get("role")
+
+
+def team_allows(u, server_id, method, path, roles=None):
+    """(ok, message) for an extra account doing method+path on server_id."""
+    role = user_role_for(u, server_id)
+    if role is None:
+        return False, "Your account has no access to this server."
+    limited = isinstance(u.get("servers"), dict)
+    grp = perm_group(method, path)
+    if grp == "owner":
+        return False, "Only the owner can do that."
+    if limited and grp == "settings":
+        return False, "Your account only has access to some servers, so it can't change the dashboard settings."
+    if role in ROLES:
+        need = required_role(method, path)
+        if ROLES[role] < ROLES[need]:
+            return False, "Your account (%s) can't do that - ask an admin or the owner." % role
+        return True, ""
+    if grp is None:
+        return True, ""
+    cr = next((r for r in (roles if roles is not None else load_roles()) if r["id"] == role), None)
+    if not cr or grp not in cr["perms"]:
+        return False, "Your role (%s) doesn't include \"%s\" - ask the owner." % (
+            cr["name"] if cr else "deleted role", dict((g[0], g[1]) for g in PERM_GROUPS).get(grp, grp))
+    return True, ""
+
+
+# --- two-step login for extra accounts. The key is stored encrypted with the accounts key.
+def _seal(plain, kind="totp"):
+    base = APP.secrets.get("USERS_KEY")
+    nonce = secrets.token_bytes(16)
+    key = hmac.new(base.encode(), kind.encode(), hashlib.sha256).digest()
+    data = plain.encode()
+    stream = b"".join(hmac.new(key, nonce + struct.pack(">I", i), hashlib.sha256).digest() for i in range(len(data) // 32 + 1))
+    ct = bytes(a ^ b for a, b in zip(data, stream))
+    mac = hmac.new(key, nonce + ct, hashlib.sha256).hexdigest()[:32]
+    return "v1:%s:%s:%s" % (nonce.hex(), ct.hex(), mac)
+
+
+def _unseal(sealed, kind="totp"):
+    try:
+        v, n, c, mac = str(sealed).split(":")
+        nonce, ct = bytes.fromhex(n), bytes.fromhex(c)
+        key = hmac.new(APP.secrets.get("USERS_KEY").encode(), kind.encode(), hashlib.sha256).digest()
+        if v != "v1" or not hmac.compare_digest(hmac.new(key, nonce + ct, hashlib.sha256).hexdigest()[:32], mac):
+            return ""
+        stream = b"".join(hmac.new(key, nonce + struct.pack(">I", i), hashlib.sha256).digest() for i in range(len(ct) // 32 + 1))
+        return bytes(a ^ b for a, b in zip(ct, stream)).decode()
+    except (ValueError, AttributeError, UnicodeDecodeError):
+        return ""
+
+
+_USER_TOTP_LAST = {}
+
+
+def user_totp_ok(u, code):
+    secret = _unseal(u.get("totp", "")) if u.get("totp") else ""
+    if not secret:
+        return False
+    code = re.sub(r"\s", "", str(code or ""))
+    if not re.fullmatch(r"\d{6}", code):
+        return False
+    step = now() // 30
+    for c in (step - 1, step, step + 1):
+        if hmac.compare_digest(totp_code(secret, c), code):
+            with LOCK:
+                k = u["name"].lower()
+                if c <= _USER_TOTP_LAST.get(k, 0):
+                    return False
+                _USER_TOTP_LAST[k] = c
+            return True
+    return False
+
+
+def new_totp(label):
+    secret = base64.b32encode(secrets.token_bytes(20)).decode().rstrip("=")
+    lab = urllib.parse.quote("BeamMP EasyServer:%s" % label[:40])
+    uri = "otpauth://totp/%s?secret=%s&issuer=BeamMP%%20EasyServer" % (lab, secret)
+    try:
+        qr_size, qr_path = qr_svg_path(uri)
+    except ValueError:
+        qr_size, qr_path = 0, ""
+    return secret, {"secret": " ".join(secret[i:i + 4] for i in range(0, len(secret), 4)), "uri": uri,
+                    "qr_size": qr_size, "qr_path": qr_path}
+
+
+def totp_matches(secret, code):
+    code = re.sub(r"\s", "", str(code or ""))
+    step = now() // 30
+    return bool(re.fullmatch(r"\d{6}", code)) and any(hmac.compare_digest(totp_code(secret, c), code) for c in (step - 1, step, step + 1))
+
+
+def ip_is_remote(ip):
+    try:
+        return ipaddress.ip_address(ip).is_global
+    except ValueError:
+        return True
+
+
+# --- "Sign in with Discord" for team accounts (owner: password only)
+# The Discord app's secret can't live in open-source code and Discord only sends people back to addresses
+# registered in advance, so a tiny service (login-service/worker.js, run by the project) does the Discord
+# part. It and this dashboard share a key (made when the owner turns the feature on); the dashboard signs
+# the address to come back to, the service signs who logged in. Discord only replaces the password: two-step
+# login and the "from the internet" rules stay the same.
+LOGIN_SERVICE = (os.environ.get("ES_LOGIN_SERVICE") or "https://easyserver-login.easyserver-hq.workers.dev").rstrip("/")
+DLOGIN_FILE = os.path.join(DATA_DIR, "discord-login.json")
+DLOGIN_NONCE_RE = re.compile(r"[A-Za-z0-9_\-]{20,64}")
+DISCORD_ID_RE = re.compile(r"\d{5,25}")
+
+
+def _b64u(b):
+    return base64.urlsafe_b64encode(b).decode().rstrip("=")
+
+
+def _b64u_dec(s):
+    s = str(s)
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def dlogin_conf():
+    """{"inst": ..., "key": <raw key bytes>} once the owner turned Discord sign-in on, else None."""
+    items = _team_load(DLOGIN_FILE, "discord-login")
+    if not items or not items[0].get("on"):
+        return None
+    key = _unseal(items[0].get("key"), "dlogin")
+    if not key or not re.fullmatch(r"[A-Za-z0-9_\-]{24}", str(items[0].get("inst") or "")):
+        return None
+    try:
+        return {"inst": items[0]["inst"], "key": _b64u_dec(key)}
+    except (ValueError, binascii.Error):
+        return None
+
+
+def dlogin_available():
+    return bool(LOGIN_SERVICE)
+
+
+def dlogin_set(on):
+    if not on:
+        items = _team_load(DLOGIN_FILE, "discord-login")
+        _team_save(DLOGIN_FILE, "discord-login", [dict(items[0], on=False)] if items else [])
+        return
+    if not dlogin_available():
+        raise ValueError("Discord sign-in isn't available yet")
+    items = _team_load(DLOGIN_FILE, "discord-login")
+    if items and items[0].get("inst") and _unseal(items[0].get("key"), "dlogin"):
+        _team_save(DLOGIN_FILE, "discord-login", [dict(items[0], on=True)])
+        return
+    def ask():
+        req = urllib.request.Request(LOGIN_SERVICE + "/register", data=b"{}", method="POST",
+                                     headers={"User-Agent": "BeamMP-EasyServer/" + EASY_VERSION, "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return json.loads(r.read(4096))
+    try:
+        try:
+            d = ask()
+        except urllib.error.URLError as e:
+            d = win_post_json(LOGIN_SERVICE + "/register") if IS_WIN and isinstance(e.reason, ssl.SSLCertVerificationError) else None
+            if d is None:
+                raise
+    except (OSError, ValueError) as e:
+        raise ValueError("Couldn't reach the sign-in service (%s) - try again in a minute" % (getattr(e, "reason", None) or e))
+    inst, key = str(d.get("inst") or ""), str(d.get("key") or "")
+    if not re.fullmatch(r"[A-Za-z0-9_\-]{24}", inst) or not re.fullmatch(r"[A-Za-z0-9_\-]{43}", key):
+        raise ValueError("The sign-in service gave an odd answer - try again later")
+    if not APP.secrets.has("USERS_KEY"):
+        APP.secrets.set("USERS_KEY", secrets.token_hex(32))
+    _team_save(DLOGIN_FILE, "discord-login", [{"on": True, "inst": inst, "key": _seal(key, "dlogin"), "t": now()}])
+
+
+def win_post_json(url):
+    """POST {} and read a JSON answer through Windows' own HTTPS (PowerShell). Python on Windows can trip over an
+    old expired certificate Windows still keeps in its store, while Windows itself picks the valid one - this
+    is still a fully checked connection, just checked by Windows."""
+    if not IS_WIN or not re.fullmatch(r"https://[A-Za-z0-9.\-]+(:\d{1,5})?/[a-z]+", url or ""):
+        return None
+    ps = ("[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; "
+          "Invoke-RestMethod -UseBasicParsing -Method Post -TimeoutSec 20 -ContentType 'application/json' -Body '{}' "
+          "-Uri '%s' | ConvertTo-Json -Compress" % url)
+    try:
+        out = subprocess.run(["powershell.exe", "-NoProfile", "-Command", ps], capture_output=True, text=True,
+                             timeout=40, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+        d = json.loads(out.strip() or "null")
+        return d if isinstance(d, dict) else None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
+def dlogin_sig(key, text):
+    return _b64u(hmac.new(key, text.encode(), hashlib.sha256).digest())
+
+
+def dlogin_check_note(conf, raw):
+    """The signed note the service sends back: {"sub", "name", "user", "nonce", "aud", ...} or None."""
+    note, _, sig = str(raw or "").partition(".")
+    if not note or len(note) > 2000 or not re.fullmatch(r"[A-Za-z0-9_\-]{43}", sig):
+        return None
+    if not hmac.compare_digest(dlogin_sig(conf["key"], "assert|" + note), sig):
+        return None
+    try:
+        d = json.loads(_b64u_dec(note))
+    except (ValueError, binascii.Error, UnicodeDecodeError):
+        return None
+    if not isinstance(d, dict) or d.get("v") != 1 or d.get("inst") != conf["inst"] or not isinstance(d.get("exp"), int) or d["exp"] < now():
+        return None
+    if not DISCORD_ID_RE.fullmatch(str(d.get("sub") or "")) or not DLOGIN_NONCE_RE.fullmatch(str(d.get("nonce") or "")):
+        return None
+    return d
+
+
+def find_user_by_discord(did):
+    return next((u for u in load_users() if (u.get("discord") or {}).get("id") == did), None)
+
+
+# --- invite links
+def load_invites():
+    t = now()
+    return [x for x in _team_load(INVITES_FILE, "team-invites")
+            if isinstance(x.get("hash"), str) and isinstance(x.get("expires"), int) and x["expires"] > t and not x.get("used")]
+
+
+def save_invites(items):
+    _team_save(INVITES_FILE, "team-invites", items)
+
+
+def invite_hash(tok):
+    return hashlib.sha256(("team-invite:" + str(tok)).encode()).hexdigest()
+
+
+def find_invite(tok):
+    if not re.fullmatch(r"[\w-]{30,60}", str(tok or "")):
+        return None
+    h = invite_hash(tok)
+    return next((x for x in load_invites() if hmac.compare_digest(x["hash"], h)), None)
+
+
+def clean_servers_map(raw):
+    """{server id: role} limited to existing servers, or None for "all servers"."""
+    if raw is None or raw == "all":
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("servers must be \"all\" or a list of servers with a role each")
+    with LOCK:
+        known = set(INSTANCES)
+    out = {}
+    for sid, role in raw.items():
+        if sid in known and role_ok(role):
+            out[sid] = role
+    if not out:
+        raise ValueError("Pick at least one server")
+    return out
+
+
+def check_role_exists(role, roles=None):
+    if role in ("admin", "moderator", "viewer"):
+        return
+    if not any(r["id"] == role for r in (roles if roles is not None else load_roles())):
+        raise ValueError("Pick a role")
 
 
 # ----------------------------------------------------------------------------- remembered devices ("stay logged in")
@@ -5643,7 +9965,7 @@ def device_login(tok, ip):
                 local = not ipaddress.ip_address(ip).is_global
             except ValueError:
                 local = False
-            if not u or u.get("disabled") or not local:
+            if not u or u.get("disabled") or (not local and not (u.get("remote") and u.get("totp"))):
                 return None
             user, role = u["name"], u["role"]
         t = now()
@@ -5673,7 +9995,7 @@ ACTION_LABELS = {
     "/api/mods/rescan": "Re-checked mods", "/api/bans/add": "Banned {name}", "/api/bans/remove": "Unbanned {name}",
     "/api/players/act": "Player {action}: {name}", "/api/allowlist": "Changed the allow-list", "/api/settings": "Changed settings",
     "/api/password": "Changed the password", "/api/devices": "Forgot remembered devices", "/api/remote": "Changed internet access / HTTPS", "/api/authkey": "Changed the AuthKey",
-    "/api/import": "Imported a backup", "/api/upnp": "Automatic port forwarding: {on}", "/api/modbrowser/install": "Installed a mod from the mod browser", "/api/supporter": "Changed the supporter licence", "/api/guard": "Unblocked an address in the BeamMP-only guard", "/api/invite": "Changed the invite message", "/api/map": "Switched the map to {map}", "/api/restarts": "Changed scheduled restarts",
+    "/api/import": "Imported a backup", "/api/reports/close": "Marked a player report as handled", "/api/chat/clear": "Deleted the chat history", "/api/backups/restore": "Restored a nightly backup", "/api/mods/sets": "Mod set {action}: {name}", "/api/upnp": "Automatic port forwarding: {on}", "/api/modbrowser/install": "Installed a mod from the mod browser", "/api/supporter": "Changed the supporter licence", "/api/guard": "Unblocked an address in the BeamMP-only guard", "/api/invite": "Changed the invite message", "/api/map": "Switched the map to {map}", "/api/restarts": "Changed scheduled restarts",
     "/api/moderation": "Changed moderation settings", "/api/extras": "Changed cars & chat settings",
     "/api/messages": "Changed chat messages", "/api/rotation": "Changed map rotation", "/api/template": "Applied a template",
     "/api/backups/now": "Made a backup", "/api/events": "Changed events", "/api/events/stop": "Ended an event early",
@@ -5681,8 +10003,10 @@ ACTION_LABELS = {
     "/api/power/sleep": "Put the computer to sleep", "/api/power/wol": "Turned on Wake-on-LAN", "/api/servers/create": "Created a server",
     "/api/servers/delete": "Deleted a server", "/api/servers/limits": "Changed server limits", "/api/users": "Users: {action} {name}",
     "/api/2fa/confirm": "Turned on two-step login", "/api/2fa/disable": "Turned off two-step login",
-    "/api/timed": "Changed timed announcements", "/api/tools": "Changed the in-game tools (/tp, /repair)", "/api/mods/light": "Light mode for map mods: {on}", "/api/maintenance": "Maintenance mode {state}", "/api/preset": "Applied the preset {preset}", "/api/servers/clone": "Cloned a server",
+    "/api/timed": "Changed timed announcements", "/api/tools": "Changed the in-game tools (/tp, /repair)", "/api/vehicles": "Changed the vehicle rules", "/api/vehicles/preset": "Vehicle rules preset: {preset}", "/api/vehicles/block": "Blocked/allowed vehicle {jbm}", "/api/plugins/install": "Installed a server plugin", "/api/plugins/toggle": "Turned a server plugin on/off: {id}", "/api/plugins/remove": "Removed the server plugin {id}", "/api/modpack/code": "Installed mods from a mod pack code", "/api/mods/light": "Light mode for map mods: {on}", "/api/maintenance": "Maintenance mode {state}", "/api/preset": "Applied the preset {preset}", "/api/servers/clone": "Cloned a server",
     "/api/config/restore": "Restored an older config", "/api/statuspage": "Changed the status page", "/api/joinalerts": "Changed join alerts",
+    "/api/laps": "Lap times: {action}", "/api/players/note": "Wrote a note about {name}",
+    "/api/games": "Games: {action}", "/api/recap": "Changed the weekly recap",
     "/api/updates/install": "Installed a BeamMP update", "/api/duckdns": "Changed DuckDNS", "/api/integrations": "Changed notification integrations",
 }
 SAFE_FIELDS = ("action", "name", "player", "map", "state", "preset", "minutes", "reason", "enabled", "role", "on")
@@ -5906,7 +10230,7 @@ class App:
                              ("duckdns", self.duck_tick), ("resources", self.resource_tick),
                              ("discord status", self.status_msg_tick), ("mod updates", self.mod_update_tick),
                              ("sleep", self.sleep_tick), ("health", self.health_tick), ("community", self.community_tick),
-                             ("upnp", self.upnp_tick), ("supporter", self.supporter_tick)):
+                             ("upnp", self.upnp_tick), ("supporter", self.supporter_tick), ("other computers", self.remote_tick)):
                 try:
                     fn()
                 except Exception as e:
@@ -6084,7 +10408,7 @@ class App:
         saved = 0
         while True:
             time.sleep(1)
-            if not self.settings.get("guard_on") or relay_on():
+            if not self.settings.get("guard_on") or relay_on() or on_mac():
                 if self.guard_applied != ((), ()):
                     self.guard_apply()
                 time.sleep(4)
@@ -6113,7 +10437,7 @@ class App:
 
     def guard_apply(self):
         """Hand the block list to the firewall (Linux root helper / Windows firewall task)."""
-        on = bool(self.settings.get("guard_on")) and not relay_on()
+        on = bool(self.settings.get("guard_on")) and not relay_on() and not on_mac()
         with self.guard_lock:
             ports = tuple(self.guard_ports()) if on else ()
             ips = tuple(self.guard.block_list()) if on else ()
@@ -6343,7 +10667,143 @@ class App:
             use_server("main")
             self.notifier.add("backup", "Backup failed", "Couldn't back up " + "; ".join(errors) +
                               ". Check that the disk isn't full.", "warning")
+        if made and self.settings.get("backup_copy"):
+            threading.Thread(target=self.copy_backups, args=(made,), daemon=True, name="backup-copy").start()
+        if made and self.settings.get("gdrive_on") and gdrive_connected():
+            threading.Thread(target=self.copy_backups, args=(made, "gdrive"), daemon=True, name="backup-gdrive").start()
         return made, errors
+
+    def copy_backups(self, made, where=""):
+        use_server("main")
+        if where == "gdrive":
+            try:
+                note, ok = gdrive_copy(made), True
+            except Exception as e:
+                note, ok = str(e) if isinstance(e, RuntimeError) else short_err(e), False
+                self.notifier.add("backup", "Google Drive copy failed", "The backups were made on this computer, but copying them "
+                                  "to Google Drive failed: %s" % note, "warning")
+            self.state["gdrive_last"] = {"t": now(), "ok": ok, "note": note}
+            self.save_state()
+            return
+        try:
+            note, ok = copy_backups(made), True
+        except Exception as e:
+            note, ok = str(e) if isinstance(e, RuntimeError) else short_err(e), False
+            self.notifier.add("backup", "Backup copy failed", "The backups were made on this computer, but copying them "
+                              "failed: %s" % note, "warning")
+        self.state["backup_copy"] = {"t": now(), "ok": ok, "note": note}
+        self.save_state()
+
+    # ---------- commands from the other computers' dashboards (see "paired computers talk through files")
+    def remote_tick(self):
+        if not hasattr(self, "remote_done"):
+            self.remote_done, self.remote_t, self.remote_last, self.remote_busy = [], 0, "", False
+        try:
+            names = sorted(os.listdir(REMOTE_IN))
+        except OSError:
+            names = []
+        changed = False
+        for n in names:
+            p = os.path.join(REMOTE_IN, n)
+            if REMOTE_CMD_RE.fullmatch(n):
+                cmd = read_json(p, None)
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+                if not isinstance(cmd, dict) or not re.fullmatch(r"[0-9a-f]{8,32}", str(cmd.get("id") or "")):
+                    continue
+                if cmd.get("action") == "move-in":
+                    if self.remote_busy:
+                        self.remote_answer(cmd, {"ok": False, "note": "It's already putting a server in place - try again after."})
+                    else:
+                        self.remote_busy = True
+                        threading.Thread(target=self.remote_move_in, args=(cmd,), daemon=True, name="move-in").start()
+                    continue
+                self.remote_answer(cmd, self.remote_do(cmd))
+                changed = True
+            else:
+                try:                    # a move's file waits a day for its command (and a half-sent one, too)
+                    old = now() - os.path.getmtime(p) > 86400
+                    if (old or not (REMOTE_ZIP_RE.fullmatch(n) or n.startswith("."))) and (os.path.isfile(p) or os.path.islink(p)):
+                        os.remove(p)
+                except OSError:
+                    pass
+        if changed or now() - self.remote_t >= 30:
+            self.remote_write()
+
+    def remote_answer(self, cmd, r):
+        self.remote_done = ([dict(r, id=str(cmd["id"]), action=str(cmd.get("action"))[:20], t=now())] + self.remote_done)[:10]
+        self.remote_last = ""
+        self.remote_write()
+
+    def remote_write(self):
+        self.remote_t = now()
+        d = {"version": EASY_VERSION, "host": socket.gethostname()[:40], "servers": remote_snapshot(), "done": self.remote_done}
+        key = json.dumps(d, sort_keys=True)
+        if key == self.remote_last and now() - getattr(self, "remote_wrote", 0) < REMOTE_STALE // 2:
+            return
+        os.makedirs(REMOTE_IN, exist_ok=True)
+        if not IS_WIN:
+            os.chmod(REMOTE_DIR, 0o700)
+            os.chmod(REMOTE_IN, 0o700)
+        write_json(os.path.join(REMOTE_DIR, "status.json"), dict(d, t=now()))
+        self.remote_last, self.remote_wrote = key, now()
+
+    def remote_do(self, cmd):
+        act = cmd.get("action")
+        use_server("main")
+        if act not in ("start", "stop", "restart"):
+            return {"ok": False, "note": "This EasyServer doesn't know that command - update it."}
+        if act == "start" and not I().meta.get("reviewed"):
+            return {"ok": False, "note": "Open this computer's dashboard once and look over the settings first."}
+        if act in ("start", "restart"):
+            set_server_meta("main", moved_to=None)
+        r = self.server.action(act)
+        return {"ok": bool(r.get("ok")), "note": {"start": "Started.", "stop": "Stopped.", "restart": "Restarted."}[act]
+                if r.get("ok") else (r.get("msg") or "It didn't work")}
+
+    def remote_move_in(self, cmd):
+        """A server moved here from another computer: a backup of this one first, then its settings, mods, bans,
+        stats and games data, then start it."""
+        name = str(cmd.get("file") or "")
+        p = os.path.join(REMOTE_IN, name)
+        try:
+            use_server("main")
+            if not REMOTE_ZIP_RE.fullmatch(name) or not os.path.isfile(p) or os.path.islink(p):
+                return self.remote_answer(cmd, {"ok": False, "note": "The server's file didn't arrive - try again."})
+            try:
+                undo = make_backup(I(), False)
+            except Exception as e:
+                return self.remote_answer(cmd, {"ok": False, "note": "Couldn't save this computer's own settings first, so "
+                                                "nothing was changed (%s)" % short_err(e)})
+            cap = _Capture()
+            Handler._import_zip(cap, p, {"settings": "1", "mods": "1", "games": "1"})
+            code, body = cap.result
+            if code != 200:
+                return self.remote_answer(cmd, {"ok": False, "note": body.get("error") or "It couldn't be put in place"})
+            rep = body.get("report") or {}
+            set_server_meta("main", reviewed=True, moved_to=None)
+            src = re.sub(r"[\x00-\x1f]", "", str(cmd.get("source") or "another computer"))[:80]
+            self.notifier.add("backup", "A server moved here", "%s was moved to this computer. How this computer's server was "
+                              "before is saved as a backup (%s)." % (src, undo), "info")
+            r = self.server.action("restart" if self.server.status()["state"] == "running" else "start")
+            nm, ng, nb = len(rep.get("mods_added") or []), len(rep.get("games") or []), len(rep.get("mods_blocked") or [])
+            note = "Moved: the settings, %d mod%s and %d file%s of stats and games%s." % (
+                nm, "" if nm == 1 else "s", ng, "" if ng == 1 else "s",
+                (" - %d mod%s blocked by the virus check" % (nb, " was" if nb == 1 else "s were")) if nb else "")
+            note += " The server is starting there." if r.get("ok") else " Start the server there yourself (%s)." % (r.get("msg") or "it didn't start")
+            if not I().has_authkey():
+                note += " It has no AuthKey yet: put yours in on its Settings page so it shows in the BeamMP server list."
+            self.remote_answer(cmd, {"ok": True, "note": note})
+        except Exception as e:
+            self.remote_answer(cmd, {"ok": False, "note": "It stopped with an error: " + short_err(e)})
+        finally:
+            self.remote_busy = False
+            try:
+                os.remove(p)
+            except OSError:
+                pass
 
     def duck_tick(self, force=False):
         """Keep name.duckdns.org pointing at this home's current public IP."""
@@ -6390,10 +10850,21 @@ class App:
             if inst.server.status()["state"] == "running":
                 players += len(online_names())
         use_server("main")
-        sample = {"t": t, "cpu": cpu, "mem_total": tot, "mem_free": avail, "up_kbps": up, "players": players}
-        hist = self.__dict__.setdefault("res_hist", [])
+        o = read_json(os.path.join(INSTANCES["main"].STATS_DIR, "online.json"), None) if "main" in INSTANCES else None
+        ping = o.get("ping") if isinstance(o, dict) and t - int(o.get("t", 0)) < 120 and isinstance(o.get("ping"), int) else None
+        sample = {"t": t, "cpu": cpu, "mem_total": tot, "mem_free": avail, "up_kbps": up, "players": players, "ping": ping}
+        if "res_hist" not in self.__dict__:          # the last week survives a restart of the dashboard
+            old = read_json(PERF_FILE, [])
+            self.res_hist = [x for x in old if isinstance(x, dict) and isinstance(x.get("t"), (int, float)) and x["t"] > t - 7 * 86400] \
+                if isinstance(old, list) else []
+        hist = self.res_hist
         hist.append(sample)
-        del hist[:-1440]                    # 24 hours, one sample a minute
+        del hist[:-PERF_KEEP]               # a week, one sample a minute
+        if len(hist) % 10 == 0:
+            try:
+                write_json(PERF_FILE, hist)
+            except OSError:
+                pass
         self.res = sample
         last = lambda n: hist[-n:] if len(hist) >= n else []
         warned = self.__dict__.setdefault("res_warned", {})
@@ -6408,6 +10879,12 @@ class App:
                  "Only %s MB of %s MB is free. The game server can start lagging or crash. Close programs you don't "
                  "need, use fewer or smaller mods, or lower the player limit (Config -> Max players)."
                  % (sample["mem_free"], sample["mem_total"]))
+        laggy = [x for x in last(5) if x.get("players") and x.get("ping") is not None and x["ping"] >= 250]
+        if last(5) and len(laggy) == 5:
+            warn("ping", "Players have a lot of lag",
+                 "The players' average ping has been above 250 ms for 5 minutes (now %d ms, %d players). If the "
+                 "computer and upload graphs on the Health page look fine, it's their connection or the distance to "
+                 "your server. If they're full, lower the player limit." % (sample["ping"], players))
         busy = [x for x in last(5) if x["cpu"] is not None and x["cpu"] >= 90]
         if last(5) and len(busy) == 5:
             warn("cpu", "This computer's processor is at its limit",
@@ -6463,10 +10940,46 @@ class App:
         if not self.settings.get("mod_update_check"):
             return
         t = now()
+        if self.settings.get("mod_auto_update") and t >= self.state.get("modauto_next", 0):
+            self.state["modauto_next"] = t + 600
+            self.mod_auto_update()
         if t < self.state.get("modupd_next", 0):
             return
         self.state["modupd_next"] = t + 24 * 3600
         self.run_mod_check(False)
+
+    def mod_auto_update(self):
+        """Install known mod updates on every server nobody is playing on, then restart it if it's running
+        (players already on it would have the old version)."""
+        with LOCK:
+            insts = list(INSTANCES.values())
+        for inst in insts:
+            ups = (getattr(self, "mod_updates", {}) or {}).get(inst.id) or {}
+            todo = [n for n, u in sorted(ups.items()) if u.get("update")]
+            if not todo:
+                continue
+            use_server(inst.id)
+            if online_names():
+                continue
+            try:
+                done, failed = update_mods(todo, ups)
+            except Exception as e:
+                sys.stderr.write("mod auto update %s: %s\n" % (inst.id, short_err(e)))
+                continue
+            if done:
+                refresh_mod_desc()
+                restart = inst.server.status()["state"] == "running" and not online_names()
+                if restart:
+                    inst.server.action("restart")
+                else:
+                    self.config_changed()
+                self.notifier.add("mod_update", "Mod%s updated by itself" % ("s" if len(done) > 1 else ""),
+                                  "While nobody was playing on %s: %s.%s" % (inst.name, ", ".join(done[:15]),
+                                                                            " The server was restarted." if restart else ""), "info")
+            if failed:
+                self.notifier.add("mod_update", "A mod update didn't work", "\n".join("%s: %s" % (n, e) for n, e in failed[:10]), "warning")
+                for n, _ in failed:
+                    ups[n]["update"] = False       # don't try again every 10 minutes; the next daily check brings it back
 
     def run_mod_check(self, force):
         with LOCK:
@@ -6752,9 +11265,28 @@ class App:
         if isinstance(act, dict):
             if t < act.get("end", 0):
                 return
-            # the event is over: put the map and mods back
+            # the event is over: put the map, mods and games back, post the results
             for m in act.get("mods") or []:
                 set_mod_enabled(m, False)
+            if act.get("game") and act.get("game_prev") is False:
+                cfg = read_games_cfg()
+                cfg[act["game"]] = False
+                write_games_cfg(cfg)
+            try:
+                res = event_results(act, min(t, act.get("end") or t))
+            except Exception as ex:
+                sys.stderr.write("event results: %s\n" % short_err(ex))
+                res = None
+            if res is not None:
+                set_server_meta(inst.id, event_last={"name": act.get("name"), "end": t, "results": res})
+                if act.get("results") and webhook_parts()[0]:
+                    try:
+                        webhook_call("POST", body={"username": "BeamMP events", "content": event_results_text(act.get("name", "The event"), res)[:1900],
+                                                   "allowed_mentions": {"parse": []}})
+                    except Exception as ex:
+                        sys.stderr.write("event results: %s\n" % short_err(ex))
+            if act.get("once"):
+                set_server_meta(inst.id, events=[dict(e, on=False) if e.get("id") == act.get("id") else e for e in events_cfg(inst)])
             if online_names():
                 chat_say("%s is over - thanks for joining! Switching back to %s." % (act.get("name", "The event"), act.get("prev_map")))
                 time.sleep(2)
@@ -6789,10 +11321,21 @@ class App:
             if left <= 0:
                 prev = current_map()
                 moved = [m for m in e.get("mods") or [] if set_mod_enabled(m, True)]
+                game, game_prev = e.get("game") or "", None
+                if game in EVENT_GAMES:
+                    cfg = read_games_cfg()
+                    game_prev = bool(cfg.get(game))
+                    if not game_prev:
+                        cfg[game] = True
+                        write_games_cfg(cfg)
                 set_server_meta(inst.id, event_active={"id": e.get("id"), "name": e["name"], "end": st + int(e["minutes"]) * 60,
-                                                        "prev_map": prev if prev != e["map"] else None, "mods": moved})
+                                                        "prev_map": prev if prev != e["map"] else None, "mods": moved,
+                                                        "start": t, "game": game, "game_prev": game_prev,
+                                                        "results": bool(e.get("results")), "once": bool(e.get("date"))})
                 if online_names():
-                    chat_say("%s starts now! Switching to %s - rejoin in a moment." % (e["name"], e["map"]))
+                    chat_say("%s starts now! Switching to %s - rejoin in a moment.%s" % (
+                        e["name"], e["map"], {"race": " Type /race to start a race.", "drift": " Slide for drift points - /drift shows the best.",
+                                              "cnr": " Type /cnr to start cops and robbers."}.get(game, "")))
                     time.sleep(2)
                 if e["map"] != prev:
                     ok, note = self.switch_map(e["map"])
@@ -6805,6 +11348,20 @@ class App:
         for k in [k for k in warned if int(k.rsplit("@", 1)[1]) < t - 3600]:
             warned.pop(k, None)
 
+    def _recap_tick(self, inst):
+        """The weekly recap (Games page), once a week at the hour the owner picked."""
+        cfg = recap_cfg(inst)
+        if not cfg["on"]:
+            return
+        lt = time.localtime()
+        week = time.strftime("%G-W%V", lt)
+        if lt.tm_wday != cfg["day"] or lt.tm_hour < cfg["hour"] or inst.meta.get("recap_week") == week:
+            return
+        set_server_meta(inst.id, recap_week=week)        # once a week, even if posting fails
+        r = weekly_recap()
+        if r and broadcast(r[0], r[1]):
+            set_server_meta(inst.id, recap_last=now())
+
     def _bridge_flag(self, inst, S):
         want = "on" if (self.settings.get("discord_bridge") and
                         (self.settings.get("discord_bridge_server") or "main") == inst.id and webhook_parts()[0]) else "off"
@@ -6814,11 +11371,16 @@ class App:
 
     def _monitor_one(self, inst, S):
         self._check_tampering(inst, S)
+        if moved_note(inst) and inst.server.status()["state"] == "running":
+            inst.server.action("stop")
+            self.notifier.add("stopped", "Server kept off", moved_note(inst) + ", so it was stopped here again. To run it on "
+                              "this computer, press Start in the dashboard.", "info")
         if now() >= S.get("maint_next", 0):
             S["maint_next"] = now() + 300
             try:
                 if not map_timeline(inst):
                     record_map(inst, current_map())
+                ensure_chat_lang(inst)           # picks up translations that came with a dashboard update
                 if not online_names():           # never pull mods away under players' feet
                     moved = light_sync(inst)
                     how = ensure_tools_mod(inst)
@@ -6834,6 +11396,10 @@ class App:
             self._event_tick(inst, S)
         except Exception as e:
             sys.stderr.write("events %s: %s\n" % (inst.id, short_err(e)))
+        try:
+            self._recap_tick(inst)
+        except Exception as e:
+            sys.stderr.write("weekly recap %s: %s\n" % (inst.id, short_err(e)))
         try:
             self._rotation_tick(inst, S)
         except Exception as e:
@@ -6895,7 +11461,7 @@ class App:
                         raw = raw[:raw.rindex(b"\n") + 1]     # never cut a line in half
                     S["ev_pos"] += len(raw)
                     chunk = raw.decode("utf-8", "replace")
-                joined, denied, modmsgs, bots, refused, chat = [], [], [], 0, [], []
+                joined, denied, modmsgs, bots, refused, chat, reports = [], [], [], 0, [], [], []
                 for line in chunk.splitlines():
                     try:
                         e = json.loads(line)
@@ -6905,6 +11471,11 @@ class App:
                         continue
                     if e.get("ev") == "join":
                         joined.append(clean_player_name(e.get("name")))
+                    elif e.get("ev") == "report" and len(reports) < 10:
+                        reports.append(e)
+                    elif e.get("ev") == "votekick":
+                        activity(clean_player_name(e.get("by")), "/votekick %s (%s)" % (clean_player_name(e.get("name")), chat_text(e.get("reason"))[:80]),
+                                 "game", server=inst.id)
                     elif e.get("ev") == "chat" and len(chat) < 40:
                         chat.append((clean_player_name(e.get("name")), clean_msg(e.get("msg"))[:300]))
                     elif e.get("ev") == "mapvote" and isinstance(e.get("map"), str):
@@ -6945,6 +11516,13 @@ class App:
                                            "trying to fill the server. Anti-bot paused new joins for 2 minutes; players "
                                            "who joined before can still come in." % e.get("count"))
                     S["last_t"] = max(S["last_t"], e["t"])
+                for e in reports:
+                    r = add_report(inst, e)
+                    lines = "\n".join("%s %s: %s" % (time.strftime("%H:%M", time.localtime(c["t"])), c["name"], chat_text(c["msg"]))
+                                      for c in r["chat"][-8:])
+                    self.notifier.add("report", "%s reported %s" % (r["by"], r["target"]),
+                                      "Reason: %s%s\nSee Players -> Reports in the dashboard." % (r["reason"], ("\n\nChat before the report:\n" + lines) if lines else ""),
+                                      "warning")
                 if modmsgs:
                     self.notifier.add("moderation", modmsgs[0] if len(modmsgs) == 1 else "%d moderation actions" % len(modmsgs),
                                       "\n".join(modmsgs[:20]), "info")
@@ -7070,7 +11648,7 @@ class App:
         with LOCK:
             if self.locked.get(key, 0) > t:
                 return True
-            if ip_is_loopback(ip):
+            if at_server(ip):
                 return False            # someone sitting at the server itself
             if not ip_is_lan(ip):
                 self.global_fails = [x for x in self.global_fails if x > t - 600]
@@ -7101,7 +11679,7 @@ class App:
             self.fails[key] = f
             if not ip_is_lan(ip):
                 self.global_fails.append(t)
-            elif not ip_is_loopback(ip):
+            elif not at_server(ip):
                 self.lan_fails = getattr(self, "lan_fails", []) + [t]
             if len(f) >= 5:
                 self.locked[key] = t + 900
@@ -7149,13 +11727,14 @@ class App:
             if not s or s["last"] < t - 7200 or s["created"] < t - 43200:
                 self.sessions.pop(tok, None)
                 return None
-        if s.get("user", "owner") != "owner":   # an extra account: still there? role changed?
+        if s.get("user", "owner") != "owner":   # an extra account: still there? role changed? still allowed from outside?
             u = find_user(s["user"])
-            if not u or u.get("disabled"):
+            if not u or u.get("disabled") or (ip_is_remote(s.get("ip", "")) and not (u.get("remote") and u.get("totp"))):
                 with LOCK:
                     self.sessions.pop(tok, None)
                 return None
             s["role"] = u["role"]
+            s["_u"] = u
         with LOCK:
             s["last"] = t
         return s
@@ -7328,7 +11907,7 @@ class Handler(BaseHTTPRequestHandler):
                             "They were blocked." % (re.sub(r"[^\w.:\-\[\]]", "?", host)[:80] or "none", self.ip))
             self.send(421, "Open the dashboard by its address (for example http://192.168.1.20:30815).", "text/plain")
             return False
-        if not app.secrets.has("MODS_PASSWORD") and not ip_is_loopback(self.ip):
+        if not app.secrets.has("MODS_PASSWORD") and not at_server(self.ip):
             path, _ = self.route()
             if path.startswith("/api/") and path not in ("/api/session",):
                 self.send(403, {"ok": False, "error": "Set a password first - open the dashboard on the server computer itself."})
@@ -7372,6 +11951,7 @@ class Handler(BaseHTTPRequestHandler):
         self._body_done = False
         self._json = None
         self._code = 200
+        self._restore_undo = None
         try:
             if not self.gate():
                 return
@@ -7381,7 +11961,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self.page()
             if method == "GET" and path in APP_FILES:
                 return self.app_file(path)
-            public = {("GET", "/api/session"), ("POST", "/api/login"), ("POST", "/api/setup")}
+            if method == "GET" and path == "/lang/index.json":
+                return self.send(200, {"languages": lang_index()}, extra={"Cache-Control": "no-cache"})
+            if method == "GET" and LANG_PATH_RE.fullmatch(path):
+                return self.lang_file(path)
+            if method == "GET" and path == "/whatsnew.json":
+                return self.whatsnew_file()
+            public = {("GET", "/api/session"), ("POST", "/api/login"), ("POST", "/api/setup"),
+                      ("GET", "/api/teaminvite/info"), ("POST", "/api/teaminvite/accept"),
+                      ("POST", "/api/discord/start"), ("POST", "/api/discord/finish")}
             if (method, path) in public:
                 return getattr(self, "api_" + path[5:].replace("/", "_"))(q)
             if method in ("GET", "HEAD") and path in ("/status", "/status.json"):
@@ -7394,17 +11982,30 @@ class Handler(BaseHTTPRequestHandler):
             fn = getattr(self, "%s_%s" % (method.lower(), path[5:].replace("/", "_").replace("-", "_")), None)
             if not fn:
                 return self.fail(404, "not found")
-            self.sess = sess
             _TL.user = sess.get("user", "owner")
-            role = sess.get("role", "owner")
-            need = required_role(method, path)
-            if ROLES.get(role, 0) < ROLES[need]:
-                return self.fail(403, "Your account (%s) can't do that - ask %s." % (role, "the owner" if need == "owner" else "an admin"))
-            if method != "GET":
-                APP.last_use = now()
             want = self.headers.get("X-ES-Server") or q.get("srv") or "main"
             with LOCK:
                 known = want in INSTANCES
+            if sess.get("role", "owner") == "owner" or sess.get("user", "owner") == "owner":
+                need = required_role(method, path)
+                if ROLES.get(sess.get("role", "owner"), 0) < ROLES[need]:
+                    return self.fail(403, "Only the owner can do that.")
+                self.sess = sess
+            else:
+                u = sess.get("_u") or find_user(sess["user"])
+                if not u:
+                    return self.fail(401, "Please log in")
+                if path in TEAM_ANY_SERVER and known and not user_role_for(u, want):
+                    with LOCK:                   # pages about the account, not a server: use one it may see
+                        want = next((i for i in INSTANCES if user_role_for(u, i)), want)
+                ok, msg = team_allows(u, want if known else "main", method, path)
+                if not ok:
+                    return self.fail(403, msg)
+                # handlers see the role this account has on the server it is working on
+                self.sess = dict(sess, role=user_role_for(u, want if known else "main") or "viewer")
+                self.sess_real = sess
+            if method != "GET":
+                APP.last_use = now()
             if not known:
                 return self.fail(404, "That server doesn't exist (any more)")
             use_server(want)
@@ -7451,6 +12052,26 @@ class Handler(BaseHTTPRequestHandler):
         size = {"/icon-192.png": 192, "/icon-512.png": 512, "/apple-touch-icon.png": 180}[path]
         return self.send(200, app_icon_png(size), "image/png", {"Cache-Control": "max-age=86400"})
 
+    def lang_file(self, path):
+        """A translation of the dashboard (dashboard/lang/xx.json). Public: the login page is translated too."""
+        code = LANG_PATH_RE.fullmatch(path).group(1)
+        try:
+            with open(os.path.join(LANG_DIR, code + ".json"), "rb") as f:
+                body = f.read(2 * 1024 * 1024)
+        except OSError:
+            return self.fail(404, "not found")
+        return self.send(200, body, "application/json", {"Cache-Control": "no-cache"})
+
+    def whatsnew_file(self):
+        """The "New in" cards shown on the Overview after an update (dashboard/whatsnew.json, made from
+        CHANGELOG.md when the website is built). Public like the language files: nothing private in it."""
+        try:
+            with open(os.path.join(HERE, "whatsnew.json"), "rb") as f:
+                body = f.read(256 * 1024)
+        except OSError:
+            return self.send(200, {"version": "", "languages": {}}, extra={"Cache-Control": "no-cache"})
+        return self.send(200, body, "application/json", {"Cache-Control": "no-cache"})
+
     def page(self):
         nonce = secrets.token_urlsafe(16)
         html_ = APP.page.replace("__NONCE__", nonce).replace("__VERSION__", EASY_VERSION)
@@ -7470,6 +12091,24 @@ class Handler(BaseHTTPRequestHandler):
                    "Cache-Control": "max-age=20"})
 
     # ---------- public endpoints
+    def session_server_roles(self, sess):
+        """{server id: role} for an extra account (custom roles as their name), so the page shows the right tabs."""
+        if not sess or sess.get("user", "owner") == "owner":
+            return None
+        u = find_user(sess["user"])
+        if not u:
+            return {}
+        names = {r["id"]: r for r in load_roles()}
+        with LOCK:
+            ids = list(INSTANCES)
+        out = {}
+        for sid in ids:
+            r = user_role_for(u, sid)
+            if r:
+                out[sid] = {"role": r, "name": names[r]["name"] if r in names else r,
+                            "perms": names[r]["perms"] if r in names else None}
+        return out
+
     def api_session(self, q):
         app = APP
         sess = app.session(self.cookie("es_session"))
@@ -7488,18 +12127,21 @@ class Handler(BaseHTTPRequestHandler):
         self.send(200, {
             "logged_in": bool(sess), "csrf": sess["csrf"] if sess else None,
             "user": sess.get("user", "owner") if sess else None, "role": sess.get("role", "owner") if sess else None,
+            "server_roles": self.session_server_roles(sess),
             "supporter": bool(sess) and supporter_active(),
             "needs_setup": not app.secrets.has("MODS_PASSWORD"),
-            "setup_allowed": ip_is_loopback(self.ip) and host_name(self.headers.get("Host")) in ("localhost", "127.0.0.1", "::1"),
+            "setup_allowed": at_server(self.ip) and host_name(self.headers.get("Host")) in ("localhost", "127.0.0.1", "::1"),
             "totp": app.secrets.has("TOTP_SECRET"),
+            "discord_login": dlogin_available() and dlogin_conf() is not None,
             "version": EASY_VERSION, "platform": "windows" if IS_WIN else "linux",
             "https": self.https,
         }, extra=extra)
 
     def api_setup(self, q):
         app = APP
-        if app.secrets.has("MODS_PASSWORD") or not ip_is_loopback(self.ip):
-            return self.fail(403, "Setup is only possible once, on the server computer itself")
+        if app.secrets.has("MODS_PASSWORD") or not at_server(self.ip):
+            return self.fail(403, "Setup is only possible once, on the server computer itself"
+                             + (" (on a Mac: run the installer again, it sets the password)" if on_mac() else ""))
         host = host_name(self.headers.get("Host"))
         origin = self.headers.get("Origin")
         if host not in ("localhost", "127.0.0.1", "::1") or (
@@ -7558,30 +12200,30 @@ class Handler(BaseHTTPRequestHandler):
         self.send(200, {"ok": True}, extra={"Set-Cookie": self.login_cookies(tok, "owner", b.get("remember") is True)})
 
     def login_user(self, uname, pw):
-        """Extra accounts (admin / moderator / viewer). They only work from the home network:
-        logging in from the internet stays protected by the owner's password + two-step code."""
+        """Extra accounts. From the home network with their password (and their two-step code if they set
+        one up). From the internet only when the owner allowed it for this account AND it has two-step login."""
         app = APP
-        try:
-            local = not ipaddress.ip_address(self.ip).is_global
-        except ValueError:
-            local = False
+        local = not ip_is_remote(self.ip)
         u = find_user(uname)
-        ok = bool(u) and not u.get("disabled") and check_password(pw, u.get("pw", ""))
+        ok_pw = bool(u) and not u.get("disabled") and check_password(pw, u.get("pw", ""))
+        # the code is only checked when the password is right; the answer is the same either way
+        ok = ok_pw and (not u.get("totp") or user_totp_ok(u, (self._json or {}).get("code")))
         if not ok:
             time.sleep(0.7)
             app.login_failed(self.ip)
             activity(uname[:24], "Failed login", "dashboard", self.ip, "main", ok=False)
-            return self.fail(401, "Wrong name or password")
-        if not local:
+            return self.fail(401, "Wrong name, password or two-step code", need_code=True)
+        if not local and not (u.get("remote") and u.get("totp")):
             activity(u["name"], "Login refused (from the internet)", "dashboard", self.ip, "main", ok=False)
-            return self.fail(403, "Extra accounts can only log in from the home network. From the internet, only the owner can log in.")
+            return self.fail(403, "This account can only log in from the home network. The owner can allow internet "
+                                  "access for it (Settings → Users), and it needs two-step login.")
         users = load_users()
         for x in users:
             if x["name"].lower() == u["name"].lower():
                 x["last_login"] = now()
         save_users(users)
         tok = app.new_session(self.ip, u["name"], u["role"])
-        activity(u["name"], "Logged in", "dashboard", self.ip, "main")
+        activity(u["name"], "Logged in" + ("" if local else " (from the internet)"), "dashboard", self.ip, "main")
         b = self._json or {}
         self.send(200, {"ok": True}, extra={"Set-Cookie": self.login_cookies(tok, u["name"], b.get("remember") is True)})
 
@@ -7626,6 +12268,9 @@ class Handler(BaseHTTPRequestHandler):
     def get_servers(self, q):
         with LOCK:
             insts = list(INSTANCES.values())
+        if self.sess.get("user", "owner") != "owner":
+            u = find_user(self.sess["user"]) or {}
+            insts = [i for i in insts if user_role_for(u, i.id)]
         out = []
         for inst in insts:
             use_server(inst.id)
@@ -7932,22 +12577,26 @@ class Handler(BaseHTTPRequestHandler):
     def post_moderation(self, q):
         b = self.body_json()
         d = read_mod()
-        for k in ("filter", "spam", "antibot", "verify", "guests"):
+        for k in ("filter", "spam", "antibot", "verify", "guests", "report", "votekick", "chatlog"):
             if k in b:
                 d[k] = bool(b[k])
-        for k in ("admins", "words"):
+        if "kickwords_action" in b:
+            if b["kickwords_action"] not in KICKWORD_ACTIONS:
+                return self.fail(400, "bad kick word action")
+            d["kickwords_action"] = b["kickwords_action"]
+        for k in ("admins", "words", "kickwords"):
             if k in b:
                 if not isinstance(b[k], list):
                     return self.fail(400, "bad list")
                 items = []
                 for x in b[k][:500]:
                     x = re.sub(r"[\t\r\n,]", "", str(x)).strip()[:64]
-                    if k == "words":
+                    if k in ("words", "kickwords"):
                         x = x.lower()
                     if x and x not in items:
                         items.append(x)
                 d[k] = items
-        for k, lo, hi in (("spam_limit", 2, 30), ("per_ip", 0, 20), ("join_flood", 0, 100)):
+        for k, lo, hi in (("spam_limit", 2, 30), ("per_ip", 0, 20), ("join_flood", 0, 100), ("votekick_min", 3, 20)):
             if k in b:
                 v = int(b[k])
                 if not lo <= v <= hi:
@@ -7955,6 +12604,55 @@ class Handler(BaseHTTPRequestHandler):
                 d[k] = v
         write_mod(d)
         self.send(200, {"ok": True, "note": "Saved - works right away, no restart needed."})
+
+    def get_reports(self, q):
+        items = load_reports(I())
+        self.send(200, {"items": items[:100], "open": sum(1 for x in items if x.get("open")),
+                        "on": read_mod()["report"]})
+
+    def post_reports_close(self, q):
+        b = self.body_json()
+        rid, every = str(b.get("id") or ""), b.get("id") == "all"
+        with _REPORT_LOCK:
+            items = load_reports(I())
+            hit = 0
+            for x in items:
+                if (every or x["id"] == rid) and x.get("open"):
+                    x["open"], x["closed_by"], x["closed_at"] = False, getattr(_TL, "user", "owner"), now()
+                    hit += 1
+            if not hit and not every:
+                return self.fail(404, "No such report")
+            write_json(_reports_path(I()), items)
+        self.send(200, {"ok": True, "note": "Marked as handled."})
+
+    def get_chat(self, q):
+        """Chat history: newest last. q = words, player = name, around = a time (shows the 5 minutes around it)."""
+        try:
+            around = int(q.get("around") or 0)
+        except ValueError:
+            around = 0
+        days = 30
+        lines = read_chat(I(), around - 300 if around else now() - days * 86400, around + 300 if around else None)
+        word = str(q.get("q") or "").strip().lower()[:80]
+        player = str(q.get("player") or "").strip().lower()[:40]
+        if not around:
+            if player:
+                lines = [c for c in lines if c["name"].lower() == player]
+            if word:
+                lines = [c for c in lines if word in c["msg"].lower() or word in c["name"].lower()]
+        total = len(lines)
+        self.send(200, {"lines": lines[-500:], "total": total, "on": read_mod()["chatlog"],
+                        "players": sorted({c["name"] for c in lines[-3000:]}, key=str.lower)[:300] if not player else []})
+
+    def post_chat_clear(self, q):
+        for name in CHAT_FILES:
+            try:
+                os.remove(os.path.join(I().STATS_DIR, name))
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                return self.fail(500, "Couldn't delete the chat history (%s)" % short_err(e))
+        self.send(200, {"ok": True, "note": "Chat history deleted."})
 
     def get_bans(self, q):
         self.send(200, {"bans": read_bans(), "online": online_names()})
@@ -8073,9 +12771,15 @@ class Handler(BaseHTTPRequestHandler):
         self.send(200, {"ok": True})
 
     def post_server_action(self, q):
-        what = self.body_json().get("action")
+        b = self.body_json()
+        what = b.get("action")
         if what == "start" and not I().meta.get("reviewed"):
             return self.fail(409, "Look over the settings first - open the dashboard and press Start again.")
+        if what in ("start", "restart") and moved_note(I()):
+            if not b.get("anyway"):
+                return self.send(409, {"ok": False, "moved": True, "error": moved_note(I()) + ". Start it on this computer "
+                                       "too? Use the same AuthKey on only one of them."})
+            set_server_meta(I().id, moved_to=None)
         r = APP.server.action(what)
         if r.get("ok"):
             self.send(200, {"ok": True})
@@ -8193,7 +12897,52 @@ class Handler(BaseHTTPRequestHandler):
                         "maps_size": sum(m["size"] for m in mods if m["enabled"] and m["maps"]),
                         "desc_modsize": bool(I().meta.get("desc_modsize")),
                         "light": bool(I().meta.get("light_maps")), "current_map": current_map(),
-                        "all_maps_size": sum(m["size"] for m in mods if (m["enabled"] or m.get("parked")) and m["maps"])})
+                        "all_maps_size": sum(m["size"] for m in mods if (m["enabled"] or m.get("parked")) and m["maps"]),
+                        "storage": mods_storage(I(), mods), "sets": mod_sets_view(I(), mods),
+                        "upload_mbit": APP.settings.get("upload_mbit") or 0,
+                        "limit_kbps": int((I().meta.get("limits") or {}).get("upload_kbps") or 0)})
+
+    def get_mods_advice(self, q):
+        self.send(200, mod_advice(I()))
+
+    def post_mods_sets(self, q):
+        """Mod sets: save the mods in use now under a name, switch to a saved set, or delete one."""
+        b = self.body_json()
+        act = b.get("action")
+        name = clean_set_name(b.get("name"))
+        inst = I()
+        sets = mod_sets(inst)
+        cur = next((x for x in sets if x["name"].lower() == name.lower()), None)
+        if act == "save":
+            mods = mods_in_use(list_mods(), inst)
+            if not mods:
+                return self.fail(400, "Turn some mods on first - a set saves the mods that are on now")
+            if cur:
+                cur["mods"] = mods
+                cur["name"] = name
+            elif len(sets) >= MODSET_MAX:
+                return self.fail(400, "You have %d mod sets - delete one first" % MODSET_MAX)
+            else:
+                sets.append({"name": name, "mods": mods})
+            set_server_meta(inst.id, mod_sets=sets)
+            return self.send(200, {"ok": True, "note": "Saved the mod set %s (%d mod%s)." % (name, len(mods), "" if len(mods) == 1 else "s")})
+        if not cur:
+            return self.fail(404, "There's no mod set called %s" % name)
+        if act == "delete":
+            set_server_meta(inst.id, mod_sets=[x for x in sets if x is not cur] or None)
+            return self.send(200, {"ok": True, "note": "Deleted the mod set %s. The mods themselves are still there." % cur["name"]})
+        if act != "apply":
+            return self.fail(400, "bad action")
+        on, off, missing = apply_mod_set(inst, cur["mods"])
+        note = "Switched to %s: %d mod%s turned on, %d turned off." % (cur["name"], len(on), "" if len(on) == 1 else "s", len(off))
+        if missing:
+            note += " %d mod%s in this set %s no longer on the server: %s." % (
+                len(missing), "" if len(missing) == 1 else "s", "is" if len(missing) == 1 else "are", ", ".join(missing[:5]) + (" ..." if len(missing) > 5 else ""))
+        if on or off:
+            refresh_mod_desc()
+            APP.config_changed()
+            note += " " + APP.applied_note()
+        self.send(200, {"ok": True, "note": note, "on": on, "off": off, "missing": missing})
 
     def post_mods_light(self, q):
         on = bool(self.body_json().get("on"))
@@ -8217,6 +12966,9 @@ class Handler(BaseHTTPRequestHandler):
         name = safe_zip_name(q.get("name"))
         if not name:
             return self.fail(400, "Only .zip files can be uploaded")
+        room = upload_room_error(self.content_length())
+        if room:
+            return self.fail(507, room)
         tdir = tempfile.mkdtemp(dir=UPLOAD_TMP, prefix=".up-")   # own folder: parallel uploads can't mix
         try:
             return self._mods_upload(name, os.path.join(tdir, name))
@@ -8282,17 +13034,27 @@ class Handler(BaseHTTPRequestHandler):
         self.send(200, {"ok": True, "note": APP.applied_note()})
 
     def post_mods_rescan(self, q):
+        """Check the mods that haven't been checked yet (new, changed, or checked by an older version of the
+        checker). {"all": true} checks every mod again - e.g. after the antivirus got new virus definitions."""
+        everything = self.body_json().get("all") is True
         res = []
         for m in list_mods():
             folder = I().CLIENT_DIR if m["enabled"] else I().DISABLED_DIR
-            r = modscan.scan(os.path.join(folder, m["name"]), force=True)
+            path = os.path.join(folder, m["name"])
+            done = None if everything else modscan.cached_result(path)
+            if done:
+                res.append({"name": m["name"], "verdict": done["verdict"], "reasons": done.get("reasons", []), "skipped": True})
+                continue
+            # not forced: same content under another name still counts as checked
+            r = modscan.scan(path, force=everything)
             if r["verdict"] == "blocked":
                 os.makedirs(I().QUAR_DIR, exist_ok=True)
                 dest = os.path.join(I().QUAR_DIR, m["name"])
                 shutil.move(os.path.join(folder, m["name"]), dest)
                 modscan.write_note(dest + ".why.txt", modscan.why_text(r["reasons"]))
-            res.append({"name": m["name"], "verdict": r["verdict"], "reasons": r["reasons"]})
-        self.send(200, {"ok": True, "results": res})
+            res.append({"name": m["name"], "verdict": r["verdict"], "reasons": r["reasons"], "skipped": bool(r.get("cached"))})
+        self.send(200, {"ok": True, "results": res, "checked": sum(1 for x in res if not x["skipped"]),
+                        "skipped": sum(1 for x in res if x["skipped"])})
 
     # ---------- players
     def get_players(self, q):
@@ -8308,6 +13070,265 @@ class Handler(BaseHTTPRequestHandler):
             except OSError:
                 pass
         self.send(200, {"ok": True})
+
+    # ---------- lap times
+    def get_laps(self, q):
+        cfg = read_laps_cfg()
+        g = toml_parse(APP.read_config_text())[0].get("General", {})
+        self.send(200, dict(cfg, radii=list(LAP_RADII), tracks=laps_summary(25), map=map_name(g.get("Map")) or "",
+                            plugin=os.path.exists(os.path.join(I().STATS_DIR, "main.lua")),
+                            status_page=bool(APP.settings.get("statuspage_on"))))
+
+    def post_laps(self, q):
+        b = self.body_json()
+        act = b.get("action")
+        if not act:
+            cfg = read_laps_cfg()
+            if "on" in b:
+                cfg["on"] = bool(b["on"])
+            if "public" in b:
+                cfg["public"] = bool(b["public"])
+            if "radius" in b:
+                try:
+                    r = int(b["radius"])
+                except (TypeError, ValueError):
+                    r = 0
+                if r not in LAP_RADII:
+                    return self.fail(400, "Pick a line width from the list")
+                cfg["radius"] = r
+            write_laps_cfg(cfg)
+            _STATUS_CACHE["t"] = 0
+            return self.send(200, {"ok": True, "note": ("Saved - the game picks it up within 10 seconds." if cfg["on"] else "Saved - lap times are off.")
+                                   + self._games_mod_note()})
+        tid = str(b.get("id") or "")
+        lines = read_track_lines()
+        mine = [l for l in lines if l.split("\t", 1)[0] == tid]
+        if not mine:
+            return self.fail(404, "That track doesn't exist any more")
+        times = read_laptimes()
+        if act == "rename":
+            name = re.sub(r"[\t\r\n;,]", " ", clean_msg(b.get("name") or "")).strip()[:40]
+            if not name:
+                return self.fail(400, "Give the track a name")
+            if any(l.split("\t")[1].lower() == name.lower() and l.split("\t", 1)[0] != tid for l in lines):
+                return self.fail(400, "There's already a track with that name")
+            p = mine[0].split("\t")
+            p[1] = name
+            shared_write(laps_file("tracks.tsv"), "".join((("\t".join(p) if l is mine[0] else l) + "\n") for l in lines))
+            note = "Renamed."
+        elif act == "delete":
+            shared_write(laps_file("tracks.tsv"), "".join(l + "\n" for l in lines if l is not mine[0]))
+            times.pop(tid, None)
+            write_laptimes(times)
+            note = "Track and its times deleted."
+        elif act == "clear":
+            times.pop(tid, None)
+            write_laptimes(times)
+            note = "Times cleared - the next lap is a new record."
+        elif act == "remove_time":
+            who = str(b.get("name") or "").lower()
+            times[tid] = [r for r in times.get(tid, []) if r["name"].lower() != who]
+            write_laptimes(times)
+            note = "Time removed."
+        else:
+            return self.fail(400, "Unknown action")
+        _STATUS_CACHE["t"] = 0
+        self.send(200, {"ok": True, "note": note})
+
+    def _games_mod_note(self):
+        """Games and lap times are drawn on screen by the helper mod: add or remove it to match."""
+        try:
+            how = ensure_tools_mod()
+        except OSError as e:
+            sys.stderr.write("helper mod: %s\n" % short_err(e))
+            return ""
+        if how not in ("added", "removed"):
+            return ""
+        refresh_mod_desc()
+        APP.config_changed()
+        if how == "added":
+            return (" Players download a tiny helper mod (%s) when they join - it shows checkpoints, a timer and cops and robbers"
+                    " on screen." % fmt_bytes(len(tools_mod_bytes())))
+        return " The helper mod was removed."
+
+    # ---------- games: races, cops and robbers, speed traps, badges, seasons, live map, weekly recap
+    def get_games(self, q):
+        self.send(200, games_summary())
+
+    def post_games(self, q):
+        b = self.body_json()
+        act = b.get("action")
+        if not act:
+            cfg = read_games_cfg()
+            for k in GAME_SWITCHES:
+                if k in b:
+                    cfg[k] = bool(b[k])
+            if "champ_points" in b:
+                if b["champ_points"] not in CHAMP_POINTS:
+                    return self.fail(400, "Pick a points system from the list")
+                cfg["champ_points"] = b["champ_points"]
+            if "champ_name" in b:
+                cfg["champ_name"] = re.sub(r"[\x00-\x1f]", "", str(b["champ_name"] or "")).strip()[:60]
+            if cfg["champ"] and not cfg["champ_started"]:
+                cfg["champ_started"] = now()
+            for k in ("race_who", "cnr_who"):
+                if k in b:
+                    if b[k] not in ("everyone", "admins"):
+                        return self.fail(400, "Pick who can start games from the list")
+                    cfg[k] = b[k]
+            if "cnr_busted" in b:
+                if b["cnr_busted"] not in ("out", "cop"):
+                    return self.fail(400, "Pick what happens to a busted robber from the list")
+                cfg["cnr_busted"] = b["cnr_busted"]
+            for k, allowed in (("cnr_minutes", CNR_MINUTES), ("cnr_catch", CNR_CATCH), ("cnr_hold", CNR_HOLD)):
+                if k in b:
+                    try:
+                        v = int(b[k])
+                    except (TypeError, ValueError):
+                        v = -1
+                    if v not in allowed:
+                        return self.fail(400, "Pick a value from the list")
+                    cfg[k] = v
+            write_games_cfg(cfg)
+            return self.send(200, {"ok": True, "note": "Saved - the game picks it up within 10 seconds." + self._games_mod_note()})
+        if act in ("champ_new", "champ_end"):
+            cfg = read_games_cfg()
+            winner = end_champ(cfg)
+            note = ("%s won %s. " % (winner, cfg["champ_name"] or "the championship")) if winner else ""
+            if act == "champ_new":
+                name = re.sub(r"[\x00-\x1f]", "", str(b.get("name") or "")).strip()[:60]
+                if not name:
+                    return self.fail(400, "Give the championship a name")
+                cfg.update(champ=True, champ_name=name, champ_started=now())
+                note += "%s has started - every race with 2 or more drivers counts." % name
+            else:
+                cfg.update(champ=False, champ_started=0)
+                note += "Championship ended."
+            write_games_cfg(cfg)
+            return self.send(200, {"ok": True, "note": note})
+        if act in ("clear_drift", "remove_drift"):
+            m, who = str(b.get("map") or ""), str(b.get("name") or "").lower()
+            rows = read_drift()
+            keep = [r for r in rows if r["raw_map"] != m or (act == "remove_drift" and r["name"].lower() != who)]
+            if len(keep) == len(rows):
+                return self.fail(404, "That drift score is already gone")
+            write_drift(keep)
+            return self.send(200, {"ok": True, "note": "Drift scores cleared." if act == "clear_drift" else "Drift score removed."})
+        tid = str(b.get("id") or "")
+        lines = [l for l in shared_read(laps_file("traps.tsv"), 256 * 1024).splitlines() if TRAP_RE.match(l)]
+        mine = [l for l in lines if l.split("\t", 1)[0] == tid]
+        if not mine:
+            return self.fail(404, "That speed trap doesn't exist any more")
+        speeds = read_trap_speeds()
+        if act == "delete_trap":
+            shared_write(laps_file("traps.tsv"), "".join(l + "\n" for l in lines if l is not mine[0]))
+            speeds.pop(tid, None)
+            note = "Speed trap and its speeds deleted."
+        elif act == "clear_trap":
+            speeds.pop(tid, None)
+            note = "Speeds cleared."
+        elif act == "remove_speed":
+            who = str(b.get("name") or "").lower()
+            speeds[tid] = [r for r in speeds.get(tid, []) if r["name"].lower() != who]
+            note = "Speed removed."
+        else:
+            return self.fail(400, "Unknown action")
+        write_trap_speeds(speeds)
+        self.send(200, {"ok": True, "note": note})
+
+    def get_livemap(self, q):
+        self.send(200, live_map())
+
+    def get_recap(self, q):
+        cfg = recap_cfg()
+        r = weekly_recap()
+        self.send(200, dict(cfg, days=list(RECAP_DAYS), channels=recap_channels(), last=I().meta.get("recap_last"),
+                            preview={"title": r[0], "text": r[1]} if r else None))
+
+    def post_recap(self, q):
+        b = self.body_json()
+        if b.get("send"):
+            r = weekly_recap()
+            if not r:
+                return self.fail(400, "Nobody played this week, so there's nothing to post")
+            where = broadcast(r[0], r[1])
+            if not where:
+                return self.fail(400, "There's no channel to post to - set up the Discord webhook, Telegram or a custom webhook in Settings first")
+            set_server_meta(I().id, recap_last=now())
+            return self.send(200, {"ok": True, "note": "Posted to " + " and ".join(where) + "."})
+        cfg = recap_cfg()
+        if "on" in b:
+            cfg["on"] = bool(b["on"])
+        for k, hi in (("day", 6), ("hour", 23)):
+            if k in b:
+                try:
+                    v = int(b[k])
+                except (TypeError, ValueError):
+                    v = -1
+                if not 0 <= v <= hi:
+                    return self.fail(400, "Pick a day and an hour from the lists")
+                cfg[k] = v
+        set_server_meta(I().id, recap=cfg)
+        self.send(200, {"ok": True, "note": ("Saved - it's posted every %s at %02d:00." % (RECAP_DAYS[cfg["day"]], cfg["hour"])) if cfg["on"] else "Saved - the weekly recap is off."})
+
+    # ---------- player profiles
+    def get_players_profile(self, q):
+        name = str(q.get("name") or "").strip()[:64]
+        if not name:
+            return self.fail(400, "Which player?")
+        p = player_profile(name)
+        with LOCK:
+            ids = [i for i in INSTANCES if i != I().id]
+        if ids and self.sess.get("user", "owner") != "owner":
+            u = find_user(self.sess["user"]) or {}
+            ids = [i for i in ids if user_role_for(u, i)]
+        p["elsewhere"] = [{k: c[k] for k in ("server", "id", "seconds", "sessions", "last_seen", "online", "laps", "drift")}
+                          for c in player_everywhere(name, ids)] if ids else []
+        self.send(200, p)
+
+    def post_players_note(self, q):
+        b = self.body_json()
+        name = str(b.get("name") or "").strip()[:64]
+        if not name:
+            return self.fail(400, "Which player?")
+        lname = name.lower()
+        notes = dict(player_notes())
+        mine = list(notes.get(lname, []))
+        if b.get("delete"):
+            mine = [n for n in mine if n.get("id") != b["delete"]]
+            note = "Note deleted."
+        else:
+            text = clean_msg(b.get("text") or "").strip()[:500]
+            if not text:
+                return self.fail(400, "Write something first")
+            if len(mine) >= NOTES_MAX:
+                return self.fail(400, "That's a lot of notes - delete some old ones first")
+            mine.insert(0, {"id": secrets.token_hex(4), "t": now(), "by": getattr(_TL, "user", "owner") or "owner", "text": text})
+            note = "Note saved. Only people who can see this dashboard can read it."
+        if mine:
+            notes[lname] = mine
+        else:
+            notes.pop(lname, None)
+        if len(notes) > 2000:
+            return self.fail(400, "Too many players with notes")
+        set_server_meta(I().id, player_notes=notes)
+        self.send(200, {"ok": True, "note": note, "notes": mine})
+
+    # ---------- first-time setup checklist
+    def get_checklist(self, q):
+        self.send(200, setup_checklist())
+
+    def post_checklist(self, q):
+        b = self.body_json()
+        inst = I()
+        if "hidden" in b:
+            set_server_meta(inst.id, setup_hidden=bool(b["hidden"]) or None)
+        if b.get("skip") in ("name", "authkey", "mods", "reach", "invite", "alerts"):
+            sk = [x for x in (inst.meta.get("setup_skipped") or []) if x != b["skip"]] + ([b["skip"]] if b.get("on", True) else [])
+            set_server_meta(inst.id, setup_skipped=sk or None)
+        if b.get("invited"):
+            set_server_meta(inst.id, invited=True)
+        self.send(200, dict(setup_checklist(), ok=True))
 
     # ---------- hide my IP
     def get_relay_check(self, q):
@@ -8339,6 +13360,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def get_upnp(self, q):
         app = APP
+        if on_mac():
+            h = host_info()
+            return self.send(200, {"mac": True, "on": h.get("ports") == "auto", "relay": relay_on(), "state": {"ports": [], "error": h.get("upnp_error")},
+                                   "mac_upnp": h.get("upnp") or "off", "mac_upnp_at": int(h.get("upnp_at") or 0), "mac_ip": mac_lan_ip(),
+                                   "mode": "always", "open_until": 0, "is_open": h.get("upnp") == "ok", "players": app.upnp_players(),
+                                   "idle": UPNP_IDLE, "ports": [{"port": p, "proto": pr} for p, pr in app.upnp_ports()]})
         st = app.upnp_state
         if q.get("check") == "1" or st is None:
             st = app.upnp_apply(fresh=True) if app.settings.get("upnp_on") and not relay_on() else self._upnp_probe()
@@ -8388,6 +13415,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, {"ok": bool(ok), "on": True, "note": note if ok else (st.get("error") or "The router refused: " +
                              "; ".join("%s %s: %s" % (r["port"], r["proto"], r["error"]) for r in st["ports"] if not r["ok"])), "state": st})
         on = bool(b.get("on"))
+        if on and on_mac():
+            return self.fail(400, "On a Mac the Mac itself opens the port (always, while it's on). To change that, run the Mac installer again.")
         if on and relay_on():
             return self.fail(400, "\"Hide my IP\" is on - players join through the relay, so nothing needs to be opened on your router.")
         if on:
@@ -8432,14 +13461,21 @@ class Handler(BaseHTTPRequestHandler):
             lines.append("Mods: %d (%s, downloaded when you join)" % (mods, ("%.1f GB" % (size / 1073741824.0) if size >= 1073741824 else "%d MB" % max(1, round(size / 1048576.0)))))
         note = clean_msg(app.settings.get("invite_note") or "")[:300]
         foot = "Need BeamMP? https://beammp.com"
-        self.send(200, {"base": "\n".join(lines), "footer": foot,
+        credit = bool(app.settings.get("credit_link"))
+        if credit:
+            foot += "\nServer hosted with BeamMP EasyServer (free): " + SITE_URL
+        self.send(200, {"base": "\n".join(lines), "footer": foot, "credit": credit, "credit_line": "Server hosted with BeamMP EasyServer (free): " + SITE_URL,
                         "text": "\n".join(lines + (["", note] if note else []) + ["", foot]), "host": host, "port": port, "lan": "%s:%s" % (lan, port),
                         "internet": internet, "relay": via_relay, "public": public, "note": note,
                         "lan_text": "Join **%s** on our Wi-Fi: BeamMP -> Direct Connect -> IP `%s` port `%s`" % (name, lan, port)})
 
     def post_invite(self, q):
-        note = clean_msg(str(self.body_json().get("note", "")))[:300]
-        APP.settings.update_one("invite_note", note)
+        b = self.body_json()
+        if "note" in b:
+            APP.settings.update_one("invite_note", clean_msg(str(b.get("note") or ""))[:300])
+        if "credit" in b:
+            APP.settings.update_one("credit_link", bool(b.get("credit")))
+            _STATUS_CACHE["t"] = 0
         self.send(200, {"ok": True})
 
     # ---------- BeamMP-only guard
@@ -8451,7 +13487,8 @@ class Handler(BaseHTTPRequestHandler):
                        for ip, b in sorted(g.blocked.items(), key=lambda x: -x[1]["at"])][:200]
             out = {"on": bool(app.settings.get("guard_on")), "relay": relay_on(), "blocked": blocked, "count": len(g.blocked),
                    "total": g.total, "players_known": len(g.good), "error": app.guard_err,
-                   "strikes": guard.STRIKES, "window": guard.WINDOW, "stay": guard.STAY, "platform": "windows" if IS_WIN else "linux"}
+                   "strikes": guard.STRIKES, "window": guard.WINDOW, "stay": guard.STAY,
+                   "platform": "mac" if on_mac() else "windows" if IS_WIN else "linux", "mac": on_mac()}
         out.update(app.guard_status())
         self.send(200, out)
 
@@ -8616,10 +13653,19 @@ class Handler(BaseHTTPRequestHandler):
     # ---------- welcome message + announcements
     def get_messages(self, q):
         self.send(200, dict(read_messages(), every_choices=list(MSG_EVERY),
-                            plugin=os.path.exists(os.path.join(I().STATS_DIR, "main.lua"))))
+                            plugin=os.path.exists(os.path.join(I().STATS_DIR, "main.lua")),
+                            chat_lang=I().meta.get("chat_lang") or "", languages=lang_index()))
 
     def post_messages(self, q):
         b = self.body_json()
+        if "chat_lang" in b:
+            code = str(b["chat_lang"] or "")
+            if code and code not in {x["code"] for x in lang_index()}:
+                return self.fail(400, "Pick a language from the list")
+            set_server_meta(I().id, chat_lang=code or None)
+            ensure_chat_lang()
+            if len(b) == 1:
+                return self.send(200, {"ok": True, "note": "Saved - the game chat switches within 30 seconds."})
         d = read_messages()
         for k in ("welcome", "announce"):
             if k in b:
@@ -8686,8 +13732,9 @@ class Handler(BaseHTTPRequestHandler):
     # ---------- server templates
     def get_templates(self, q):
         self.send(200, {"templates": [{"id": k, "label": v["label"], "about": v["about"], "map": v["map"],
-                                       "max_players": v["max_players"], "tags": v["extras"]["tags"]}
-                                      for k, v in TEMPLATES.items()]})
+                                       "max_players": v["max_players"], "tags": v["extras"]["tags"],
+                                       "games": [g for g in GAME_SWITCHES if (v.get("games") or {}).get(g)], "laps": bool(v.get("laps"))}
+                                      for k, v in TEMPLATES.items()], "current": I().meta.get("template") or ""})
 
     def post_template(self, q):
         b = self.body_json()
@@ -8706,6 +13753,18 @@ class Handler(BaseHTTPRequestHandler):
         msg.update({"welcome": True, "welcome_text": [tp["welcome"]], "announce": True, "messages": tp["messages"],
                     "every": max(msg["every"], 15)})
         write_messages(msg)
+        if tp.get("games"):                      # the games that fit (Games page) and lap times
+            cfg = read_games_cfg()
+            cfg.update(tp["games"])
+            if tp.get("champ_name") and not cfg["champ_name"]:
+                cfg["champ_name"] = tp["champ_name"]
+            if cfg["champ"] and not cfg["champ_started"]:
+                cfg["champ_started"] = now()
+            write_games_cfg(cfg)
+            laps = read_laps_cfg()
+            laps["on"] = bool(tp.get("laps"))
+            write_laps_cfg(laps)
+        set_server_meta(I().id, template=str(b.get("id")))
         text = toml_set(app.read_config_text(), "General", "MaxPlayers", tp["max_players"])
         note = "Applied the %s template." % tp["label"]
         if b.get("map") and (tp["map"] in BUILTIN_MAPS or tp["map"] in enabled_mod_maps()):
@@ -8715,7 +13774,7 @@ class Handler(BaseHTTPRequestHandler):
         else:
             app.write_config_text(text)
             note += " " + app.applied_note()
-        self.send(200, {"ok": True, "note": note})
+        self.send(200, {"ok": True, "note": note, "search": tp.get("search") or ""})
 
     # ---------- presets
     def get_preset(self, q):
@@ -8893,6 +13952,237 @@ class Handler(BaseHTTPRequestHandler):
                     if how == "added" else "Saved. The helper mod was removed. ") + APP.applied_note().replace("Saved. ", "")
         self.send(200, {"ok": True, "note": note, "tools": d})
 
+    # ---------- vehicle rules
+    def get_vehicles(self, q):
+        d = read_veh()
+        mods = server_mod_vehicles()
+        act = veh_activity()
+        for s in act["seen"]:
+            s["kind"] = veh_kind(s["jbm"], mods)
+            s["blocked"] = s["jbm"].lower() in {j.lower() for j, _ in veh_blocklist(d)} if d["on"] else False
+        self.send(200, {"rules": d, "preset": veh_preset_match(d),
+                        "presets": [{"id": k, "label": v[0], "about": v[1]} for k, v in VEH_PRESETS.items()],
+                        "blocked": [{"jbm": j, "why": w} for j, w in veh_blocklist(d)],
+                        "mods": sorted(mods.values(), key=lambda v: (not v["heavy"], v["jbm"].lower())),
+                        "base": {"cars": BASE_CARS, "trailers": BASE_TRAILERS, "props": BASE_PROPS, "heavyprops": BASE_HEAVY_PROPS},
+                        "heavy_limits": {"nodes": HEAVY_NODES, "beams": HEAVY_BEAMS}, "activity": act})
+
+    def post_vehicles(self, q):
+        b = self.body_json()
+        d = read_veh()
+        for k in ("on", "exempt", "only", "props", "trailers", "heavyprops", "heavymods"):
+            if k in b:
+                d[k] = bool(b[k])
+        try:
+            if "cooldown" in b:
+                d["cooldown"] = max(0, min(3600, int(b["cooldown"] or 0)))
+            if "spam" in b:
+                d["spam"] = max(0, min(120, int(b["spam"] or 0)))
+        except (TypeError, ValueError):
+            return self.fail(400, "The cooldown and the spawn limit must be numbers")
+        for k in ("cars", "allow"):
+            if k in b:
+                raw = b[k] if isinstance(b[k], list) else re.split(r"[\s,]+", str(b[k] or ""))
+                lst = []
+                for x in raw:
+                    j = clean_jbm(x)
+                    if x and str(x).strip() and not j:
+                        return self.fail(400, "\"%s\" isn't a vehicle name (letters, numbers, _ . - only)" % str(x)[:40])
+                    if j and j.lower() not in [y.lower() for y in lst]:
+                        lst.append(j)
+                d[k] = lst[:500]
+        if d["only"] and not d["allow"]:
+            return self.fail(400, "Pick at least one car for \"only these cars\", or turn that off")
+        write_veh(d)
+        n = len(veh_blocklist(d))
+        self.send(200, {"ok": True, "rules": d, "note": ("Saved - works within 10 seconds, no restart. %d vehicle%s blocked." %
+                                                        (n, "" if n == 1 else "s")) if d["on"] else "Saved. Vehicle rules are off."})
+
+    def post_vehicles_preset(self, q):
+        pid = self.body_json().get("preset")
+        if pid not in VEH_PRESETS:
+            return self.fail(400, "Unknown preset")
+        d = read_veh()
+        d.update(VEH_PRESETS[pid][2])
+        write_veh(d)
+        self.send(200, {"ok": True, "note": "Using \"%s\" - works within 10 seconds, no restart." % VEH_PRESETS[pid][0]})
+
+    def post_vehicles_block(self, q):
+        b = self.body_json()
+        j = clean_jbm(b.get("jbm"))
+        if not j:
+            return self.fail(400, "Unknown vehicle")
+        d = read_veh()
+        d["cars"] = [x for x in d["cars"] if x.lower() != j.lower()]
+        if b.get("block", True):
+            d["cars"].append(j)
+            d["on"] = True
+        write_veh(d)
+        self.send(200, {"ok": True, "note": ("Blocked %s - works within 10 seconds." if b.get("block", True) else "%s is allowed again.") % j})
+
+    # ---------- server plugins
+    def _plug_job_public(self, j):
+        return {k: v for k, v in j.items() if not k.startswith("_") and k != "dir"}
+
+    def _plug_new_job(self, **kw):
+        with LOCK:
+            for k in [k for k, j in PLUGIN_JOBS.items() if j.get("finished") and now() - j["t"] > 3600]:
+                shutil.rmtree(PLUGIN_JOBS.pop(k).get("dir") or "", ignore_errors=True)
+            if len([j for j in PLUGIN_JOBS.values() if not j.get("finished")]) >= 2:
+                return None
+            os.makedirs(UPLOAD_TMP, exist_ok=True)
+            jid = secrets.token_hex(6)
+            job = dict(kw, job=jid, server=I().id, t=now(), state="Starting…", done=0, total=0, finished=False,
+                       dir=tempfile.mkdtemp(dir=UPLOAD_TMP, prefix=".plug-dl-"))
+            PLUGIN_JOBS[jid] = job
+            return job
+
+    def get_plugins(self, q):
+        sdir = plugin_server_dir()
+        self.send(200, {"catalog": plugin_catalog(), **plugins_overview(),
+                        "writable": IS_WIN or os.access(sdir, os.W_OK), "owner": self.sess.get("role", "owner") == "owner"})
+
+    def post_plugins_fetch(self, q):
+        pid = str(self.body_json().get("id") or "")
+        entry = next((p for p in plugin_catalog() if p["id"] == pid), None)
+        if not entry:
+            return self.fail(400, "That plugin isn't in the list")
+        job = self._plug_new_job(id=pid, name=entry["name"], entry=entry)
+        if not job:
+            return self.fail(429, "Two plugin downloads are already running - wait for one to finish")
+        threading.Thread(target=plugin_fetch, args=(job, I().id, entry), daemon=True).start()
+        self.send(200, {"ok": True, "job": job["job"]})
+
+    def get_plugins_job(self, q):
+        j = PLUGIN_JOBS.get(q.get("job") or "")
+        if not j or j["server"] != I().id:
+            return self.fail(404, "no such download")
+        self.send(200, self._plug_job_public(j))
+
+    def put_plugins_upload(self, q):
+        name = safe_zip_name(q.get("name"))
+        if not name:
+            return self.fail(400, "Only .zip files can be uploaded")
+        job = self._plug_new_job(id="file-" + re.sub(r"[^a-z0-9_\-]", "-", os.path.splitext(name)[0].lower())[:30].strip("-"),
+                                 name=os.path.splitext(name)[0][:60], entry=None)
+        if not job:
+            return self.fail(429, "Two plugin downloads are already running - wait for one to finish")
+        tmp = os.path.join(job["dir"], "plugin.zip")
+        try:
+            self.body_to_file(tmp, PLUGIN_MAX)
+            if not zipfile.is_zipfile(tmp):
+                raise RuntimeError("That isn't a zip file.")
+            h = hashlib.sha256()
+            with open(tmp, "rb") as f:
+                for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                    h.update(chunk)
+            sha = h.hexdigest()
+            plan = plugin_plan(tmp)
+            job.update(ok=True, finished=True, state="Ready to install", review=True, plan=plan_public(plan), version="uploaded",
+                       sha256=sha, size=os.path.getsize(tmp), _plan=plan, _path=tmp, url="")
+        except Exception as e:
+            job.update(ok=False, finished=True, state="Failed", error=str(e) if isinstance(e, RuntimeError) else short_err(e))
+        self.send(200 if job.get("ok") else 400, self._plug_job_public(job))
+
+    def post_plugins_install(self, q):
+        b = self.body_json()
+        j = PLUGIN_JOBS.get(str(b.get("job") or ""))
+        if not j or j["server"] != I().id or not j.get("review") or j.get("installed"):
+            return self.fail(404, "That download is gone - start again")
+        if not j.get("entry") and b.get("trust") is not True:
+            return self.fail(400, "Tick that you trust this plugin's author first")
+        rid = j["id"]
+        replace = rid in plugin_records()
+        e = j.get("entry") or {}
+        meta = {"name": j["name"], "author": e.get("author", ""), "page": e.get("page", ""), "license": e.get("license", ""),
+                "version": j.get("version", ""), "sha256": j.get("sha256", ""), "catalog": bool(e), "url": j.get("url", "")}
+        try:
+            plugin_install(j["_path"], j["_plan"], rid, meta, replace=replace)
+        except RuntimeError as ex:
+            return self.fail(400, str(ex))
+        j["installed"] = True
+        shutil.rmtree(j.get("dir") or "", ignore_errors=True)
+        self.send(200, {"ok": True, "note": "%s %s. Restart the server (Overview) to load it." % (j["name"], "updated" if replace else "installed")})
+
+    def post_plugins_toggle(self, q):
+        b = self.body_json()
+        try:
+            plugin_set_on(str(b.get("id") or ""), bool(b.get("on")))
+        except RuntimeError as e:
+            return self.fail(400, str(e))
+        self.send(200, {"ok": True, "note": ("Turned on" if b.get("on") else "Turned off") + ". Restart the server (Overview) for it to take effect."})
+
+    def post_plugins_remove(self, q):
+        try:
+            plugin_remove(str(self.body_json().get("id") or ""))
+        except RuntimeError as e:
+            return self.fail(400, str(e))
+        self.send(200, {"ok": True, "note": "Removed. Restart the server (Overview) for it to take effect."})
+
+    def post_plugins_adopt(self, q):
+        """Let EasyServer manage a plugin someone copied in by hand (so it can be turned off and on)."""
+        f = str(self.body_json().get("folder") or "")
+        if not PLUGIN_FOLDER_RE.fullmatch(f) or f.lower() == OWN_PLUGIN.lower() or not os.path.isdir(os.path.join(plugin_server_dir(), f)):
+            return self.fail(400, "Unknown plugin folder")
+        rid = "manual-" + re.sub(r"[^a-z0-9_\-]", "-", f.lower())[:30]
+        d = _plug_read()
+        d.setdefault(I().id, {})[rid] = {"name": f, "author": "", "page": "", "license": "", "version": "copied in by hand",
+                                         "sha256": "", "catalog": False, "url": "", "server": [f], "client": [],
+                                         "installed": now(), "on": True}
+        _plug_write(d)
+        self.send(200, {"ok": True, "id": rid})
+
+    # ---------- mod pack share code
+    def get_modpack_code(self, q):
+        """A short code with the BeamNG repository mods that are turned on. Another EasyServer can paste it."""
+        ids, other = [], []
+        for m in list_mods():
+            if not m["enabled"] or m["builtin"]:
+                continue
+            info = modscan_info_cached(os.path.join(I().CLIENT_DIR, m["name"]))
+            (ids.append(info["resource_id"]) if info else other.append(m["name"]))
+        code = ""
+        if ids:
+            raw = zlib.compress(json.dumps({"v": 1, "ids": sorted(set(ids))}, separators=(",", ":")).encode(), 9)
+            code = "ES1-" + base64.urlsafe_b64encode(raw).decode().rstrip("=")
+        self.send(200, {"code": code, "count": len(set(ids)), "not_included": other})
+
+    def post_modpack_code(self, q):
+        code = re.sub(r"\s+", "", str(self.body_json().get("code") or ""))
+        try:
+            if not code.startswith("ES1-") or len(code) > 20000:
+                raise ValueError
+            dec = zlib.decompressobj()
+            raw = dec.decompress(base64.urlsafe_b64decode(code[4:] + "=" * (-len(code[4:]) % 4)), 65536)
+            if dec.unconsumed_tail:
+                raise ValueError("too big")
+            ids = json.loads(raw.decode("utf-8")).get("ids")
+            ids = [int(x) for x in ids if isinstance(x, int) and 0 < x < 10 ** 7][:60]
+        except (ValueError, TypeError, AttributeError, zlib.error, binascii.Error):
+            return self.fail(400, "That isn't an EasyServer mod pack code (they start with ES1-)")
+        have = installed_repo_ids()
+        todo = [i for i in ids if i not in have]
+        if not todo:
+            return self.send(200, {"ok": True, "jobs": [], "note": "You already have all %d mods from that code." % len(ids)})
+        jobs = []
+        with LOCK:
+            for i in todo:
+                jid = secrets.token_hex(6)
+                job = {"job": jid, "id": i, "server": I().id, "t": now(), "state": "Waiting…", "done": 0, "total": 0,
+                       "finished": False, "name": "", "title": "Mod %d" % i}
+                MODB_JOBS[jid] = job
+                jobs.append(job)
+        inst_id = I().id
+
+        def run():
+            for job in jobs:                    # one at a time - kind to beamng.com
+                modb_install(job, inst_id, job["id"])
+        threading.Thread(target=run, daemon=True).start()
+        self.send(200, {"ok": True, "jobs": [j["job"] for j in jobs],
+                        "note": "Downloading %d mod%s from the BeamNG repository, one after another (%d you already have). "
+                                "Each gets the virus check. Watch the progress on this page."
+                                % (len(todo), "" if len(todo) == 1 else "s", len(ids) - len(todo))})
+
     # ---------- per-map statistics
     def get_players_maps(self, q):
         try:
@@ -8924,8 +14214,10 @@ class Handler(BaseHTTPRequestHandler):
         s = APP.settings
         base = dashboard_url().rstrip("/")
         self.send(200, {"on": bool(s.get("statuspage_on")), "players": bool(s.get("statuspage_players")), "mods": bool(s.get("statuspage_mods")),
-                        "title": s.get("statuspage_title") or "", "url": base + "/status", "lan_url": "http://%s:%s/status" % (lan_ip(), s.get("port")),
-                        "remote": bool(s.get("remote_enabled")), "preview": public_status()})
+                        "address": bool(s.get("statuspage_address")), "relay": relay_on(),
+                        "title": s.get("statuspage_title") or "", "about": s.get("statuspage_about") or "",
+                        "discord": s.get("statuspage_discord") or "", "url": base + "/status", "lan_url": "http://%s:%s/status" % (lan_ip(), s.get("port")),
+                        "remote": bool(s.get("remote_enabled")), "credit": bool(s.get("credit_link")), "preview": public_status()})
 
     def post_statuspage(self, q):
         b = self.body_json()
@@ -8936,8 +14228,19 @@ class Handler(BaseHTTPRequestHandler):
             upd["statuspage_players"] = bool(b["players"])
         if "title" in b:
             upd["statuspage_title"] = clean_msg(b["title"])[:80]
+        if "about" in b:
+            upd["statuspage_about"] = "\n".join(clean_msg(x) for x in str(b["about"] or "").splitlines()).strip()[:500]
+        if "discord" in b:
+            inv = str(b["discord"] or "").strip()
+            if inv and not DISCORD_INVITE_RE.fullmatch(inv):
+                return self.fail(400, "Paste a Discord invite link like https://discord.gg/abc123")
+            upd["statuspage_discord"] = inv
         if "mods" in b:
             upd["statuspage_mods"] = bool(b["mods"])
+        if "address" in b:
+            upd["statuspage_address"] = bool(b["address"])
+        if "credit" in b:
+            upd["credit_link"] = bool(b["credit"])
         APP.settings.update(upd)
         _STATUS_CACHE["t"] = 0
         self.send(200, {"ok": True, "note": "Saved." + (" The page is public now - anyone with the link can see it." if upd.get("statuspage_on") else "")})
@@ -9075,7 +14378,11 @@ class Handler(BaseHTTPRequestHandler):
     def get_backups(self, q):
         s = APP.settings
         self.send(200, {"on": bool(s.get("backup_on")), "at": s.get("backup_at"), "mods": bool(s.get("backup_mods")),
-                        "keep": BACKUP_KEEP, "items": list_backups(I().id), "folder": BACKUP_DIR})
+                        "keep": BACKUP_KEEP, "items": list_backups(I().id), "folder": BACKUP_DIR,
+                        "copy": s.get("backup_copy") or "", "copy_path": s.get("backup_copy_path") or "",
+                        "copy_ip": s.get("backup_copy_ip") or "", "copy_last": APP.state.get("backup_copy"),
+                        "drives": backup_drives(), "copy_dir": BACKUP_COPY_DIR,
+                        "computers": [{"ip": x["ip"], "name": x.get("host") or x["ip"]} for x in pi_saved() if pi_key_ok(x)]})
 
     def post_backups(self, q):
         b = self.body_json()
@@ -9089,6 +14396,25 @@ class Handler(BaseHTTPRequestHandler):
             if not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", at):
                 return self.fail(400, "Enter the time like 03:30")
             upd["backup_at"] = "%02d:%s" % (int(at.split(":")[0]), at.split(":")[1])
+        if "copy" in b:
+            kind = b["copy"] if b["copy"] in ("", "folder", "computer") else None
+            if kind is None:
+                return self.fail(400, "Unknown place for the copies")
+            if _TL.user != "owner":
+                return self.fail(403, "Only the owner can choose where copies of the backups go.")
+            upd["backup_copy"] = kind
+            if kind == "folder":
+                path = str(b.get("copy_path") or "").strip().strip('"')[:400]
+                why = backup_folder_check(path)
+                if why:
+                    return self.fail(400, why)
+                upd["backup_copy_path"] = path
+            if kind == "computer":
+                ip = str(b.get("copy_ip") or "")
+                pi = next((x for x in pi_saved() if x["ip"] == ip), None)
+                if pi is None or not pi_key_ok(pi):
+                    return self.fail(400, "Pick one of the computers set up under Other computers at home")
+                upd["backup_copy_ip"] = ip
         APP.settings.update(upd)
         self.send(200, {"ok": True, "note": "Saved."})
 
@@ -9096,7 +14422,103 @@ class Handler(BaseHTTPRequestHandler):
         made, errors = APP.run_backups(bool(self.body_json().get("mods")))
         if errors:
             return self.fail(500, "; ".join(errors))
-        self.send(200, {"ok": True, "note": "Backed up %d server%s." % (len(made), "" if len(made) == 1 else "s")})
+        self.send(200, {"ok": True, "note": "Backed up %d server%s." % (len(made), "" if len(made) == 1 else "s") +
+                        (" Copying them to the other place now…" if APP.settings.get("backup_copy") else "") +
+                        (" Copying them to Google Drive now…" if APP.settings.get("gdrive_on") and gdrive_connected() else "")})
+
+    # ---------- Google Drive copies and rescue
+    def get_gdrive(self, q):
+        if self.sess.get("role", "owner") != "owner":      # the sign-in code would let someone link their own Drive
+            return self.fail(403, "Only the owner can see the Google Drive settings")
+        s = APP.settings
+        d = {"ready": gdrive_ready(), "own_app": bool(s.get("gdrive_client_id")), "own_client_id": s.get("gdrive_client_id") or "",
+             "connected": gdrive_connected(), "on": bool(s.get("gdrive_on")), "account": s.get("gdrive_account") or "",
+             "estimate": gdrive_estimate(), "last": APP.state.get("gdrive_last"), "folder": GDRIVE_FOLDER_NAME,
+             "flow": None, "drive": None, "files": [], "error": "", "computer": backup_tag(), "backups_on": bool(s.get("backup_on"))}
+        f = _GD["flow"]
+        if f and (f["state"] != "waiting" or now() < f["until"]):
+            d["flow"] = {k: f[k] for k in ("code", "url", "until", "state", "note")}
+        if d["connected"] and q.get("details") == "1":
+            try:
+                d["drive"] = gdrive_about()
+                fs = gdrive_list()
+                d["files"] = fs[:60]
+                d["used_by_us"] = sum(x["size"] for x in fs)
+            except Exception as e:
+                d["error"] = str(e) if isinstance(e, RuntimeError) else short_err(e)
+        self.send(200, d)
+
+    def post_gdrive(self, q):
+        b = self.body_json()
+        act = b.get("action")
+        try:
+            if act == "connect":
+                if not gdrive_ready():
+                    return self.fail(400, "Google Drive isn't set up in this version yet - use your own Google app (below).")
+                f = gdrive_flow_start()
+                return self.send(200, {"ok": True, "flow": {k: f[k] for k in ("code", "url", "until", "state", "note")}})
+            if act == "cancel":
+                _GD["flow"] = None
+                return self.send(200, {"ok": True})
+            if act == "disconnect":
+                gdrive_disconnect()
+                return self.send(200, {"ok": True, "note": "Disconnected. The copies already in your Drive stay there."})
+            if act == "on":
+                if b.get("on") and not gdrive_connected():
+                    return self.fail(400, "Connect Google Drive first")
+                APP.settings.update({"gdrive_on": bool(b.get("on"))})
+                return self.send(200, {"ok": True, "note": "Saved."})
+            if act == "now":
+                if not gdrive_connected():
+                    return self.fail(400, "Connect Google Drive first")
+                files = [x["file"] for x in newest_backups()]
+                if not files:
+                    files, errors = APP.run_backups(bool(APP.settings.get("backup_mods")))
+                    if errors:
+                        return self.fail(500, "; ".join(errors))
+                    if APP.settings.get("gdrive_on"):
+                        return self.send(200, {"ok": True, "note": "Made a backup and copying it to Google Drive now…"})
+                threading.Thread(target=APP.copy_backups, args=(files, "gdrive"), daemon=True).start()
+                return self.send(200, {"ok": True, "note": "Copying the newest backups to Google Drive now…"})
+            if act == "own_app":
+                cid = str(b.get("client_id") or "").strip()
+                if cid and not re.fullmatch(r"[0-9]{6,20}-[a-z0-9]{10,64}\.apps\.googleusercontent\.com", cid):
+                    return self.fail(400, "That doesn't look like a Google client ID (it ends in .apps.googleusercontent.com)")
+                sec = str(b.get("client_secret") or "").strip()
+                if cid and not sec and not APP.secrets.has("GDRIVE_SECRET"):
+                    return self.fail(400, "Paste the client secret too")
+                if gdrive_connected():
+                    gdrive_disconnect()
+                if sec or not cid:
+                    APP.secrets.set("GDRIVE_SECRET", sec if cid else "")
+                APP.settings.update({"gdrive_client_id": cid, "gdrive_folder": ""})
+                return self.send(200, {"ok": True, "note": "Saved - now press Connect Google Drive." if cid else "Back to the built-in Google app."})
+            if act == "restore":
+                if not gdrive_connected():
+                    return self.fail(400, "Connect Google Drive first")
+                fid = str(b.get("id") or "")
+                f = next((x for x in gdrive_list() if x["id"] == fid), None)
+                if not f:
+                    return self.fail(404, "That backup isn't in the Drive folder any more")
+                fd, tmp = tempfile.mkstemp(suffix=".zip", dir=DATA_DIR)
+                os.close(fd)
+                try:
+                    gdrive_download(fid, tmp)
+                    try:
+                        undo = make_backup(I(), False)
+                    except Exception as e:
+                        return self.fail(500, "Couldn't save the current settings first, so nothing was restored (%s)" % short_err(e))
+                    self._restore_undo = undo
+                    return self._import_zip(tmp, {"settings": "1", "mods": "1" if b.get("mods") is True else "0",
+                                                  "games": "1"})
+                finally:
+                    try:
+                        os.remove(tmp)
+                    except OSError:
+                        pass
+        except GDriveError as e:
+            return self.fail(502, str(e))
+        self.fail(400, "unknown action")
 
     def get_backups_download(self, q):
         name = str(q.get("file") or "")
@@ -9145,7 +14567,12 @@ class Handler(BaseHTTPRequestHandler):
     def get_resources(self, q):
         app = APP
         hist = getattr(app, "res_hist", [])
-        self.send(200, {"now": getattr(app, "res", None), "history": hist[-int(q.get("n") or 60):],
+        rng = q.get("range")
+        series = None
+        if rng in ("day", "week"):
+            cut = now() - (86400 if rng == "day" else 7 * 86400)
+            series = perf_series([x for x in hist if x["t"] >= cut], 300 if rng == "day" else 1800)
+        self.send(200, {"now": getattr(app, "res", None), "history": hist[-min(1440, int(q.get("n") or 60)):], "series": series,
                         "upload_mbit": app.settings.get("upload_mbit") or 0, "cpus": os.cpu_count() or 1})
 
     def post_resources(self, q):
@@ -9157,17 +14584,167 @@ class Handler(BaseHTTPRequestHandler):
         APP.settings.update({"upload_mbit": round(v, 1)})
         self.send(200, {"ok": True, "note": "Saved."})
 
+    # ---------- all computers on one page
+    def get_machines(self, q):
+        job = dict(_PI["job"]) if _PI["job"] else None
+        if job:
+            job["password"] = ""
+        self.send(200, {"here": {"host": socket.gethostname()[:40], "version": EASY_VERSION, "servers": remote_snapshot(),
+                                 "ip": pi_lan_ip()},
+                        "machines": pi_overview(), "job": job})
+
+    def post_machines(self, q):
+        b = self.body_json()
+        act = b.get("action")
+        ip = str(b.get("ip") or "")
+        pi = next((x for x in pi_saved() if x["ip"] == ip), None)
+        if pi is None:
+            return self.fail(404, "That computer isn't set up here")
+        if not pi_can_remote(pi):
+            return self.fail(400, "This dashboard can't control that computer yet - update EasyServer on it first.")
+        if act in ("start", "stop", "restart"):
+            try:
+                pi_remote_send(pi, act)
+            except RuntimeError as e:
+                return self.fail(502, str(e))
+            _PI.pop("overview", None)
+            return self.send(200, {"ok": True, "note": "Sent. It does it within 10 seconds."})
+        if act == "move":
+            if _TL.user != "owner":
+                return self.fail(403, "Only the owner can move the server.")
+            if _PI["job"] and _PI["job"]["state"] == "running":
+                return self.fail(409, "Wait until the other job is done")
+            st = next((x["remote"] for x in pi_overview() if x["ip"] == ip), {})
+            if st.get("error") == "old":
+                return self.fail(400, "Update EasyServer on that computer first (the Update button), then move the server.")
+            if st.get("error"):
+                return self.fail(400, "Can't reach EasyServer on that computer right now.")
+            pi_move_job(pi, I().id, bool(b.get("stop_here", True)))
+            return self.send(200, {"ok": True})
+        return self.fail(400, "Unknown action")
+
+    # ---------- Raspberry Pi on the same network
+    def get_pi(self, q):
+        job = dict(_PI["job"]) if _PI["job"] else None
+        if job and _TL.user != "owner":
+            job["password"] = ""
+        self.send(200, {"pis": pi_status(), "scan": _PI["scan"], "scanning": _PI["scanning"], "job": job,
+                        "ssh": bool(pi_ssh_exe()), "me": pi_lan_ip(), "card": IS_WIN, **pi_here()})
+
+    def post_pi(self, q):
+        b = self.body_json()
+        act = b.get("action")
+        if act == "scan":
+            if not _PI["scanning"]:
+                _PI["scanning"] = True
+
+                def scan():
+                    try:
+                        _PI["scan"] = pi_scan()
+                    except Exception as e:
+                        _PI["scan"] = {"t": now(), "found": [], "error": "Looking for it failed: " + short_err(e)}
+                    finally:
+                        _PI["scanning"] = False
+                threading.Thread(target=scan, daemon=True, name="pi-scan").start()
+            return self.send(200, {"ok": True})
+        if act == "disks":
+            return self.send(200, {"disks": pi_disks()})
+        if act == "card":
+            return self.pi_card(b)
+        ip = str(b.get("ip") or "").strip()
+        if not pi_private(ip):
+            return self.fail(400, "Enter the computer's address on your network, like 192.168.0.23")
+        if act == "forget":
+            with _PI_LOCK:
+                pi_store([x for x in pi_saved() if x["ip"] != ip])
+            return self.send(200, {"ok": True, "note": "Forgotten. EasyServer stays on that computer."})
+        if act not in ("install", "update", "password"):
+            return self.fail(400, "Unknown action")
+        if _PI["job"] and _PI["job"]["state"] == "running":
+            return self.fail(409, "Wait until the computer that's being set up is done")
+        pi = next((x for x in pi_saved() if x["ip"] == ip), None)
+        try:
+            if act == "install" and (pi is None or b.get("password")):
+                user = str(b.get("user") or "").strip()
+                if not PI_USER_RE.fullmatch(user):
+                    return self.fail(400, "Enter the computer's user name (like pi)")
+                if not b.get("password"):
+                    return self.fail(400, "Enter the computer's password")
+                pi = pi_pair(ip, user, str(b["password"])[:200])
+            if pi is None:
+                return self.fail(404, "Set up this computer first")
+            if pi_problem(pi):
+                return self.fail(400, pi_problem(pi))
+            if act == "password":
+                if pi.get("os") == "windows":
+                    return self.fail(400, "Windows keeps it locked to that PC's login, so it can't be shown from here. Forgot it? "
+                                          "Run Reset-Dashboard-Login.bat in the BeamMP server folder on that PC.")
+                if not pi.get("sudo"):
+                    return self.fail(400, "Look it up on the Raspberry Pi with: beammp dashboard")
+                code, out = pi_ssh(pi, "%s/usr/local/lib/beammp-easyserver/secrets.sh get MODS_PASSWORD"
+                                   % ("" if pi.get("root") else "sudo -n "), timeout=30)
+                pw = out.strip().splitlines()[-1] if code == 0 and out.strip() else ""
+                if not re.fullmatch(r"\S{4,64}", pw):
+                    return self.fail(502, "Couldn't read it - is EasyServer installed on it?" if code != 255 else pi_ssh_error(out))
+                return self.send(200, {"ok": True, "password": pw})
+            sudo_pw = str(b.get("password") or "")[:200] or None
+            if pi.get("os") == "windows" and act == "install" and not sudo_pw:
+                return self.fail(400, "Enter the password of that PC's Windows account")
+            if not pi.get("sudo") and not pi.get("root") and not sudo_pw:
+                return self.fail(400, "This computer asks for its password for system changes - enter it")
+            name = re.sub(r"[\x00-\x1f\"]", "", str(b.get("name") or "")).strip()[:60]
+            pi_job(act, pi, name=name, sudo_pw=sudo_pw)
+        except RuntimeError as e:
+            return self.fail(502, str(e))
+        except (OSError, subprocess.SubprocessError) as e:
+            return self.fail(502, "Couldn't connect: " + short_err(e))
+        self.send(200, {"ok": True, "note": "Installing EasyServer…" if act == "install" else "Updating…"})
+
+    def pi_card(self, b):
+        if not IS_WIN:
+            return self.fail(400, "Making the card from here works on Windows. Use Raspberry Pi Imager - the steps are on this page.")
+        if _PI["job"] and _PI["job"]["state"] == "running":
+            return self.fail(409, "Wait until the computer that's being set up is done")
+        user = str(b.get("user") or "").strip()
+        if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", user) or user in ("root", "daemon", "bin", "sys", "nobody"):
+            return self.fail(400, "Pick a user name for the Raspberry Pi: small letters and numbers, like beammp")
+        pw = str(b.get("password") or "")
+        if len(pw) < 8 or len(pw) > 128:
+            return self.fail(400, "Pick a password for the Raspberry Pi: at least 8 characters")
+        ssid, wpw = str(b.get("ssid") or "").strip(), str(b.get("wifi_password") or "")
+        if ssid and not PI_WIFI_RE.fullmatch(ssid):
+            return self.fail(400, "That Wi-Fi name is too long")
+        if ssid and wpw and not 8 <= len(wpw) <= 63:
+            return self.fail(400, "A Wi-Fi password is 8 to 63 characters - check it")
+        country = str(b.get("country") or "").strip().upper()
+        if ssid and not PI_COUNTRY_RE.fullmatch(country):
+            return self.fail(400, "Pick the country you're in (the Wi-Fi rules depend on it)")
+        if not b.get("erase_ok"):
+            return self.fail(400, "Tick that everything on the card may be erased")
+        disk = next((d for d in pi_disks() if d["n"] == b.get("disk")), None)
+        if not disk:
+            return self.fail(400, "That card isn't there any more - press Look for cards")
+        name = re.sub(r"[\x00-\x1f\"]", "", str(b.get("name") or "")).strip()[:60]
+        host = "beammp-pi-" + secrets.token_hex(2)
+        pi_card_job({"user": user, "pw_hash": sha512_crypt(pw), "ssid": ssid, "psk": pi_psk(ssid, wpw) if ssid and wpw else "",
+                     "country": country, "disk": disk, "name": name, "host": host})
+        self.send(200, {"ok": True, "note": "Making the card…"})
+
     # ---------- mod updates
     def get_mods_updates(self, q):
         ups = (getattr(APP, "mod_updates", {}) or {}).get(I().id)
         self.send(200, {"checked": APP.state.get("modupd_t"), "on": bool(APP.settings.get("mod_update_check")),
-                        "mods": ups if ups is not None else {}})
+                        "auto": bool(APP.settings.get("mod_auto_update")), "mods": ups if ups is not None else {}})
 
     def post_mods_updates(self, q):
         b = self.body_json()
         if "on" in b:
             APP.settings.update({"mod_update_check": bool(b["on"])})
             return self.send(200, {"ok": True})
+        if "auto" in b:
+            APP.settings.update({"mod_auto_update": bool(b["auto"])})
+            return self.send(200, {"ok": True, "note": "Saved - updates are installed by themselves while nobody is playing, and a running "
+                                                       "server is restarted for them." if b["auto"] else "Saved."})
         if now() - getattr(APP, "modupd_manual", 0) < 30:
             return self.fail(429, "Just checked - try again in a moment")
         APP.modupd_manual = now()
@@ -9185,45 +14762,28 @@ class Handler(BaseHTTPRequestHandler):
         u = ups.get(name or "")
         if not u or not u.get("update"):
             return self.fail(400, "No update known for this mod - press Check for updates first")
-        url = REPO_DL % (u["resource_id"], u["latest_id"])
-        tdir = tempfile.mkdtemp(dir=UPLOAD_TMP, prefix=".up-")
-        tmp = os.path.join(tdir, name)
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "BeamMP-EasyServer/%s (mod update)" % EASY_VERSION})
-            try:
-                with urllib.request.urlopen(req, timeout=60) as r, open(tmp, "wb") as f:
-                    total = 0
-                    while True:
-                        chunk = r.read(1024 * 1024)
-                        if not chunk:
-                            break
-                        total += len(chunk)
-                        if total > 4 * 1024 ** 3:
-                            raise ValueError("too big")
-                        f.write(chunk)
-            except Exception as e:
-                return self.fail(502, "Couldn't download it (%s). Get it yourself from %s and upload it here." % (short_err(e), u["page"]))
-            if not zipfile.is_zipfile(tmp):
-                return self.fail(502, "beamng.com didn't send a zip file (it may want you to log in). Download it from %s and upload it here." % u["page"])
-            got = mod_repo_info(tmp)
-            if not got or got["resource_id"] != u["resource_id"]:
-                return self.fail(502, "The downloaded file isn't the same mod - not installed.")
-            result = modscan.scan(tmp)
-            if result["verdict"] == "blocked":
-                APP.alerts.raise_("mod:%s:%s" % (I().id, name), "A mod update failed the virus check: %s" % name,
-                                  "\n".join(result["reasons"]) + "\nThe old version is still installed.")
-                return self.send(422, {"ok": False, "blocked": True, "reasons": result["reasons"]})
-            dest = os.path.join(I().CLIENT_DIR if u["enabled"] else I().DISABLED_DIR, name)
-            if not IS_WIN:
-                os.chmod(tmp, 0o664)
-            os.replace(tmp, dest) if os.path.dirname(tmp) == os.path.dirname(dest) else shutil.move(tmp, dest)
-            modscan.remember(dest, result.get("sha256"))
-            u.update({"update": False, "have": got["version"], "have_id": got["version_id"]})
+        st, r = apply_mod_update(name, u)
+        if st != 200:
+            return self.send(st, r) if r.get("blocked") else self.fail(st, r["error"])
+        refresh_mod_desc()
+        APP.config_changed()
+        self.send(200, {"ok": True, "note": "Updated %s to %s. %s" % (name, r["version"] or "the newest version", APP.applied_note())})
+
+    def post_mods_updateall(self, q):
+        """Every repository mod that has an update, one after the other."""
+        ups = (getattr(APP, "mod_updates", {}) or {}).get(I().id) or {}
+        todo = [n for n, u in sorted(ups.items()) if u.get("update")]
+        if not todo:
+            return self.fail(400, "No updates known - press Check for updates first")
+        done, failed = update_mods(todo, ups)
+        if done:
             refresh_mod_desc()
             APP.config_changed()
-            self.send(200, {"ok": True, "note": "Updated %s to %s. %s" % (name, got["version"] or "the newest version", APP.applied_note())})
-        finally:
-            shutil.rmtree(tdir, ignore_errors=True)
+        note = ("Updated %d mod%s. %s" % (len(done), "" if len(done) == 1 else "s", APP.applied_note())) if done else ""
+        if failed:
+            note += (" " if note else "") + " ".join("%s: %s" % (n, e) for n, e in failed[:5])
+        self.send(200 if done else 502, {"ok": bool(done), "note": note, "error": note, "done": done,
+                                         "failed": [{"name": n, "error": e} for n, e in failed]})
 
     # ---------- mod browser
     def get_modbrowser(self, q):
@@ -9483,8 +15043,21 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---------- users + activity log
     def get_users(self, q):
-        self.send(200, {"users": [{k: u.get(k) for k in ("name", "role", "created", "last_login", "disabled")} for u in load_users()],
-                        "roles": ["admin", "moderator", "viewer"]})
+        self.send(200, {"users": [dict({k: u.get(k) for k in ("name", "role", "created", "last_login", "disabled", "remote")},
+                                       servers=u.get("servers") if isinstance(u.get("servers"), dict) else "all",
+                                       totp=bool(u.get("totp")), invited_by=u.get("invited_by"),
+                                       discord=(u.get("discord") or {}).get("name"))
+                                  for u in load_users()],
+                        "roles": ["admin", "moderator", "viewer"], "custom_roles": load_roles(),
+                        "perm_groups": [{"id": g[0], "name": g[1], "about": g[2]} for g in PERM_GROUPS],
+                        "servers": [{"id": i.id, "name": i.name} for i in sorted(INSTANCES.values(), key=lambda i: (i.id != "main", i.id))],
+                        "invites": [{k: x.get(k) for k in ("id", "role", "servers", "remote", "created", "expires", "note")} for x in load_invites()],
+                        "remote_enabled": bool(APP.settings.get("remote_enabled")),
+                        "discord_login": {"available": dlogin_available(), "on": dlogin_conf() is not None}})
+
+    def post_discordlogin(self, q):
+        dlogin_set(bool(self.body_json().get("on")))
+        self.send(200, {"ok": True, "on": dlogin_conf() is not None})
 
     def post_users(self, q):
         b = self.body_json()
@@ -9494,40 +15067,430 @@ class Handler(BaseHTTPRequestHandler):
         users = load_users()
         u = next((x for x in users if x["name"].lower() == name.lower()), None)
         role = b.get("role")
+        kick = False
         if act == "add":
             if u:
                 raise ValueError("That name is taken")
             if len(users) >= 50:
                 raise ValueError("At most 50 accounts")
-            if role not in ("admin", "moderator", "viewer"):
-                raise ValueError("Pick a role")
+            check_role_exists(role)
             pw = str(b.get("password") or "")
             if len(pw) < 10:
                 raise ValueError("Use a password with at least 10 characters")
-            users.append({"name": name, "role": role, "pw": hash_password(pw), "created": now(), "last_login": 0})
+            nu = {"name": name, "role": role, "pw": hash_password(pw), "created": now(), "last_login": 0}
+            sv = clean_servers_map(b.get("servers"))
+            if sv:
+                nu["servers"] = sv
+            users.append(nu)
         elif not u:
             raise ValueError("No such account")
         elif act == "role":
-            if role not in ("admin", "moderator", "viewer"):
-                raise ValueError("Pick a role")
+            check_role_exists(role)
             u["role"] = role
+        elif act == "servers":
+            sv = clean_servers_map(b.get("servers"))
+            for r in (sv or {}).values():
+                check_role_exists(r)
+            if sv:
+                u["servers"] = sv
+            else:
+                u.pop("servers", None)
+        elif act == "remote":
+            if b.get("remote") and on_mac():
+                raise ValueError(MAC_NO_REMOTE)
+            u["remote"] = bool(b.get("remote"))
+            kick = not u["remote"]
+        elif act == "reset_2fa":
+            u.pop("totp", None)
+            kick = True
+        elif act == "discord_unlink":
+            u.pop("discord", None)
+            kick = True
         elif act == "password":
             pw = str(b.get("password") or "")
             if len(pw) < 10:
                 raise ValueError("Use a password with at least 10 characters")
             u["pw"] = hash_password(pw)
-            with LOCK:                           # log them out everywhere
-                APP.sessions = {k: v for k, v in APP.sessions.items() if v.get("user", "").lower() != name.lower()}
-            forget_devices(name)
+            kick = True
         elif act == "disable":
             u["disabled"] = not u.get("disabled")
         elif act == "delete":
             users = [x for x in users if x is not u]
+            kick = True
+        else:
+            raise ValueError("unknown action")
+        save_users(users)
+        if kick:                                 # log them out everywhere
             with LOCK:
                 APP.sessions = {k: v for k, v in APP.sessions.items() if v.get("user", "").lower() != name.lower()}
             forget_devices(name)
-        else:
-            raise ValueError("unknown action")
+        note = "Saved"
+        if act == "remote" and u.get("remote"):
+            note = ("Saved. %s can log in from the internet once two-step login is set up on their account%s." %
+                    (name, "" if u.get("totp") else " (they do that under My account, at home)"))
+            if not APP.settings.get("remote_enabled"):
+                note += " Internet access to the dashboard is off - turn it on under Settings first."
+        self.send(200, {"ok": True, "note": note})
+
+    # ---------- custom roles
+    def post_roles(self, q):
+        b = self.body_json()
+        act = b.get("action")
+        with _TEAM_LOCK:
+            roles = load_roles()
+            if act == "save":
+                rid = str(b.get("id") or "")
+                name = clean_msg(b.get("name"))[:40].strip()
+                perms = [p for p in (b.get("perms") or []) if p in PERM_IDS]
+                if not name:
+                    raise ValueError("Give the role a name")
+                if name.lower() in ("owner", "admin", "moderator", "viewer"):
+                    raise ValueError("That name is used by a built-in role")
+                if rid:
+                    r = next((x for x in roles if x["id"] == rid), None)
+                    if not r:
+                        raise ValueError("No such role")
+                    r.update(name=name, perms=perms)
+                else:
+                    if len(roles) >= 20:
+                        raise ValueError("At most 20 custom roles")
+                    rid = "c_" + secrets.token_hex(4)
+                    roles.append({"id": rid, "name": name, "perms": perms})
+            elif act == "delete":
+                rid = str(b.get("id") or "")
+                used = [u["name"] for u in load_users() if u.get("role") == rid or rid in (u.get("servers") or {}).values()]
+                used += ["an invite"] if any(x.get("role") == rid or rid in (x.get("servers") or {}).values() for x in load_invites()) else []
+                if used:
+                    raise ValueError("Still in use by: %s. Give them another role first." % ", ".join(used[:5]))
+                roles = [x for x in roles if x["id"] != rid]
+            else:
+                raise ValueError("unknown action")
+            save_roles(roles)
+        self.send(200, {"ok": True, "id": rid})
+
+    # ---------- invite links for the team
+    def post_teaminvite(self, q):
+        b = self.body_json()
+        if b.get("action") == "revoke":
+            with _TEAM_LOCK:
+                items = [x for x in load_invites() if x.get("id") != str(b.get("id") or "")]
+                save_invites(items)
+            return self.send(200, {"ok": True})
+        if b.get("remote") and on_mac():
+            raise ValueError(MAC_NO_REMOTE)
+        role = b.get("role")
+        check_role_exists(role)
+        sv = clean_servers_map(b.get("servers"))
+        for r in (sv or {}).values():
+            check_role_exists(r)
+        try:
+            hours = max(1, min(72, int(b.get("hours") or INVITE_HOURS)))
+        except (TypeError, ValueError):
+            hours = INVITE_HOURS
+        tok = secrets.token_urlsafe(32)
+        inv = {"id": secrets.token_hex(4), "hash": invite_hash(tok), "role": role, "servers": sv, "remote": bool(b.get("remote")),
+               "created": now(), "expires": now() + hours * 3600, "by": self.sess.get("user", "owner"),
+               "note": clean_msg(b.get("note"))[:60]}
+        with _TEAM_LOCK:
+            items = load_invites()
+            if len(items) >= 20:
+                raise ValueError("At most 20 open invites - revoke an old one")
+            items.append(inv)
+            save_invites(items)
+        st = APP.settings
+        lan = "%s://%s:%s/#team=%s" % ("https" if st.get("https") else "http", lan_ip(), st.get("port"), tok)
+        net = (dashboard_url().split("?")[0].rstrip("/") + "/#team=" + tok) if st.get("remote_enabled") else ""
+        self.send(200, {"ok": True, "link": net if inv["remote"] and net else lan, "lan_link": lan, "internet_link": net,
+                        "expires": inv["expires"],
+                        "note": "Send the link to them now. It works once and stops working in %d hour%s." % (hours, "" if hours == 1 else "s")})
+
+    def _invite_or_fail(self, tok):
+        if APP.is_locked(self.ip):
+            self.fail(429, "Too many wrong attempts. Try again in 15 minutes.")
+            return None
+        inv = find_invite(tok)
+        if not inv:
+            time.sleep(0.5)
+            APP.login_failed(self.ip)
+            self.fail(404, "This invite link doesn't work any more (used, revoked or expired). Ask for a new one.")
+            return None
+        if ip_is_remote(self.ip) and not inv.get("remote"):
+            self.fail(403, "This invite only works on the server's home network.")
+            return None
+        return inv
+
+    _INVITE_TOTP = {}
+
+    def api_teaminvite_info(self, q):
+        inv = self._invite_or_fail(q.get("t"))
+        if not inv:
+            return
+        names = {r["id"]: r["name"] for r in load_roles()}
+        out = {"role": names.get(inv["role"], inv["role"]), "remote": inv["remote"], "server": server_name() or "BeamMP server",
+               "servers": None if not inv.get("servers") else [INSTANCES[s].name for s in inv["servers"] if s in INSTANCES]}
+        if inv["remote"]:                        # internet access needs two-step login from the start
+            secret, pub = new_totp("team")
+            with LOCK:
+                Handler._INVITE_TOTP[inv["hash"]] = (secret, now())
+                for k in [k for k, v in Handler._INVITE_TOTP.items() if now() - v[1] > 3600]:
+                    Handler._INVITE_TOTP.pop(k, None)
+            out["totp"] = pub
+        self.send(200, out)
+
+    def api_teaminvite_accept(self, q):
+        origin = self.headers.get("Origin")
+        if origin and urllib.parse.urlparse(origin).netloc != self.headers.get("Host", ""):
+            return self.fail(403, "Security check failed - open the link again")
+        b = self.body_json(4096)
+        inv = self._invite_or_fail(b.get("t"))
+        if not inv:
+            return
+        name, pw = str(b.get("name") or "").strip(), str(b.get("password") or "")
+        if not USER_RE.fullmatch(name) or name.lower() == "owner":
+            return self.fail(400, "Names are 2-24 letters, numbers, dots, dashes or underscores")
+        if len(pw) < 10:
+            return self.fail(400, "Use a password with at least 10 characters")
+        totp = ""
+        if inv["remote"]:
+            with LOCK:
+                pend = Handler._INVITE_TOTP.get(inv["hash"])
+            if not pend or not totp_matches(pend[0], b.get("code")):
+                return self.fail(400, "That two-step code is wrong - check the time on your phone and try again")
+            totp = pend[0]
+        with _TEAM_LOCK:
+            if not find_invite(b.get("t")):
+                return self.fail(404, "This invite link was just used")
+            users = load_users()
+            if any(x["name"].lower() == name.lower() for x in users):
+                return self.fail(400, "That name is taken - pick another")
+            if len(users) >= 50:
+                return self.fail(400, "This dashboard has the most accounts it can have")
+            nu = {"name": name, "role": inv["role"], "pw": hash_password(pw), "created": now(), "last_login": 0,
+                  "remote": inv["remote"], "invited_by": inv.get("by")}
+            if inv.get("servers"):
+                nu["servers"] = inv["servers"]
+            if totp:
+                nu["totp"] = _seal(totp)
+            users.append(nu)
+            save_users(users)
+            items = load_invites()
+            for x in items:
+                if x["hash"] == inv["hash"]:
+                    x["used"] = now()
+            save_invites([x for x in items if not x.get("used")])
+        with LOCK:
+            Handler._INVITE_TOTP.pop(inv["hash"], None)
+        activity(name, "Joined the team with an invite (%s)" % inv["role"], "dashboard", self.ip, "main")
+        APP.notifier.add("team", "%s joined the dashboard team" % name, "They used an invite link and can now log in.", "info")
+        self.send(200, {"ok": True})
+
+    # ---------- Sign in with Discord (team accounts)
+    _DLOGIN_PENDING = {}            # nonce -> {"mode", "user", "ret", "exp"}
+
+    def session_discord_on(self):
+        return dlogin_available() and dlogin_conf() is not None
+
+    def own_return_address(self):
+        """This dashboard's own address as the browser uses it - only one this computer really has, so
+        nobody can have the sign-in sent to a site of their own."""
+        hdr = (self.headers.get("Host") or "").strip()
+        host = host_name(hdr)
+        if not re.fullmatch(r"[A-Za-z0-9.\-]+(:\d{1,5})?|\[[0-9a-fA-F:.]+\](:\d{1,5})?", hdr):
+            return None
+        port = hdr.rsplit(":", 1)[1] if re.search(r":\d{1,5}$", hdr) else ("443" if self.https else "80")
+        if port != str(APP.settings.get("port")):
+            return None
+        mine = {"localhost", "127.0.0.1", "::1", mac_lan_ip(), duck_host()} | set(tlsgen.local_ips())
+        if APP.settings.get("remote_enabled"):
+            mine.add(public_ip())
+        if not host or host not in {str(x).lower() for x in mine if x}:
+            return None
+        return "%s://%s/" % ("https" if self.https else "http", hdr.lower())
+
+    def _dlogin_begin(self, mode, user=None):
+        conf = dlogin_conf() if dlogin_available() else None
+        if not conf:
+            raise ValueError("Discord sign-in is off on this dashboard")
+        ret = self.own_return_address()
+        if not ret:
+            raise ValueError("Open the dashboard by its own address (like http://192.168.1.20:%s) to use Discord sign-in"
+                             % APP.settings.get("port"))
+        nonce, exp = secrets.token_urlsafe(24), now() + 600
+        with LOCK:
+            pend = Handler._DLOGIN_PENDING
+            for k in [k for k, v in pend.items() if v["exp"] < now()]:
+                pend.pop(k, None)
+            if len(pend) > 200:
+                raise ValueError("Too many sign-ins at once - try again in a few minutes")
+            pend[nonce] = {"mode": mode, "user": user, "ret": ret, "exp": exp}
+        sig = dlogin_sig(conf["key"], "start|%s|%s|%s|%d" % (conf["inst"], nonce, ret, exp))
+        url = LOGIN_SERVICE + "/start?" + urllib.parse.urlencode({"inst": conf["inst"], "nonce": nonce, "ret": ret, "exp": exp, "sig": sig})
+        self.send(200, {"ok": True, "url": url}, extra={"Set-Cookie": self.cookie_header(nonce, name="es_dn", max_age=600)})
+
+    def api_discord_start(self, q):
+        if APP.is_locked(self.ip):
+            return self.fail(429, "Too many wrong attempts. Try again in 15 minutes.")
+        origin = self.headers.get("Origin")
+        if origin and urllib.parse.urlparse(origin).netloc != self.headers.get("Host", ""):
+            return self.fail(403, "Security check failed - reload the page")
+        try:
+            self._dlogin_begin("login")
+        except ValueError as e:
+            self.fail(400, str(e))
+
+    def post_me_discord_link(self, q):
+        u = self._me()
+        self._dlogin_begin("link", u["name"])
+
+    def post_me_discord_unlink(self, q):
+        u = self._me()
+        users = load_users()
+        for x in users:
+            if x["name"].lower() == u["name"].lower():
+                x.pop("discord", None)
+        save_users(users)
+        activity(u["name"], "Unlinked Discord", "dashboard", self.ip, "main")
+        self.send(200, {"ok": True})
+
+    def api_discord_finish(self, q):
+        app = APP
+        if app.is_locked(self.ip):
+            return self.fail(429, "Too many wrong attempts. Try again in 15 minutes.")
+        origin = self.headers.get("Origin")
+        if origin and urllib.parse.urlparse(origin).netloc != self.headers.get("Host", ""):
+            return self.fail(403, "Security check failed - reload the page")
+        conf = dlogin_conf() if dlogin_available() else None
+        b = self.body_json(8192)
+        nonce = self.cookie("es_dn") or ""
+        note = dlogin_check_note(conf, b.get("a")) if conf else None
+        with LOCK:
+            pend = Handler._DLOGIN_PENDING.get(nonce)
+        ret = self.own_return_address()
+        # the note must be for this browser's sign-in (its cookie), for this dashboard and for this address
+        if not note or not pend or pend["exp"] < now() or not hmac.compare_digest(note["nonce"], nonce) \
+                or note.get("aud") != pend["ret"] or ret != pend["ret"]:
+            time.sleep(0.5)
+            app.login_failed(self.ip)
+            return self.fail(400, "That sign-in didn't work or took too long - try again")
+        did, dname = note["sub"], clean_msg(str(note.get("name") or note.get("user") or ""))[:40] or "Discord user"
+        clear = self.cookie_header("", clear=True, name="es_dn")
+        if pend["mode"] == "link":
+            with _TEAM_LOCK:
+                users = load_users()
+                other = next((x for x in users if (x.get("discord") or {}).get("id") == did and x["name"].lower() != str(pend["user"]).lower()), None)
+                if other:
+                    with LOCK:
+                        Handler._DLOGIN_PENDING.pop(nonce, None)
+                    return self.fail(400, "That Discord account is already linked to another dashboard account")
+                me = next((x for x in users if x["name"].lower() == str(pend["user"]).lower()), None)
+                if not me:
+                    return self.fail(400, "Your account is gone")
+                me["discord"] = {"id": did, "name": dname, "t": now()}
+                save_users(users)
+            with LOCK:
+                Handler._DLOGIN_PENDING.pop(nonce, None)
+            activity(me["name"], "Linked Discord (%s)" % dname, "dashboard", self.ip, "main")
+            return self.send(200, {"ok": True, "linked": dname}, extra={"Set-Cookie": clear})
+        # sign in: Discord stands in for the password only
+        u = find_user_by_discord(did)
+        local = not ip_is_remote(self.ip)
+        if not u or u.get("disabled"):
+            with LOCK:
+                Handler._DLOGIN_PENDING.pop(nonce, None)
+            time.sleep(0.5)
+            app.login_failed(self.ip)
+            return self.send(403, {"ok": False, "error": "No dashboard account is linked to this Discord account. Log in with "
+                                   "your name and password, then link Discord under My account."}, extra={"Set-Cookie": clear})
+        if not local and not (u.get("remote") and u.get("totp")):
+            with LOCK:
+                Handler._DLOGIN_PENDING.pop(nonce, None)
+            activity(u["name"], "Login refused (from the internet)", "dashboard", self.ip, "main", ok=False)
+            return self.fail(403, "This account can only log in from the home network.")
+        if u.get("totp") and not user_totp_ok(u, b.get("code")):
+            if b.get("code"):
+                time.sleep(0.7)
+                app.login_failed(self.ip)
+            return self.fail(401, "Enter the code from your two-step login app", need_code=True)
+        with LOCK:
+            if not Handler._DLOGIN_PENDING.pop(nonce, None):
+                return self.fail(400, "That sign-in was already used - try again")
+        users = load_users()
+        for x in users:
+            if x["name"].lower() == u["name"].lower():
+                x["last_login"] = now()
+        save_users(users)
+        tok = app.new_session(self.ip, u["name"], u["role"])
+        activity(u["name"], "Logged in with Discord" + ("" if local else " (from the internet)"), "dashboard", self.ip, "main")
+        self.send(200, {"ok": True}, extra={"Set-Cookie": self.login_cookies(tok, u["name"], b.get("remember") is True) + [clear]})
+
+    # ---------- my account (extra accounts)
+    def _me(self):
+        if self.sess.get("user", "owner") == "owner":
+            raise ValueError("The owner changes these under Settings")
+        u = find_user(self.sess["user"])
+        if not u:
+            raise ValueError("No such account")
+        return u
+
+    def get_me(self, q):
+        if self.sess.get("user", "owner") == "owner":
+            return self.send(200, {"owner": True})
+        u = self._me()
+        self.send(200, {"name": u["name"], "totp": bool(u.get("totp")), "remote": bool(u.get("remote")),
+                        "discord": (u.get("discord") or {}).get("name"), "discord_login": self.session_discord_on(),
+                        "remote_enabled": bool(APP.settings.get("remote_enabled")), "roles": self.session_server_roles(self.sess_real)})
+
+    def post_me_password(self, q):
+        u = self._me()
+        b = self.body_json()
+        if not check_password(str(b.get("current") or ""), u.get("pw", "")):
+            time.sleep(0.7)
+            APP.login_failed(self.ip)
+            raise ValueError("Your current password is wrong")
+        pw = str(b.get("new") or "")
+        if len(pw) < 10:
+            raise ValueError("Use a password with at least 10 characters")
+        users = load_users()
+        for x in users:
+            if x["name"].lower() == u["name"].lower():
+                x["pw"] = hash_password(pw)
+        save_users(users)
+        forget_devices(u["name"])
+        self.send(200, {"ok": True})
+
+    def post_me_2fa_begin(self, q):
+        u = self._me()
+        secret, pub = new_totp(u["name"])
+        self.sess_real["pending_totp"] = secret
+        self.send(200, pub)
+
+    def post_me_2fa_confirm(self, q):
+        u = self._me()
+        secret = self.sess_real.get("pending_totp")
+        if not secret:
+            return self.fail(400, "Start the setup again")
+        if not totp_matches(secret, self.body_json().get("code")):
+            return self.fail(400, "That code is wrong - check the time on your phone and try again")
+        users = load_users()
+        for x in users:
+            if x["name"].lower() == u["name"].lower():
+                x["totp"] = _seal(secret)
+        save_users(users)
+        self.sess_real.pop("pending_totp", None)
+        self.send(200, {"ok": True})
+
+    def post_me_2fa_disable(self, q):
+        u = self._me()
+        if not check_password(str(self.body_json().get("password") or ""), u.get("pw", "")):
+            time.sleep(0.7)
+            APP.login_failed(self.ip)
+            raise ValueError("Wrong password")
+        if u.get("remote") and ip_is_remote(self.ip):
+            raise ValueError("You're logged in from the internet - turn it off at home, or ask the owner")
+        users = load_users()
+        for x in users:
+            if x["name"].lower() == u["name"].lower():
+                x.pop("totp", None)
         save_users(users)
         self.send(200, {"ok": True})
 
@@ -9620,8 +15583,11 @@ class Handler(BaseHTTPRequestHandler):
         for e in events_cfg(I()):
             st = event_next_start(e, now()) if e.get("on", True) else None
             evs.append(dict(e, next=st))
+        last = I().meta.get("event_last")
         self.send(200, {"events": evs, "maps": avail, "mods": [m["name"] for m in list_mods()],
                         "days": list(EVENT_DAYS), "active": act if isinstance(act, dict) else None,
+                        "games": [{"id": k, "label": v} for k, v in EVENT_GAMES.items()],
+                        "last": last if isinstance(last, dict) else None, "today": time.strftime("%Y-%m-%d"),
                         "has_webhook": bool(webhook_parts()[0])})
 
     def post_events(self, q):
@@ -9639,8 +15605,19 @@ class Handler(BaseHTTPRequestHandler):
             if not name:
                 return self.fail(400, "Give every event a name")
             days = sorted({int(d) for d in (e.get("days") or []) if str(d).isdigit() and 0 <= int(d) <= 6})
-            if not days:
+            date = str(e.get("date") or "").strip()
+            if date:
+                try:
+                    dt = time.strptime(date, "%Y-%m-%d")
+                    assert 2020 <= dt.tm_year <= 2100
+                except (ValueError, AssertionError):
+                    return self.fail(400, "Enter the date of %s like 2026-12-31" % name)
+                days = []
+            elif not days:
                 return self.fail(400, "Pick at least one day for %s" % name)
+            game = str(e.get("game") or "")
+            if game and game not in EVENT_GAMES:
+                return self.fail(400, "bad game")
             at = str(e.get("at") or "").strip()
             if not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", at):
                 return self.fail(400, "Enter the start time of %s like 20:00" % name)
@@ -9659,7 +15636,8 @@ class Handler(BaseHTTPRequestHandler):
             out.append({"id": re.sub(r"[^a-z0-9]", "", str(e.get("id") or ""))[:12] or uuid.uuid4().hex[:8],
                         "name": name, "days": days, "at": "%02d:%s" % (int(at.split(":")[0]), at.split(":")[1]),
                         "minutes": minutes, "map": mp, "mods": mods, "announce": ann, "ping": bool(e.get("ping")),
-                        "text": clean_msg(e.get("text"))[:200], "on": bool(e.get("on", True))})
+                        "text": clean_msg(e.get("text"))[:200], "on": bool(e.get("on", True)),
+                        "date": date, "game": game, "results": bool(e.get("results"))})
         before = {e.get("id") for e in events_cfg(I())}
         set_server_meta(I().id, events=out)
         note = "Saved %d event%s." % (len(out), "" if len(out) == 1 else "s")
@@ -9670,6 +15648,13 @@ class Handler(BaseHTTPRequestHandler):
                 use_server(inst.id)
                 for e in evs:
                     st = event_next_start(e, now())
+                    if e.get("date"):
+                        if not st:
+                            continue
+                        broadcast("🎉 New event: %s" % e["name"], "<t:%d:F> (<t:%d:R>) on %s%s.%s" % (
+                            st, st, inst.name, (" - map " + e["map"]) if e.get("map") else "",
+                            (" " + e["text"]) if e.get("text") else ""))
+                        continue
                     days = ", ".join(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][d] for d in e["days"])
                     broadcast("🎉 New event: %s" % e["name"], "Every %s at %s on %s%s. First one: <t:%d:F>.%s" % (
                         days, e["at"], inst.name, (" - map " + e["map"]) if e.get("map") else "", st or now(),
@@ -9803,6 +15788,8 @@ class Handler(BaseHTTPRequestHandler):
                 os.environ["VT_API_KEY"] = k
             else:
                 os.environ.pop("VT_API_KEY", None)
+        if upd.get("guard_on") and on_mac():
+            return self.fail(400, "The BeamMP-only guard doesn't work on a Mac yet: players reach the server through the Mac, so they all look like one address.")
         if upd:
             app.settings.update(upd)
         if "flood_protect" in upd:
@@ -9870,6 +15857,10 @@ class Handler(BaseHTTPRequestHandler):
         want_https = bool(b.get("https", app.settings.get("https")))
         want_remote = bool(b.get("remote_enabled", app.settings.get("remote_enabled")))
         if want_remote:
+            if on_mac():
+                # every visitor looks like 127.0.0.1 there, so "home network only" rules can't be enforced
+                return self.fail(400, "Internet access to the dashboard isn't available on a Mac yet. "
+                                      "Don't forward the dashboard port on your router either.")
             want_https = True
             if not app.secrets.has("TOTP_SECRET"):
                 return self.fail(400, "Set up two-step login first")
@@ -9911,131 +15902,181 @@ class Handler(BaseHTTPRequestHandler):
             os.remove(tmp)
 
     def put_import(self, q):
-        app = APP
         fd, tmp = tempfile.mkstemp(suffix=".zip", dir=DATA_DIR)
         os.close(fd)
-        report = {"config": False, "settings": False, "mods_added": [], "mods_blocked": [], "skipped": []}
         try:
             self.body_to_file(tmp, 20 * 1024 ** 3)
-            try:
-                z = zipfile.ZipFile(tmp)
-            except zipfile.BadZipFile:
-                return self.fail(400, "That isn't an export file (.zip)")
-            with z:
-                names = z.namelist()
-                only_mods = "ServerConfig.toml" not in names and "modpack.json" in names
-                if not only_mods:
-                    if "ServerConfig.toml" not in names:
-                        return self.fail(400, "No ServerConfig.toml or modpack.json in this file")
-                    info = z.getinfo("ServerConfig.toml")
-                    if info.file_size > 200000:
-                        return self.fail(400, "ServerConfig.toml is too large")
-                    text = z.read(info).decode("utf-8", "replace")
-                    _, issues = validate_config(text, app.settings.get("port"), I().has_authkey())
-                    if any(i["level"] == "error" for i in issues):
-                        return self.send(400, {"ok": False, "error": "The imported config has errors", "issues": issues})
-                if q.get("settings", "1") == "1" and "easyserver-export.json" in names:
-                    if z.getinfo("easyserver-export.json").file_size > 1024 * 1024:
-                        return self.fail(400, "easyserver-export.json is too large")
-                    try:
-                        meta = json.loads(z.read("easyserver-export.json") or b"{}")
-                    except ValueError:
-                        meta = None
-                    s = meta.get("settings") if isinstance(meta, dict) else None
-                    if isinstance(s, dict):
-                        try:
-                            allowed = clean_settings(s)
-                        except ValueError as e:
-                            return self.fail(400, "Imported settings: %s" % e)
-                        if smtp_target_changed(allowed) and app.secrets.has("SMTP_PASSWORD"):
-                            # never send the saved email password to a mail server from a file
-                            for k in ("smtp_host", "smtp_user", "smtp_port", "smtp_security"):
-                                allowed.pop(k, None)
-                            report["skipped"].append("email server settings (keeps your current mail server)")
-                        app.settings.update(allowed)
-                        report["settings"] = True
-                if "allowlist.txt" in names and z.getinfo("allowlist.txt").file_size < 256 * 1024:
-                    lines = z.read("allowlist.txt").decode("utf-8", "replace").splitlines()
-                    on = any(re.fullmatch(r"mode\s*=\s*on", l.strip(), re.I) for l in lines)
-                    try:
-                        listed = clean_allow_names([l for l in lines if l.strip() and not l.strip().startswith("#")
-                                                    and not re.fullmatch(r"mode\s*=\s*\w+", l.strip())])
-                        write_allowlist(on and bool(listed), listed)
-                        report["allowlist"] = len(listed)
-                    except ValueError:
-                        report["skipped"].append("allowlist.txt")
-                for extra, rd, wr in (("extras.txt", read_extras, write_extras), ("moderation.txt", read_mod, write_mod),
-                                      ("messages.txt", read_messages, write_messages)):
-                    if extra in names and z.getinfo(extra).file_size < 256 * 1024:
-                        shared_write(os.path.join(I().STATS_DIR, extra), z.read(extra).decode("utf-8", "replace"))
-                        wr(rd())                     # re-written through the checks
-                        report.setdefault("restored", []).append(extra)
-                if "bans.txt" in names and z.getinfo("bans.txt").file_size < 256 * 1024:
-                    shared_write(I().BANS_FILE, z.read("bans.txt").decode("utf-8", "replace"))
-                    write_bans(read_bans())
-                    report.setdefault("restored", []).append("bans.txt")
-                if q.get("mods", "1") == "1":
-                    total = 0
-                    for n in names:
-                        m = re.fullmatch(r"(mods|mods-disabled)/([^/]+)", n)
-                        if not m:
-                            if n not in ("ServerConfig.toml", "easyserver-export.json", "modpack.json", "README.txt") + STATS_EXPORT and not n.endswith("/"):
-                                report["skipped"].append(n[:120])
-                            continue
-                        name = safe_zip_name(m.group(2))
-                        if not name:
-                            report["skipped"].append(n[:120])
-                            continue
-                        zi = z.getinfo(n)
-                        # zip bombs: a tiny entry that unpacks to many GB fills the disk
-                        total += zi.file_size
-                        if (zi.file_size > 4 * 1024 ** 3 or total > 40 * 1024 ** 3 or
-                                (zi.file_size > 50 * 1024 ** 2 and zi.file_size > 200 * max(zi.compress_size, 1)) or
-                                shutil.disk_usage(UPLOAD_TMP).free < zi.file_size + 1024 ** 3):
-                            report["skipped"].append(n[:120] + " (too large)")
-                            if zi.file_size > 200 * max(zi.compress_size, 1):
-                                app.alerts.raise_("import-bomb", "An imported backup contained a zip bomb",
-                                                  "%s unpacks to %d MB from %d KB. It was skipped. Only import backups "
-                                                  "you made yourself." % (n[:80], zi.file_size // 2 ** 20, zi.compress_size // 1024))
-                            continue
-                        tdir = tempfile.mkdtemp(dir=UPLOAD_TMP, prefix=".imp-")
-                        try:
-                            dest_tmp = os.path.join(tdir, name)
-                            with z.open(zi) as src, open(dest_tmp, "wb") as dst:
-                                shutil.copyfileobj(src, dst)   # stops at the size listed above
-                            r = modscan.scan(dest_tmp)
-                            if r["verdict"] == "blocked":
-                                report["mods_blocked"].append({"name": name, "reasons": r["reasons"]})
-                                continue
-                            if not IS_WIN:
-                                os.chmod(dest_tmp, 0o664)
-                            final = os.path.join(I().CLIENT_DIR if m.group(1) == "mods" else I().DISABLED_DIR, name)
-                            shutil.move(dest_tmp, final)
-                            modscan.remember(final, r.get("sha256"))
-                            report["mods_added"].append(name)
-                        finally:
-                            shutil.rmtree(tdir, ignore_errors=True)
-            if only_mods:
-                report["modpack"] = True
-                if report["mods_added"]:
-                    app.config_changed()
-                return self.send(200, {"ok": True, "report": report, "note": "Added %d mod%s from the modpack." % (
-                    len(report["mods_added"]), "" if len(report["mods_added"]) == 1 else "s") + (" " + app.applied_note() if report["mods_added"] else "")})
-            old_port = (toml_parse(app.read_config_text())[0].get("General") or {}).get("Port")
-            text = app.move_plaintext_authkey(text)
-            app.write_config_text(text)
-            report["config"] = True
-            new_port = (toml_parse(text)[0].get("General") or {}).get("Port")
-            if isinstance(new_port, int) and new_port != old_port and not IS_WIN:
-                control("firewall-game", old=old_port if isinstance(old_port, int) else None, new=new_port, timeout=30)
-                app.notifier.add("network", "Server port changed", "Import changed the port %s -> %d. "
-                                 "Remember to forward the new port on your router." % (old_port, new_port))
-            self.send(200, {"ok": True, "report": report, "note": app.applied_note()})
+            return self._import_zip(tmp, q)
         finally:
             try:
                 os.remove(tmp)
             except OSError:
                 pass
+
+    def post_backups_restore(self, q):
+        """Put a nightly backup back with one click - no download and upload. A backup of how things are right
+        now is made first, so a restore can be undone. Mods in the backup only come back when asked for."""
+        b = self.body_json()
+        name = str(b.get("file") or "")
+        if not any(x["file"] == name for x in list_backups(I().id)):
+            return self.fail(404, "No such backup")
+        fd, tmp = tempfile.mkstemp(suffix=".zip", dir=DATA_DIR)
+        os.close(fd)
+        try:
+            shutil.copyfile(os.path.join(BACKUP_DIR, name), tmp)   # copied first: the backup below can't replace it
+            try:
+                undo = make_backup(I(), False)
+            except Exception as e:
+                return self.fail(500, "Couldn't save the current settings first, so nothing was restored (%s)" % short_err(e))
+            self._restore_undo = undo
+            return self._import_zip(tmp, {"settings": "1", "mods": "1" if b.get("mods") is True else "0"})
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+    def _import_zip(self, tmp, q):
+        """Apply an export / backup zip (the file at tmp) to the current server."""
+        app = APP
+        report = {"config": False, "settings": False, "mods_added": [], "mods_blocked": [], "skipped": []}
+        try:
+            z = zipfile.ZipFile(tmp)
+        except zipfile.BadZipFile:
+            return self.fail(400, "That isn't an export file (.zip)")
+        with z:
+            names = z.namelist()
+            only_mods = "ServerConfig.toml" not in names and "modpack.json" in names
+            if not only_mods:
+                if "ServerConfig.toml" not in names:
+                    return self.fail(400, "No ServerConfig.toml or modpack.json in this file")
+                info = z.getinfo("ServerConfig.toml")
+                if info.file_size > 200000:
+                    return self.fail(400, "ServerConfig.toml is too large")
+                text = z.read(info).decode("utf-8", "replace")
+                _, issues = validate_config(text, app.settings.get("port"), I().has_authkey())
+                if any(i["level"] == "error" for i in issues):
+                    return self.send(400, {"ok": False, "error": "The imported config has errors", "issues": issues})
+            if q.get("settings", "1") == "1" and "easyserver-export.json" in names:
+                if z.getinfo("easyserver-export.json").file_size > 1024 * 1024:
+                    return self.fail(400, "easyserver-export.json is too large")
+                try:
+                    meta = json.loads(z.read("easyserver-export.json") or b"{}")
+                except ValueError:
+                    meta = None
+                s = meta.get("settings") if isinstance(meta, dict) else None
+                if isinstance(s, dict):
+                    try:
+                        allowed = clean_settings(s)
+                    except ValueError as e:
+                        return self.fail(400, "Imported settings: %s" % e)
+                    if smtp_target_changed(allowed) and app.secrets.has("SMTP_PASSWORD"):
+                        # never send the saved email password to a mail server from a file
+                        for k in ("smtp_host", "smtp_user", "smtp_port", "smtp_security"):
+                            allowed.pop(k, None)
+                        report["skipped"].append("email server settings (keeps your current mail server)")
+                    app.settings.update(allowed)
+                    report["settings"] = True
+            if "allowlist.txt" in names and z.getinfo("allowlist.txt").file_size < 256 * 1024:
+                lines = z.read("allowlist.txt").decode("utf-8", "replace").splitlines()
+                on = any(re.fullmatch(r"mode\s*=\s*on", l.strip(), re.I) for l in lines)
+                try:
+                    listed = clean_allow_names([l for l in lines if l.strip() and not l.strip().startswith("#")
+                                                and not re.fullmatch(r"mode\s*=\s*\w+", l.strip())])
+                    write_allowlist(on and bool(listed), listed)
+                    report["allowlist"] = len(listed)
+                except ValueError:
+                    report["skipped"].append("allowlist.txt")
+            for extra, rd, wr in (("extras.txt", read_extras, write_extras), ("moderation.txt", read_mod, write_mod),
+                                  ("messages.txt", read_messages, write_messages)):
+                if extra in names and z.getinfo(extra).file_size < 256 * 1024:
+                    shared_write(os.path.join(I().STATS_DIR, extra), z.read(extra).decode("utf-8", "replace"))
+                    wr(rd())                     # re-written through the checks
+                    report.setdefault("restored", []).append(extra)
+            if "bans.txt" in names and z.getinfo("bans.txt").file_size < 256 * 1024:
+                shared_write(I().BANS_FILE, z.read("bans.txt").decode("utf-8", "replace"))
+                write_bans(read_bans())
+                report.setdefault("restored", []).append("bans.txt")
+            if q.get("games") == "1":
+                for n in names:
+                    gm = re.fullmatch(r"games/([^/]+)", n)
+                    if not gm:
+                        continue
+                    zi = z.getinfo(n)
+                    if not games_name_ok(gm.group(1)) or zi.file_size > GAMES_MAX:
+                        report["skipped"].append(n[:120])
+                        continue
+                    dest = os.path.join(I().STATS_DIR, gm.group(1))
+                    try:
+                        os.unlink(dest + ".tmp")
+                    except OSError:
+                        pass
+                    with z.open(zi) as src, open_shared(dest + ".tmp", "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+                    os.replace(dest + ".tmp", dest)
+                    report.setdefault("games", []).append(gm.group(1))
+            if q.get("mods", "1") == "1":
+                total = 0
+                for n in names:
+                    m = re.fullmatch(r"(mods|mods-disabled)/([^/]+)", n)
+                    if not m:
+                        if n not in ("ServerConfig.toml", "easyserver-export.json", "modpack.json", "README.txt") + STATS_EXPORT \
+                                and not n.endswith("/") and not (n.startswith("games/") and q.get("games") == "1"):
+                            report["skipped"].append(n[:120])
+                        continue
+                    name = safe_zip_name(m.group(2))
+                    if not name:
+                        report["skipped"].append(n[:120])
+                        continue
+                    zi = z.getinfo(n)
+                    # zip bombs: a tiny entry that unpacks to many GB fills the disk
+                    total += zi.file_size
+                    if (zi.file_size > 4 * 1024 ** 3 or total > 40 * 1024 ** 3 or
+                            (zi.file_size > 50 * 1024 ** 2 and zi.file_size > 200 * max(zi.compress_size, 1)) or
+                            shutil.disk_usage(UPLOAD_TMP).free < zi.file_size + 1024 ** 3):
+                        report["skipped"].append(n[:120] + " (too large)")
+                        if zi.file_size > 200 * max(zi.compress_size, 1):
+                            app.alerts.raise_("import-bomb", "An imported backup contained a zip bomb",
+                                              "%s unpacks to %d MB from %d KB. It was skipped. Only import backups "
+                                              "you made yourself." % (n[:80], zi.file_size // 2 ** 20, zi.compress_size // 1024))
+                        continue
+                    tdir = tempfile.mkdtemp(dir=UPLOAD_TMP, prefix=".imp-")
+                    try:
+                        dest_tmp = os.path.join(tdir, name)
+                        with z.open(zi) as src, open(dest_tmp, "wb") as dst:
+                            shutil.copyfileobj(src, dst)   # stops at the size listed above
+                        r = modscan.scan(dest_tmp)
+                        if r["verdict"] == "blocked":
+                            report["mods_blocked"].append({"name": name, "reasons": r["reasons"]})
+                            continue
+                        if not IS_WIN:
+                            os.chmod(dest_tmp, 0o664)
+                        final = os.path.join(I().CLIENT_DIR if m.group(1) == "mods" else I().DISABLED_DIR, name)
+                        shutil.move(dest_tmp, final)
+                        modscan.remember(final, r.get("sha256"))
+                        report["mods_added"].append(name)
+                    finally:
+                        shutil.rmtree(tdir, ignore_errors=True)
+        if only_mods:
+            report["modpack"] = True
+            if report["mods_added"]:
+                app.config_changed()
+            return self.send(200, {"ok": True, "report": report, "note": "Added %d mod%s from the modpack." % (
+                len(report["mods_added"]), "" if len(report["mods_added"]) == 1 else "s") + (" " + app.applied_note() if report["mods_added"] else "")})
+        old_port = (toml_parse(app.read_config_text())[0].get("General") or {}).get("Port")
+        text = app.move_plaintext_authkey(text)
+        app.write_config_text(text)
+        report["config"] = True
+        new_port = (toml_parse(text)[0].get("General") or {}).get("Port")
+        if isinstance(new_port, int) and new_port != old_port and not IS_WIN:
+            control("firewall-game", old=old_port if isinstance(old_port, int) else None, new=new_port, timeout=30)
+            app.notifier.add("network", "Server port changed", "Import changed the port %s -> %d. "
+                             "Remember to forward the new port on your router." % (old_port, new_port))
+        undo = getattr(self, "_restore_undo", None)
+        note = app.applied_note()
+        if undo:
+            note = "Backup restored. How things were just before is saved as a backup too, if you want it back. " + note
+        self.send(200, {"ok": True, "report": report, "note": note, "undo": undo})
 
 
 def clean_settings(b):

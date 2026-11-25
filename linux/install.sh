@@ -15,7 +15,7 @@
 # =============================================================================
 set -euo pipefail
 
-EASY_VERSION="1.14.0"
+EASY_VERSION="1.15.0"
 INSTALL_DIR="/opt/beammp-server"
 SERVICE_USER="beammp"
 DASH_USER="beammp-dash"
@@ -146,11 +146,28 @@ detect_system() {
   . /etc/os-release
   OS_PRETTY="${PRETTY_NAME:-Linux}"
 
+  local pi=""
+  grep -qi "raspberry pi" /proc/device-tree/model 2>/dev/null && pi=1
   case "$(uname -m)" in
     x86_64|amd64) ARCH="x86_64";;
     aarch64|arm64) ARCH="arm64";;
-    *) die "Your CPU type ($(uname -m)) has no official BeamMP server build. Needs 64-bit x86 or ARM64.";;
+    *) if [[ -n "$pi" ]]; then
+         die "This Raspberry Pi runs a 32-bit system. The BeamMP server needs the 64-bit Raspberry Pi OS (a Pi 3, 4 or 5) - put it on the card with Raspberry Pi Imager, then run this again."
+       fi
+       die "Your CPU type ($(uname -m)) has no official BeamMP server build. Needs 64-bit x86 or ARM64.";;
   esac
+  # 32-bit Raspberry Pi OS on a Pi 4/5 runs a 64-bit kernel, so uname says aarch64 while the programs are 32-bit
+  if [[ "$ARCH" == "arm64" ]] && { [[ "$(getconf LONG_BIT 2>/dev/null)" == "32" ]] ||
+       [[ "$(dpkg --print-architecture 2>/dev/null)" == armhf ]]; }; then
+    die "This system is 32-bit (only its kernel is 64-bit). The BeamMP server needs a 64-bit system${pi:+ - on a Raspberry Pi, the 64-bit Raspberry Pi OS from Raspberry Pi Imager}."
+  fi
+  if [[ -n "$pi" ]]; then
+    local mem_mb
+    mem_mb=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+    if [[ "${mem_mb:-0}" -gt 0 && "$mem_mb" -lt 1800 ]]; then
+      warn "This Raspberry Pi has ${mem_mb} MB of memory. It runs, but keep it to a few players and small mods - 4 GB or more is better."
+    fi
+  fi
 
   PKG=""
   command -v apt-get >/dev/null && PKG="apt"
@@ -268,6 +285,19 @@ fetch_file() { # fetch_file REPO/PATH DEST - from the downloaded ZIP, or from Gi
   install -m 0644 "$t" "$2"; rm -f "$t"
 }
 
+fetch_optional() { # like fetch_file, but a missing file is skipped instead of stopping the install
+  local rel="$1" c t
+  if [[ -n "$SCRIPT_DIR" ]]; then
+    for c in "$SCRIPT_DIR/$rel" "$SCRIPT_DIR/../$rel"; do
+      if [[ -f "$c" ]]; then install -m 0644 "$c" "$2"; return 0; fi
+    done
+  fi
+  t=$(mktemp)
+  if curl -fsSL --retry 2 -o "$t" "$REPO_RAW/$rel"; then install -m 0644 "$t" "$2"; fi
+  rm -f "$t"
+  return 0
+}
+
 drop_links() { # paths root writes to inside the server folder must be real files/folders
   local p
   for p in "$INSTALL_DIR/ServerConfig.toml" "$INSTALL_DIR/BeamMP-Server" "$INSTALL_DIR/servers" \
@@ -380,7 +410,7 @@ case "${1:-}" in
     cd "$DIR"
     exec "${AS_SERVER[@]}" /opt/beammp-server/BeamMP-Server --config="$RUN/ServerConfig.toml" ;;
   dashboard|mods)
-    for n in MODS_PASSWORD VT_API_KEY DISCORD_WEBHOOK SMTP_PASSWORD TOTP_SECRET DISCORD_BOT_TOKEN DUCKDNS_TOKEN NTFY_TOPIC WAKE_TOPIC USERS_KEY TELEGRAM_TOKEN CUSTOM_WEBHOOK SUPPORTER_KEY; do
+    for n in MODS_PASSWORD VT_API_KEY DISCORD_WEBHOOK SMTP_PASSWORD TOTP_SECRET DISCORD_BOT_TOKEN DUCKDNS_TOKEN NTFY_TOPIC WAKE_TOPIC USERS_KEY TELEGRAM_TOKEN CUSTOM_WEBHOOK SUPPORTER_KEY GDRIVE_SECRET GDRIVE_REFRESH; do
       v=$(SEC "$n"); [[ -n "$v" ]] && export "$n=$v"
     done
     unset v
@@ -804,6 +834,9 @@ install_mods() {
   # Mods folder: group-writable so your own user can drop files in it
   chgrp "$SERVICE_USER" "$INSTALL_DIR/Resources/Client" "$INSTALL_DIR/Resources/Client-disabled"
   chmod 2775 "$INSTALL_DIR/Resources/Client" "$INSTALL_DIR/Resources/Client-disabled"
+  # Server plugins: the dashboard (owner only) installs, turns off and removes them here
+  chgrp "$SERVICE_USER" "$INSTALL_DIR/Resources/Server"
+  chmod 2775 "$INSTALL_DIR/Resources/Server"
   local du; du=$(desktop_user)
   if [[ -n "$du" ]]; then
     usermod -aG "$SERVICE_USER" "$du" || true
@@ -916,8 +949,31 @@ EOF
     if ask_yn "Turn on the web dashboard?" Y; then page="yes"; else page="no"; fi
   fi
 
+  # Inside the small Linux VM that the Mac installer makes: the Mac asks about ports and opens them itself
+  if [[ "${EASY_HOST:-}" == mac ]]; then
+    PORTS_CHOICE="${EASY_MAC_PORTS:-manual}"
+    mkdir -p "$DATA_DIR"
+    python3 - "$DATA_DIR" "$PORTS_CHOICE" "${EASY_HOST_LAN_IP:-}" <<'PY'
+import json, os, sys, time
+d, ports, ip = sys.argv[1], sys.argv[2], sys.argv[3]
+def merge(name, upd):
+    path = os.path.join(d, name)
+    try:
+        with open(path, encoding="utf-8") as f:
+            cur = json.load(f)
+    except (OSError, ValueError):
+        cur = {}
+    cur.update(upd)
+    with open(path + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(cur, f, indent=2)
+    os.replace(path + ".tmp", path)
+merge("dashboard.json", {"upnp_on": False, "guard_on": False})   # the Mac does the port; the guard can't see real IPs
+merge("host.json", {"platform": "mac", "lan_ip": ip, "ports": ports, "t": int(time.time())})
+PY
+  fi
+
   # How friends outside the home get in, in plain words
-  if [[ "$page" != "no" && $OPT_UNATTENDED -eq 0 ]]; then
+  if [[ "$page" != "no" && $OPT_UNATTENDED -eq 0 && "${EASY_HOST:-}" != mac ]]; then
     local cur="1" dj="$DATA_DIR/dashboard.json"
     if [[ -f "$dj" ]] && ! grep -q '"upnp_on": true' "$dj"; then cur="2"; fi
     echo
@@ -957,6 +1013,13 @@ PY
   for f in dashboard.py webui.html modscan.py tlsgen.py upnp.py guard.py; do
     fetch_file "dashboard/$f" "$es/dashboard/$f"
   done
+  # dashboard translations (a missing one just means that language shows English)
+  mkdir -p "$es/dashboard/lang"
+  for f in de es hu pl; do
+    fetch_optional "dashboard/lang/$f.json" "$es/dashboard/lang/$f.json"
+  done
+  # the "New in" cards on the Overview after an update
+  fetch_optional "dashboard/whatsnew.json" "$es/dashboard/whatsnew.json"
   fetch_file "linux/control.py" "$es/control.py"
   rm -f "$es/modmanager.py" "$es/modscan.py"
   # player statistics plugin (runs inside the BeamMP server)
@@ -1139,6 +1202,7 @@ else
 fi
 
 LAN_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+[[ "${EASY_HOST:-}" == mac && -n "${EASY_HOST_LAN_IP:-}" ]] && LAN_IP="$EASY_HOST_LAN_IP"   # players reach the Mac
 PUB_IP=$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || echo "unknown")
 
 cat <<EOF
@@ -1150,7 +1214,9 @@ ${C_GREEN}${C_BOLD}  All done!${C_RESET}
 
 EOF
 GW_IP=$(ip route show default 2>/dev/null | awk '/default/ {print $3; exit}')
-if [[ "${PORTS_CHOICE:-}" == auto && "$MODPAGE_ON" == 1 ]]; then
+if [[ "${EASY_HOST:-}" == mac ]]; then
+  echo "    -> Port forwarding: the Mac installer explains this in a moment."
+elif [[ "${PORTS_CHOICE:-}" == auto && "$MODPAGE_ON" == 1 ]]; then
   echo "    -> The dashboard opens port ${PORT} on your router when you invite friends"
   echo "       (Copy invite, or /join in Discord) and closes it 30 minutes after the last player leaves."
   echo "       Check that your router said yes: dashboard -> Health -> Automatic port forwarding."

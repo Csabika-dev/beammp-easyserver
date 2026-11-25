@@ -10,7 +10,7 @@ If you found a security problem in BeamMP EasyServer, please **don't open a publ
 Please include:
 
 - what the problem is and what an attacker could do with it
-- steps to reproduce it (the EasyServer version, Windows or Linux, settings you used)
+- steps to reproduce it (the EasyServer version, Windows or Linux or MacOS, settings you used)
 - if you have one, a suggested fix
 
 I'll reply within about a week. Once the fix is released, I'm happy to credit you in the changelog (tell me if you'd rather stay anonymous).

@@ -1,0 +1,47 @@
+# Builds the website (docs/) from its React source in site/, and the dashboard page
+# (dashboard/webui.html) from dashboard/ui, and commits the result. Edit site/src and
+# dashboard/ui/src, not docs/*.html or dashboard/webui.html.
+name: Website
+
+on:
+  push:
+    branches: [main]
+    paths: ["site/**", "dashboard/ui/**", "CHANGELOG.md", ".github/workflows/site.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: website
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Link-preview cards and icons (only when their text or pictures changed)
+        working-directory: site
+        run: node images/make.mjs
+      - name: Build
+        working-directory: site
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+      - name: Build the dashboard page
+        working-directory: dashboard/ui
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+      - name: Commit the built pages
+        run: |
+          git add docs dashboard/whatsnew.json dashboard/webui.html
+          if git diff --cached --quiet; then echo "Website already up to date"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Website and dashboard page: rebuild"
+          git push
