@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.15.0 - Vehicle rules, server plugins, Mac support (experimental) - Rolling release only, not in Stable yet
+## 1.15.0 - Vehicle rules, server plugins, teams, events and Google Drive backups
 
 <!-- website: the "New in" cards on the website. One per line, "Title: text". Not shown on GitHub.
 Vehicle rules: Block props, trailers or any car, and stop spawn spam. Mod cars heavy enough to lag everyone are found automatically.
@@ -8,7 +8,7 @@ Server plugins: Install community game modes like CareerMP, freeRoamMP and BeamJ
 Run it as a team: Invite friends with a link that works once and expires after an hour, and choose what each one can do on each server. They can sign in with Discord.
 -->
 
-- **Host on a Mac** (macOS 13+, Apple Silicon or Intel): `curl -fsSL https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/main/mac/install.sh | bash`. BeamMP has no macOS server, so EasyServer runs the official Linux server in a small Lima VM that starts with your Mac and can't see your files. The Mac passes the game ports (TCP + UDP) and the dashboard on to the VM, can keep the game port open on your router with UPnP (checked every 20 minutes), and can keep itself awake while plugged in. The dashboard shows your Mac's address in invites and on the Health page. The BeamMP-only guard isn't available on a Mac. Update by running the command again; `--uninstall` removes it.
+- **Host on a Mac** (experimental - Rolling release only, not part of Stable; macOS 13+, Apple Silicon or Intel): `curl -fsSL https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/main/mac/install.sh | bash`. BeamMP has no macOS server, so EasyServer runs the official Linux server in a small Lima VM that starts with your Mac and can't see your files. The Mac passes the game ports (TCP + UDP) and the dashboard on to the VM, can keep the game port open on your router with UPnP (checked every 20 minutes), and can keep itself awake while plugged in. The dashboard shows your Mac's address in invites and on the Health page. The BeamMP-only guard isn't available on a Mac. Update by running the command again; `--uninstall` removes it.
 - **Vehicle rules** (Config): block props, big physics props (crushers, spinners, containers …), trailers, or any car by name, or allow only certain cars (one-make racing). Set a wait between spawns and a limit on spawns per minute to stop spawn spam. Presets: *Anything goes*, *No chaos*, *Racing*, *Roleplay*. Admins can be exempt. The server refuses a blocked car before anyone sees it and tells the player why - no restart, nothing for players to download.
 - **Auto-detection:** EasyServer looks inside your car mods and counts how complex each car is, so heavy cars (the ones that make everyone's game slower) and prop / trailer mods are recognised and can be blocked in one click - new mods are covered as soon as you add them. The Config page also lists which cars and props players really spawn on your server (last 7 days) with a Block button, and what was refused lately.
 - **Missing-mod warning** (Mods): a mod that only adds parts to a car that isn't in the game or your other mods gets a "needs the mod for …" badge - it does nothing on its own.
