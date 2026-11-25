@@ -35,7 +35,9 @@ function HealthReport({ tick }) {
     <div style={{ marginTop: 8 }}>{h.checks.map((c, i) => <Check key={i} state={c.state}>
       <b>{c.title}</b> <span className="small muted">{word(c.state)}</span>
       <div className="small muted"><Blur text={c.detail} /></div>
-      {c.fix && <div className="small"><b>What to do:</b> <Blur text={c.fix} /></div>}
+      {c.fix && <div className="small"><b>What to do:</b> <Blur text={c.fix} />
+        {c.go && c.go !== L.state().TAB && c.state !== "pass" && L.myTabs().some(t => t[0] === c.go) && <>{" "}<button className="btn sm" style={{ marginLeft: 4 }}
+          onClick={() => { if (c.go === "settings") window.esSettingsAll = true; L.bridge.show(c.go); }}>{"Fix it"}</button></>}</div>}
     </Check>)}</div>
     <p className="small muted" style={{ margin: "8px 0 0" }}>{h.failed
       ? <>Something failed - the <b>diagnostic report</b> has everything needed to get help (versions, checks, settings, the end of the log). Keys, tokens and your public IP are removed from it.</>

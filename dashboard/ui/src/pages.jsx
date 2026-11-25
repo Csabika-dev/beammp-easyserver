@@ -222,7 +222,7 @@ function ServerCard({ x, sys, win }) {
     if (a !== "start" && !confirm((a === "stop" ? "Stop " : "Restart ") + x.name + "? Players on it are disconnected.")) return;
     if (a === "start" && !(await L.reviewGate(x.id))) return;
     setBusy(true);
-    try { await L.api("/api/server/action", { json: { action: a }, headers: { "X-ES-Server": x.id } }); L.toast(a === "stop" ? x.name + " stopped" : x.name + " starting…"); } catch (e) { L.toast(e.message); }
+    try { await L.serverActionApi(a, { "X-ES-Server": x.id }); L.toast(a === "stop" ? x.name + " stopped" : x.name + " starting…"); } catch (e) { L.toast(e.message); }
     setTimeout(() => L.bridge.show("servers"), 1500);
   };
   const saveLim = async () => { try { const r = await L.api("/api/servers/limits", { json: { id: x.id, cpu_cores: lim.cpu, ram_mb: lim.ram, upload_kbps: lim.up } }); L.toast(r.note, 8000); L.bridge.show("servers"); } catch (e) { L.toast(e.message); } };

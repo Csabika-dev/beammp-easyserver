@@ -2088,7 +2088,8 @@
   "Show everything": "Pokaż wszystko",
   "The everyday ones: notifications, phone app, password and backups.": "Te codzienne: powiadomienia, aplikacja na telefon, hasło i kopie zapasowe.",
   "Adds security alerts, the team, two-step login, internet access, Discord bot, integrations, sleep and moving the server.": "Dochodzą alerty bezpieczeństwa, zespół, logowanie dwuetapowe, dostęp z internetu, bot Discord, integracje, uśpienie i przenoszenie serwera.",
-  "Every setting, including the public status page and hiding your IP.": "Wszystkie ustawienia, łącznie z publiczną stroną statusu i ukrywaniem IP."
+  "Every setting, including the public status page and hiding your IP.": "Wszystkie ustawienia, łącznie z publiczną stroną statusu i ukrywaniem IP.",
+  "Fix it": "Napraw"
  },
  "game": {
   "Map voting is turned off on this server.": "Głosowanie na mapę jest wyłączone na tym serwerze.",

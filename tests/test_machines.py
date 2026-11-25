@@ -236,6 +236,45 @@ class Live(Dirs):
         self.assertEqual(self.c.call("/api/machines", {"action": "stop", "ip": "192.168.0.62"})[0], 400)
         self.assertIn("/api/machines", D.OWNER_WRITE)
 
+    def test_moved_server_stays_off(self):
+        D.set_server_meta("main", reviewed=True, moved_to={"ip": "192.168.0.61", "host": "pi5", "t": D.now()})
+        self.addCleanup(lambda: D.set_server_meta("main", moved_to=None))
+        st, d = self.c.call("/api/server/action", {"action": "start"})[:2]
+        self.assertEqual(st, 409)
+        self.assertTrue(d["moved"])
+        self.assertIn("pi5", d["error"])
+        inst = D.INSTANCES["main"]
+        stops = []
+        with mock.patch.object(D.ServerManager, "status", lambda self: {"state": "running", "pid": 1, "uptime": 5, "restarts": 0}), \
+                mock.patch.object(D.ServerManager, "action", lambda self, a: stops.append(a) or {"ok": True}), \
+                mock.patch.object(D, "internet_ok", lambda: False):
+            D.APP._monitor_one(inst, D.APP._monitor_init(inst))     # e.g. the computer restarted and started it
+            self.assertEqual(stops[:1], ["stop"])
+            checks = {c["id"]: c for c in D.health_report()["checks"]}
+        self.assertEqual(checks["moved"]["state"], "warn")
+        self.assertEqual(checks["moved"]["go"], "servers")
+        self.assertEqual(checks["backups"]["go"], "settings")
+        st, d = self.c.call("/api/server/action", {"action": "start", "anyway": True})[:2]
+        self.assertEqual(st, 200, d)
+        self.assertNotIn("moved_to", D.INSTANCES["main"].meta)
+
+    def test_health_backups_and_join_time(self):
+        s = D.APP.settings
+        old = {k: s.get(k) for k in ("backup_on", "backup_copy", "upload_mbit")}
+        self.addCleanup(s.update, old)
+        with mock.patch.object(D, "internet_ok", lambda: False), \
+                mock.patch.object(D, "list_mods", lambda: [{"name": "big.zip", "size": 600 * 10 ** 6, "enabled": True, "maps": [], "safety": "clean", "reasons": [], "needs": []}]):
+            s.update({"backup_on": True, "backup_copy": "", "upload_mbit": 10})
+            checks = {c["id"]: c for c in D.health_report()["checks"]}
+            self.assertIn("only on this computer", checks["backups"]["detail"])
+            self.assertEqual(checks["join"]["state"], "warn")          # 600 MB at 10 Mbit/s = 8 minutes
+            self.assertIn("8 minutes", checks["join"]["detail"])
+            s.update({"backup_copy": "folder", "upload_mbit": 100})
+            checks = {c["id"]: c for c in D.health_report()["checks"]}
+            self.assertEqual(checks["join"]["state"], "pass")
+            s.update({"upload_mbit": 0})
+            self.assertIn("isn't entered", {c["id"]: c for c in D.health_report()["checks"]}["join"]["detail"])
+
     def test_mods_join_numbers(self):
         st, d = self.c.call("/api/mods")[:2]
         self.assertEqual(st, 200)

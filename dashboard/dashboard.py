@@ -2366,6 +2366,14 @@ def remote_snapshot():
     return out
 
 
+def moved_note(inst):
+    """'' or where this server was moved to."""
+    m = inst.meta.get("moved_to")
+    if not isinstance(m, dict):
+        return ""
+    return "%s was moved to %s (%s)" % (inst.name, m.get("host") or m.get("ip"), m.get("ip"))
+
+
 class _Capture:
     """Stands in for a web request when a server moved here is put in place (Handler._import_zip answers through it)."""
     _restore_undo = None
@@ -2423,8 +2431,9 @@ def pi_move_job(pi, iid, stop_here):
             if stop_here:
                 use_server(iid)
                 r = I().server.action("stop")
-                add("Stopped the server on this computer. It starts again if this computer restarts - uninstall it here "
-                    "once you're happy with the new one." if r.get("ok") else
+                set_server_meta(iid, moved_to={"ip": pi["ip"], "host": str(pi.get("host") or "")[:40], "t": now()})
+                add("Stopped the server on this computer. It stays off here, even after a restart, until you press Start "
+                    "on this computer yourself." if r.get("ok") else
                     "Couldn't stop the server on this computer (%s) - stop it yourself." % (r.get("msg") or "failed"))
             _PI.pop("overview", None)
             job.update(state="done", web=pi.get("web") or pi_web(pi["ip"]))
@@ -4398,13 +4407,17 @@ def beammp_backend_ok():
         return False
 
 
+HEALTH_GO = {"process": "overview", "port": "logs", "config": "config", "authkey": "config", "plugin": "logs", "mods": "mods",
+             "external": "network", "disk": "", "memory": "", "moved": "servers", "backups": "settings", "join": "mods"}
+
+
 def health_report(deep=False):
     """Plain-language checks for the selected server: pass / warn / fail, each with what to do."""
     inst = I()
     checks = []
 
     def c(cid, title, state, detail, fix=""):
-        checks.append({"id": cid, "title": title, "state": state, "detail": detail, "fix": fix})
+        checks.append({"id": cid, "title": title, "state": state, "detail": detail, "fix": fix, "go": HEALTH_GO.get(cid, "")})
 
     st = inst.server.status()
     running = st.get("state") == "running"
@@ -4527,6 +4540,34 @@ def health_report(deep=False):
         pct = 100.0 * avail / tot
         c("memory", "Memory", "warn" if pct < 10 else "pass", "%d%% free (%s of %s)." % (pct, fmt_bytes(avail * 1048576), fmt_bytes(tot * 1048576)),
           "Close other programs or lower the player limit." if pct < 10 else "")
+    # 9. moved away, backups, how long joining takes
+    if moved_note(inst):
+        c("moved", "Moved to another computer", "warn", moved_note(inst) + ". The dashboard keeps it off here.",
+          "Nothing to do. To run it on this computer as well, press Start and confirm.")
+    s = APP.settings
+    last = APP.state.get("backup_copy") or {}
+    if not s.get("backup_on"):
+        c("backups", "Backups", "warn", "Nightly backups are off.", "Turn on Back up every night under Settings → Automatic backups.")
+    elif not s.get("backup_copy"):
+        c("backups", "Backups", "warn", "The backups are only on this computer - if its disk dies, they're gone too.",
+          "Settings → Automatic backups → Keep a copy somewhere else: a USB drive or another computer at home.")
+    elif last and not last.get("ok"):
+        c("backups", "Backups", "warn", "The last copy of the backups failed: %s" % last.get("note"),
+          "Check the place under Settings → Automatic backups (is the USB drive plugged in?).")
+    else:
+        c("backups", "Backups", "pass", "Nightly backups, with a copy kept somewhere else.")
+    up = float(s.get("upload_mbit") or 0) * 1000
+    lim = int((inst.meta.get("limits") or {}).get("upload_kbps") or 0)
+    kbps = min(up, lim) if up and lim else up or lim
+    if total and kbps:
+        secs = total * 8 / (kbps * 1000.0)
+        slow = secs > 300
+        c("join", "Joining time", "warn" if slow else "pass",
+          "A new player waits about %s for the mods (%s at %.1f Mbit/s)." % (fmt_secs(int(secs)), fmt_bytes(total), kbps / 1000.0),
+          "Turn off mods you don't need or use light mode (Mods page) - players often give up after a few minutes." if slow else "")
+    elif total and not up:
+        c("join", "Joining time", "warn", "Your upload speed isn't entered, so joining time and upload warnings are unknown.",
+          "Run a speed test on this computer and enter the upload number under Settings → Computer load.")
     checks.sort(key=lambda x: HEALTH_ORDER.get(x["state"], 9))
     worst = checks[0]["state"] if checks else "pass"
     return {"t": now(), "server": inst.name, "overall": worst, "checks": checks, "deep": bool(deep),
@@ -8736,6 +8777,8 @@ class DiscordBot:
                         "- after that you can start it from Discord." % label)
             if st == "running":
                 return "🟢 %s is already running." % label
+            if moved_note(inst):
+                return "🚚 %s - start it on this computer from the dashboard if you really want it here too." % moved_note(inst)
         if what == "stop" and st in ("stopped", "failed"):
             return "🔴 %s is already stopped." % label
         self.busy.add(inst.id)
@@ -10101,6 +10144,8 @@ class App:
             return {"ok": False, "note": "This EasyServer doesn't know that command - update it."}
         if act == "start" and not I().meta.get("reviewed"):
             return {"ok": False, "note": "Open this computer's dashboard once and look over the settings first."}
+        if act in ("start", "restart"):
+            set_server_meta("main", moved_to=None)
         r = self.server.action(act)
         return {"ok": bool(r.get("ok")), "note": {"start": "Started.", "stop": "Stopped.", "restart": "Restarted."}[act]
                 if r.get("ok") else (r.get("msg") or "It didn't work")}
@@ -10125,7 +10170,7 @@ class App:
             if code != 200:
                 return self.remote_answer(cmd, {"ok": False, "note": body.get("error") or "It couldn't be put in place"})
             rep = body.get("report") or {}
-            set_server_meta("main", reviewed=True)
+            set_server_meta("main", reviewed=True, moved_to=None)
             src = re.sub(r"[\x00-\x1f]", "", str(cmd.get("source") or "another computer"))[:80]
             self.notifier.add("backup", "A server moved here", "%s was moved to this computer. How this computer's server was "
                               "before is saved as a backup (%s)." % (src, undo), "info")
@@ -10683,6 +10728,10 @@ class App:
 
     def _monitor_one(self, inst, S):
         self._check_tampering(inst, S)
+        if moved_note(inst) and inst.server.status()["state"] == "running":
+            inst.server.action("stop")
+            self.notifier.add("stopped", "Server kept off", moved_note(inst) + ", so it was stopped here again. To run it on "
+                              "this computer, press Start in the dashboard.", "info")
         if now() >= S.get("maint_next", 0):
             S["maint_next"] = now() + 300
             try:
@@ -12079,9 +12128,15 @@ class Handler(BaseHTTPRequestHandler):
         self.send(200, {"ok": True})
 
     def post_server_action(self, q):
-        what = self.body_json().get("action")
+        b = self.body_json()
+        what = b.get("action")
         if what == "start" and not I().meta.get("reviewed"):
             return self.fail(409, "Look over the settings first - open the dashboard and press Start again.")
+        if what in ("start", "restart") and moved_note(I()):
+            if not b.get("anyway"):
+                return self.send(409, {"ok": False, "moved": True, "error": moved_note(I()) + ". Start it on this computer "
+                                       "too? Use the same AuthKey on only one of them."})
+            set_server_meta(I().id, moved_to=None)
         r = APP.server.action(what)
         if r.get("ok"):
             self.send(200, {"ok": True})

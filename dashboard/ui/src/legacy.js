@@ -352,11 +352,19 @@ async function reviewGate(id, starting = true) {
     back.addEventListener("click", e => { if (e.target === back) done(false); });
   });
 }
+// Start / stop / restart. A server that was moved to another computer asks first before it starts here too.
+async function serverActionApi(action, headers) {
+  try { return await api("/api/server/action", { json: { action }, headers }); }
+  catch (e) {
+    if (!(e.data && e.data.moved) || !confirm(e.message)) throw e;
+    return api("/api/server/action", { json: { action, anyway: true }, headers });
+  }
+}
 async function serverAction(action, btn) {
   if (action === "start" && !(await reviewGate())) return;
   if (action !== "start" && !confirm(action === "stop" ? "Stop the server? Players will be disconnected." : "Restart the server? Players will be disconnected.")) return;
   if (btn) btn.disabled = true;
-  try { await api("/api/server/action", { json: { action } }); toast(action === "stop" ? "Server stopped" : action === "start" ? "Server starting…" : "Server restarting…"); }
+  try { await serverActionApi(action); toast(action === "stop" ? "Server stopped" : action === "start" ? "Server starting…" : "Server restarting…"); }
   catch (e) { toast(e.message); }
   setTimeout(() => show(TAB), 1500);
 }
@@ -432,6 +440,6 @@ export function setServers(xs) { SERVERS = xs; }
 export function clearTimer() { clearInterval(TIMER); TIMER = null; }
 export {
   $, esc, ipb, store, IN_APP, api, toast, undoable, copyText, modal, fmtSize, fmtDur, fmtTime, ago, applyTheme, I, LOGO_SVG, TABS,
-  loadLangList, loadLang, pickLang, tr, approveFromLink, stopAlerts, sleepComputer, myRole, myTabs, reviewGate, serverAction,
+  loadLangList, loadLang, pickLang, tr, approveFromLink, stopAlerts, sleepComputer, myRole, myTabs, reviewGate, serverAction, serverActionApi,
   openInvite, openMyAccount, modBrowser, modpackCode,
 };

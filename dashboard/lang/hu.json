@@ -2088,7 +2088,8 @@
   "Show everything": "Mindent mutass",
   "The everyday ones: notifications, phone app, password and backups.": "A mindennapiak: értesítések, telefonos app, jelszó és mentések.",
   "Adds security alerts, the team, two-step login, internet access, Discord bot, integrations, sleep and moving the server.": "Plusz biztonsági riasztások, a csapat, kétlépcsős belépés, elérés az internetről, Discord-bot, integrációk, alvás és a szerver költöztetése.",
-  "Every setting, including the public status page and hiding your IP.": "Minden beállítás, a nyilvános állapotoldallal és az IP-d elrejtésével együtt."
+  "Every setting, including the public status page and hiding your IP.": "Minden beállítás, a nyilvános állapotoldallal és az IP-d elrejtésével együtt.",
+  "Fix it": "Javítás"
  },
  "game": {
   "Map voting is turned off on this server.": "A pályaszavazás ki van kapcsolva ezen a szerveren.",
