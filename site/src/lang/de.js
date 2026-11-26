@@ -81,6 +81,8 @@ export default {
     winInstall: "Lade **BeamMP-EasyServer-Windows.zip** aus dem [neuesten Release]({LATEST}) herunter, entpacke es und doppelklicke auf **Install-BeamMP-Server.bat**.",
     linuxInstall: "Füge das in ein Terminal ein:",
     videoTitle: "BeamMP-Server in 5 Minuten erstellen - Einrichtungsvideo (Englisch)",
+    videoPlay: "Einrichtungsvideo abspielen (Englisch)",
+    videoConsent: "Wird von YouTube geladen, das dann deine IP-Adresse sieht.",
     videoNote: "Lieber zuschauen? Die ganze Einrichtung dauert etwa 2 Minuten. [Auf YouTube öffnen](https://youtu.be/DWD9HcW1OIc)",
 
     whatTitle: "Was es kann",

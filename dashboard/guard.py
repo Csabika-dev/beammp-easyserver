@@ -24,6 +24,7 @@ WINDOW = 10 * 60     # knocks are counted over this long
 STRIKES = 8          # this many short knocks in WINDOW gets an address blocked
 BLOCK_STEPS = (3600, 6 * 3600, 24 * 3600)
 GOOD_FOR = 30 * 86400
+HISTORY_FOR = 30 * 86400   # a blocked address is forgotten this long after its block ends
 MAX_BLOCKED = 2000
 
 TCP_STATES = {"01": "ESTABLISHED", "02": "SYN_SENT", "03": "SYN_RECV", "04": "FIN_WAIT1", "05": "FIN_WAIT2",
@@ -139,7 +140,11 @@ class Guard:
         self.good = dict(st.get("good") or {})                                        # ip -> last seen playing
         self.open = {}         # (ip, port) -> first seen
         self.knocks = {}       # ip -> [times]
-        self.history = dict(st.get("history") or {})                                  # ip -> times blocked before
+        # ip -> [times blocked before, when the last block ended]. Older saves kept only the count:
+        # those start their 30 days now.
+        now = time.time()
+        self.history = {k: (list(v)[:2] if isinstance(v, (list, tuple)) else [int(v or 0), now])
+                        for k, v in (st.get("history") or {}).items()}
         self.total = int(st.get("total") or 0)
 
     def state(self):
@@ -175,18 +180,21 @@ class Guard:
         return new
 
     def _times(self, ip):
-        return int(self.history.get(ip, 0))
+        h = self.history.get(ip)
+        return int(h[0]) if h else 0
 
     def expire(self, t=None):
         t = t or time.time()
         for ip, b in list(self.blocked.items()):
             if b["until"] <= t:
-                self.history[ip] = int(b.get("times") or 1)
+                self.history[ip] = [int(b.get("times") or 1), b["until"]]
                 del self.blocked[ip]
         for ip in [ip for ip, x in self.knocks.items() if not x or t - x[-1] > WINDOW]:
             del self.knocks[ip]
         for ip in [ip for ip, x in self.good.items() if t - x > GOOD_FOR]:
             del self.good[ip]
+        for ip in [ip for ip, h in self.history.items() if t - h[1] > HISTORY_FOR]:
+            del self.history[ip]
         if len(self.history) > 5000:
             self.history = dict(list(self.history.items())[-5000:])
         if len(self.blocked) > MAX_BLOCKED:      # keep the newest

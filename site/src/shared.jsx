@@ -193,7 +193,7 @@ export function Footer({ note }) {
   return (
     <footer><div className="wrap">
       {note && <p>{note}</p>}
-      <p><Md s={t.common.license} /></p>
+      <p><Md s={t.common.license} /> <a href="privacy.html">{t.nav.privacy}</a></p>
     </div></footer>
   );
 }

@@ -59,6 +59,24 @@ class Decisions(unittest.TestCase):
         g2 = G.Guard(g.state())                    # survives a dashboard restart
         self.assertIn(SCAN, g2.block_list())
 
+    def test_old_blocks_are_forgotten_after_30_days(self):
+        g = G.Guard()
+        self.knock(g, SCAN, G.STRIKES)
+        end = g.blocked[SCAN]["until"]
+        g.expire(end + 1)
+        self.assertEqual(g._times(SCAN), 1)
+        g.expire(end + G.HISTORY_FOR - 60)
+        self.assertEqual(g._times(SCAN), 1)
+        g.expire(end + G.HISTORY_FOR + 60)
+        self.assertEqual(g._times(SCAN), 0)
+        self.assertNotIn(SCAN, g.state()["history"])
+
+    def test_history_saved_by_older_versions_still_loads(self):
+        g = G.Guard({"history": {SCAN: 2}})        # just the count, no date
+        self.assertEqual(g._times(SCAN), 2)
+        g.expire()
+        self.assertEqual(g._times(SCAN), 2)        # its 30 days start now
+
     def test_unblock_vouches(self):
         g = G.Guard()
         self.knock(g, SCAN, G.STRIKES)
@@ -271,3 +289,45 @@ class HostFile(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DashboardLog(unittest.TestCase):
+    """The Windows log file (it has visitors' addresses) rolls over instead of growing forever."""
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.mkdtemp()
+        self.path = os.path.join(self.dir, "dashboard.log")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_rolls_at_the_size_limit(self):
+        log = D.RollingLog(self.path)
+        with mock.patch.object(D.RollingLog, "MAX", 200):
+            log.write("x" * 300 + "\n")
+            log.next_check = 0
+            log.write("after\n")
+        log.f.close()
+        self.assertTrue(os.path.exists(self.path + ".1"))
+        with open(self.path, encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn("after", text)
+        self.assertNotIn("xxx", text)
+
+    def test_rolls_after_30_days(self):
+        with open(self.path, "w", encoding="utf-8") as f:
+            f.write("2020-01-01 10:00:00 log started\nold line 1.2.3.4\n")
+        log = D.RollingLog(self.path)
+        log.write("new\n")
+        log.f.close()
+        with open(self.path, encoding="utf-8") as f:
+            self.assertNotIn("1.2.3.4", f.read())
+        with open(self.path + ".1", encoding="utf-8") as f:
+            self.assertIn("1.2.3.4", f.read())
+
+    def test_a_fresh_log_is_kept(self):
+        log = D.RollingLog(self.path)
+        log.write("hello\n")
+        log.f.close()
+        self.assertFalse(os.path.exists(self.path + ".1"))

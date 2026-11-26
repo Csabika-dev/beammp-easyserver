@@ -41,7 +41,7 @@ import zlib
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-EASY_VERSION = "1.15.1"
+EASY_VERSION = "1.15.2"
 # Paid extras (supporter licence, Experimental for supporters only). Off = EasyServer is fully free:
 # no supporter box, and everyone can pick the Rolling release (newest code). Turn on again later.
 PAID_FEATURES = False
@@ -16323,13 +16323,62 @@ def main():
     httpd.serve_forever()
 
 
+class RollingLog:
+    """dashboard.log on Windows. It holds visitors' IP addresses, so it doesn't grow forever: at 5 MB, or
+    30 days after it was started, it becomes dashboard.log.1 (replacing the older one) and a new one begins."""
+    MAX, AGE = 5 * 1024 * 1024, 30 * 86400
+
+    def __init__(self, path):
+        self.path, self.lock, self.next_check = path, threading.Lock(), 0
+        self._open()
+
+    def _open(self):
+        self.f = open(self.path, "a", encoding="utf-8", buffering=1)
+        try:
+            with open(self.path, "r", encoding="utf-8", errors="replace") as f:
+                first = f.readline()
+            self.started = time.mktime(time.strptime(first[:19], "%Y-%m-%d %H:%M:%S"))
+        except (OSError, ValueError, OverflowError):
+            self.started = os.path.getctime(self.path)     # a log from before this (Windows: when it was made)
+            if not os.path.getsize(self.path):
+                self.started = time.time()
+                self.f.write(time.strftime("%Y-%m-%d %H:%M:%S") + " log started\n")
+
+    def _roll(self):
+        now = time.time()
+        if now < self.next_check:
+            return
+        self.next_check = now + 60
+        try:
+            if self.f.tell() < self.MAX and now - self.started < self.AGE:
+                return
+            self.f.close()
+            os.replace(self.path, self.path + ".1")
+        except OSError:
+            pass
+        self._open()
+
+    def write(self, s):
+        with self.lock:
+            self._roll()
+            return self.f.write(s)
+
+    def flush(self):
+        self.f.flush()
+
+    def isatty(self):
+        return False
+
+    def __getattr__(self, name):                       # encoding, fileno … of the open file
+        return getattr(self.f, name)
+
+
 if __name__ == "__main__":
     if IS_WIN and (sys.stderr is None or sys.stdout is None):
         # started hidden (pythonw): keep messages and crashes in a log file
         try:
             os.makedirs(DATA_DIR, exist_ok=True)
-            _log = open(os.path.join(DATA_DIR, "dashboard.log"), "a", encoding="utf-8", buffering=1)
-            sys.stdout = sys.stderr = _log
+            sys.stdout = sys.stderr = RollingLog(os.path.join(DATA_DIR, "dashboard.log"))
         except OSError:
             pass
     try:
