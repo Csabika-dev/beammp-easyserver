@@ -41,7 +41,7 @@ import zlib
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-EASY_VERSION = "1.15.0"
+EASY_VERSION = "1.15.1"
 # Paid extras (supporter licence, Experimental for supporters only). Off = EasyServer is fully free:
 # no supporter box, and everyone can pick the Rolling release (newest code). Turn on again later.
 PAID_FEATURES = False
@@ -8694,7 +8694,7 @@ def event_results(act, end):
     start = int(act.get("start") or 0)
     if not start:
         return None
-    names = []
+    names = [n for n in (act.get("online") or []) if isinstance(n, str) and n][:50]   # already on when it started
     for ev in read_events(start):
         if ev.get("ev") == "join" and ev["t"] <= end:
             n = str(ev.get("name") or "")[:64]
@@ -11331,11 +11331,15 @@ class App:
                 set_server_meta(inst.id, event_active={"id": e.get("id"), "name": e["name"], "end": st + int(e["minutes"]) * 60,
                                                         "prev_map": prev if prev != e["map"] else None, "mods": moved,
                                                         "start": t, "game": game, "game_prev": game_prev,
-                                                        "results": bool(e.get("results")), "once": bool(e.get("date"))})
+                                                        "results": bool(e.get("results")), "once": bool(e.get("date")),
+                                                        "online": [str(n)[:64] for n in online_names()][:50]})
                 if online_names():
-                    chat_say("%s starts now! Switching to %s - rejoin in a moment.%s" % (
-                        e["name"], e["map"], {"race": " Type /race to start a race.", "drift": " Slide for drift points - /drift shows the best.",
-                                              "cnr": " Type /cnr to start cops and robbers."}.get(game, "")))
+                    hint = {"race": " Type /race to start a race." if any(tr["map"] == e["map"] for tr in read_tracks())
+                            else " Races are on, but this map has no race track yet.",
+                            "drift": " Slide for drift points - /drift shows the best.",
+                            "cnr": " Type /cnr to start cops and robbers."}.get(game, "")
+                    chat_say("%s starts now!%s%s" % (
+                        e["name"], (" Switching to %s - rejoin in a moment." % e["map"]) if e["map"] != prev else "", hint))
                     time.sleep(2)
                 if e["map"] != prev:
                     ok, note = self.switch_map(e["map"])

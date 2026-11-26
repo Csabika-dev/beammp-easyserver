@@ -15,7 +15,7 @@
 # =============================================================================
 set -euo pipefail
 
-EASY_VERSION="1.15.0"
+EASY_VERSION="1.15.1"
 BRANCH="main"            # the stable branch sets this to "stable"
 REPO_RAW="https://raw.githubusercontent.com/Csabika-dev/beammp-easyserver/$BRANCH"
 VM="easyserver"

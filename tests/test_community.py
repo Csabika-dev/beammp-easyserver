@@ -72,7 +72,8 @@ class Events(Base):
         D.set_server_meta("main", events=[{"id": "rn1", "name": "Race night", "on": True, "date": "2026-01-01", "at": "20:00",
                                            "days": [], "minutes": 60, "map": "gridmap_v2"}],
                           event_active={"id": "rn1", "name": "Race night", "end": D.now() - 5, "prev_map": None, "mods": [],
-                                        "start": t0, "game": "race", "game_prev": False, "results": True, "once": True})
+                                        "start": t0, "game": "race", "game_prev": False, "results": True, "once": True,
+                                        "online": ["Host"]})
         posts = []
         laps = {"t1": [{"name": "Dani", "ms": 61234, "car": "etk800", "t": t0 + 60}, {"name": "Old", "ms": 50000, "car": "", "t": t0 - 999}]}
         with mock.patch.object(D, "online_names", lambda: []), \
@@ -87,9 +88,9 @@ class Events(Base):
         self.assertNotIn("event_active", meta)
         self.assertFalse(D.read_games_cfg()["race"])              # was off before the event
         self.assertFalse(meta["events"][0]["on"])                  # a one-off event is done
-        self.assertEqual(meta["event_last"]["results"]["players"], ["Dani", "Sam"])
+        self.assertEqual(meta["event_last"]["results"]["players"], ["Host", "Dani", "Sam"])   # Host was on when it started
         self.assertEqual(len(posts), 1)
-        self.assertIn("2 players joined", posts[0])
+        self.assertIn("3 players joined", posts[0])
         self.assertIn("1:01.234", posts[0])
         self.assertNotIn("Old", posts[0])                          # set before the event
         self.assertIn("4200 points", posts[0])
