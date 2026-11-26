@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.15.1 - Event fixes
+
+- **Event start message**: it no longer says "Switching to … - rejoin in a moment" when the map stays the same, and only tells players to type /race when the map has a race track.
+- **Event results**: players who were already on the server when the event started now count too (before, only players who joined later were listed).
+- **"New in 1.15" box**: after updating to 1.15.0 Stable it said "In Rolling now". It now says it's out in Stable.
+
 ## 1.15.0 - Vehicle rules, server plugins, teams, events and Google Drive backups
 
 <!-- website: the "New in" cards on the website. One per line, "Title: text". Not shown on GitHub.
