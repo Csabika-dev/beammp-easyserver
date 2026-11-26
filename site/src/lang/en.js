@@ -89,6 +89,8 @@ export default {
     winInstall: "Download **BeamMP-EasyServer-Windows.zip** from the [latest release]({LATEST}), extract it and double-click **Install-BeamMP-Server.bat**.",
     linuxInstall: "Paste this into a terminal:",
     videoTitle: "How to make a BeamMP server in 5 minutes - setup video",
+    videoPlay: "Play the setup video",
+    videoConsent: "Loads from YouTube, which then sees your IP address.",
     videoNote: "Rather watch? The whole setup takes about 2 minutes. [Open on YouTube](https://youtu.be/DWD9HcW1OIc)",
 
     whatTitle: "What it does",
@@ -361,7 +363,7 @@ export default {
         "The website is hosted on **GitHub Pages**. Like every web host, GitHub receives your IP address and browser details when you open a page and may keep them in its server logs for security; see GitHub's privacy statement.",
         "**Visit counter.** We count visits with [GoatCounter](https://www.goatcounter.com), a privacy-friendly, open-source counter. It records which page was opened, the site you came from, your browser and system type, screen size and an approximate country worked out from your IP address. It sets no cookies and doesn't store your IP address or follow you across sites. We use these totals only to see which pages people find useful (our legitimate interest in improving the site). It also counts clicks on the download and GitHub buttons.",
         "**Latest version.** To show the newest version number, your browser asks the GitHub API for it directly, so GitHub sees your IP address. The answer is kept in your browser's session storage for an hour.",
-        "**Video.** The home page has a YouTube video using YouTube's privacy-enhanced mode (youtube-nocookie.com). It loads as you scroll to it, so Google receives your IP address and browser details then, and may store data in your browser once you press play; see Google's privacy policy.",
+        "**Video.** The setup video on the home page is our own picture until you click it. Only then does it load from YouTube (in its privacy-enhanced mode, youtube-nocookie.com), so Google receives your IP address and browser details and may store data in your browser; see Google's privacy policy.",
         "**Saved in your browser.** Your chosen light or dark mode, your language, and your best score in the mini game on the error page are saved in your browser's local storage. They never leave your device; clearing your browser data removes them.",
         "No ads, no advertising or social-media trackers, no selling of data.",
       ]],
@@ -370,7 +372,7 @@ export default {
         { ul: [
           "**Player activity**: names of players who joined or left, kicks, bans, mutes and why, races, lap times, drift scores, badges, map votes and reports. The event log is trimmed when it reaches 20 MB; records and leaderboards are kept until you reset them.",
           "**Chat history**: on by default, so you can moderate. It's trimmed at 5 MB and can be cleared in the dashboard or turned off in the config.",
-          "**IP addresses**: players' addresses are kept only in memory while they're online, for the join limit. The BeamMP-only protection keeps addresses it blocked for up to a day, addresses of known players for 30 days, and a list of blocked addresses. The dashboard's own logs record which address logged in or used it (activity log trimmed at 2 MB).",
+          "**IP addresses**: players' addresses are kept only in memory while they're online, for the join limit. The BeamMP-only protection blocks scanning addresses for up to a day and remembers them for 30 days after that, and remembers known players' addresses for 30 days. The dashboard's own logs record which address logged in or used it: the activity log is trimmed at 2 MB, and on Windows the access log starts over every 30 days or at 5 MB, keeping one older file.",
           "**Dashboard accounts**: names, password hashes (never the passwords), two-factor keys, linked Discord IDs and remembered devices (forgotten after 30 days unused, 90 days at most).",
           "**Backups**: the last 7 nightly backups per server, with settings, bans, allow-list and optionally stats and mods. Keys and passwords are never put in a backup.",
           "**Notes, notifications and reports** you or your players create, kept up to a fixed number of entries.",

@@ -81,6 +81,8 @@ export default {
     winInstall: "Töltsd le a **BeamMP-EasyServer-Windows.zip** fájlt a [legújabb kiadásból]({LATEST}), csomagold ki, és kattints duplán az **Install-BeamMP-Server.bat** fájlra.",
     linuxInstall: "Illeszd be ezt egy terminálba:",
     videoTitle: "BeamMP szerver 5 perc alatt - telepítési videó (angolul)",
+    videoPlay: "Telepítési videó lejátszása (angolul)",
+    videoConsent: "A YouTube-ról töltődik be, ami így látja az IP-címedet.",
     videoNote: "Inkább megnéznéd? Az egész telepítés kb. 2 perc. [Megnyitás YouTube-on](https://youtu.be/DWD9HcW1OIc)",
 
     whatTitle: "Mit tud",

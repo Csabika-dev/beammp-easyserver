@@ -211,6 +211,25 @@ const Rows = ({ rows }) => (
 );
 const Head = ({ title, sub }) => <h2><span className="sweep">{title}</span><small><Md s={sub} /></small></h2>;
 
+// The setup video. Nothing loads from YouTube until it's clicked: until then it's our own picture.
+// Without JavaScript the picture is a plain link to the video on YouTube.
+function Video() {
+  const { t, root } = useSite();
+  const h = t.home;
+  const [on, setOn] = useState(false);
+  return (
+    <div className="video">
+      {on
+        ? <iframe src="https://www.youtube-nocookie.com/embed/DWD9HcW1OIc?autoplay=1" title={h.videoTitle} allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; web-share" referrerPolicy="strict-origin-when-cross-origin" allowFullScreen />
+        : <a className="video-play" href="https://youtu.be/DWD9HcW1OIc" onClick={e => { e.preventDefault(); setOn(true); }}>
+            <img src={root + "img/youtube-thumbnail.jpg"} alt="" loading="lazy" />
+            <span className="video-btn" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" fill="currentColor" /></svg></span>
+            <span className="video-label"><b>{h.videoPlay}</b>{h.videoConsent}</span>
+          </a>}
+    </div>
+  );
+}
+
 export function Home() {
   const { t } = useSite();
   const h = t.home;
@@ -225,7 +244,7 @@ export function Home() {
           <Head title={h.startTitle} sub={h.startSub} />
           <div>
             <Road />
-            <div className="video"><iframe src="https://www.youtube-nocookie.com/embed/DWD9HcW1OIc" title={h.videoTitle} loading="lazy" allow="accelerometer; encrypted-media; gyroscope; picture-in-picture; web-share" referrerPolicy="strict-origin-when-cross-origin" allowFullScreen /></div>
+            <Video />
             <p className="note"><Md s={h.videoNote} /></p>
           </div>
         </section>
