@@ -355,7 +355,7 @@ export default {
         ] },
       ]],
       ["who", "Who is responsible for what", [
-        "**The EasyServer project** (the people who maintain [EasyServer on GitHub]({GH})) is responsible for this website and for the Discord sign-in helper described below.",
+        "**The EasyServer project** (the people who maintain [EasyServer on GitHub]({GH})) is responsible for this website and for the Discord sign-in helper described below. Contact: [beammp.easyserver.security@gmail.com](mailto:beammp.easyserver.security@gmail.com).",
         "**The owner of each server** is responsible for the data their own server keeps about its players. EasyServer is software you install and run yourself, like any other program. We don't host your server, can't see it, and have no copy of anything it stores. If you play on someone's server and have a question about your data there, ask that server's owner.",
         "EasyServer is a community project. It isn't made by or affiliated with the BeamMP team or BeamNG GmbH; BeamMP and BeamNG.drive have their own privacy policies.",
       ]],
@@ -415,7 +415,7 @@ export default {
       ]],
       ["rights", "Your rights and how to reach us", [
         "Under the GDPR and similar laws you can ask what data someone has about you, have it corrected or deleted, and object to its use. For this website and the sign-in helper, we usually hold nothing that identifies you: GoatCounter totals are anonymous and the helper stores nothing. For data on a game server, contact that server's owner.",
-        "For privacy questions, [open a discussion on GitHub]({ASK}) without any personal details in it and ask for a private contact, or use [private reporting]({GH}/security/advisories/new) for anything sensitive. You can also complain to the data protection authority in your country.",
+        "For privacy questions or requests, email [beammp.easyserver.security@gmail.com](mailto:beammp.easyserver.security@gmail.com). Please don't post personal details in public GitHub issues or discussions. You can also complain to the data protection authority in your country.",
       ]],
       ["changes", "Changes", [
         "If EasyServer starts handling data in a new way, this page is updated in the same release and the date at the top changes. Every change can be seen in the project's history on GitHub.",
