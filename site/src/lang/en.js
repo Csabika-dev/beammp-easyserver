@@ -21,11 +21,17 @@ export default {
       ogTitle: "BeamMP EasyServer - Help & community",
       ogDescription: "Common questions with ready answers, and a community forum for everything else.",
     },
+    privacy: {
+      title: "Privacy policy - BeamMP EasyServer",
+      description: "What BeamMP EasyServer, its website and the Discord sign-in helper do with personal data. No telemetry: your server's data stays on your own computer.",
+      ogTitle: "BeamMP EasyServer - Privacy policy",
+      ogDescription: "No telemetry. Your server's data stays on your own computer.",
+    },
   },
 
   nav: {
     start: "Get started", what: "What it does", downloads: "Downloads", faq: "FAQ",
-    features: "Features", help: "Help", language: "Language",
+    features: "Features", help: "Help", language: "Language", privacy: "Privacy",
   },
 
   common: {
@@ -330,6 +336,88 @@ export default {
         { ol: ["**Health → Download diagnostic report**. Keys, passwords and addresses are removed from it.",
           "[Ask in the community forum]({ASK}) and attach the report. Bugs go to [issues]({GH}/issues/new/choose)."] },
         "Found a security problem? Please use [private reporting]({GH}/security/advisories/new) instead of posting it publicly."]],
+    ],
+  },
+  privacy: {
+    h1: "Privacy policy",
+    lead: "What BeamMP EasyServer, this website and the Discord sign-in helper do with personal data, in plain words. The short version: EasyServer runs on your own computer and sends nothing about you or your players to us.",
+    updated: "Last updated: 26 November 2026. Earlier versions are in the project's history on GitHub.",
+    contents: "On this page",
+    sections: [
+      ["short", "The short version", [
+        { ul: [
+          "**No telemetry.** The EasyServer software, the phone app and the wake helper have no analytics, no crash reporting and no tracking. We never receive your players' names, chat, IP addresses or stats.",
+          "**Your server's data stays on your computer**: player names, chat, stats, bans and logs are files on the PC or Raspberry Pi that runs the server. Only features you turn on yourself (Discord, Google Drive, notifications and the others listed below) send anything elsewhere, and only to the service you set up.",
+          "**This website** counts visits with GoatCounter, which uses no cookies and stores no IP addresses. It sets no cookies of its own and shows no ads.",
+          "**Discord sign-in** for team accounts goes through a small helper we run. It passes your Discord ID and name back to your dashboard and stores nothing.",
+        ] },
+      ]],
+      ["who", "Who is responsible for what", [
+        "**The EasyServer project** (the people who maintain [EasyServer on GitHub]({GH})) is responsible for this website and for the Discord sign-in helper described below.",
+        "**The owner of each server** is responsible for the data their own server keeps about its players. EasyServer is software you install and run yourself, like any other program. We don't host your server, can't see it, and have no copy of anything it stores. If you play on someone's server and have a question about your data there, ask that server's owner.",
+        "EasyServer is a community project. It isn't made by or affiliated with the BeamMP team or BeamNG GmbH; BeamMP and BeamNG.drive have their own privacy policies.",
+      ]],
+      ["website", "This website", [
+        "The website is hosted on **GitHub Pages**. Like every web host, GitHub receives your IP address and browser details when you open a page and may keep them in its server logs for security; see GitHub's privacy statement.",
+        "**Visit counter.** We count visits with [GoatCounter](https://www.goatcounter.com), a privacy-friendly, open-source counter. It records which page was opened, the site you came from, your browser and system type, screen size and an approximate country worked out from your IP address. It sets no cookies and doesn't store your IP address or follow you across sites. We use these totals only to see which pages people find useful (our legitimate interest in improving the site). It also counts clicks on the download and GitHub buttons.",
+        "**Latest version.** To show the newest version number, your browser asks the GitHub API for it directly, so GitHub sees your IP address. The answer is kept in your browser's session storage for an hour.",
+        "**Video.** The home page has a YouTube video using YouTube's privacy-enhanced mode (youtube-nocookie.com). It loads as you scroll to it, so Google receives your IP address and browser details then, and may store data in your browser once you press play; see Google's privacy policy.",
+        "**Saved in your browser.** Your chosen light or dark mode, your language, and your best score in the mini game on the error page are saved in your browser's local storage. They never leave your device; clearing your browser data removes them.",
+        "No ads, no advertising or social-media trackers, no selling of data.",
+      ]],
+      ["software", "The EasyServer software on your computer", [
+        "EasyServer keeps its data in its own folder on the computer that runs it (for example `C:\\BeamMP-Server\\EasyServer\\data` on Windows or `/opt/beammp-server/.easyserver` on Linux). This includes:",
+        { ul: [
+          "**Player activity**: names of players who joined or left, kicks, bans, mutes and why, races, lap times, drift scores, badges, map votes and reports. The event log is trimmed when it reaches 20 MB; records and leaderboards are kept until you reset them.",
+          "**Chat history**: on by default, so you can moderate. It's trimmed at 5 MB and can be cleared in the dashboard or turned off in the config.",
+          "**IP addresses**: players' addresses are kept only in memory while they're online, for the join limit. The BeamMP-only protection keeps addresses it blocked for up to a day, addresses of known players for 30 days, and a list of blocked addresses. The dashboard's own logs record which address logged in or used it (activity log trimmed at 2 MB).",
+          "**Dashboard accounts**: names, password hashes (never the passwords), two-factor keys, linked Discord IDs and remembered devices (forgotten after 30 days unused, 90 days at most).",
+          "**Backups**: the last 7 nightly backups per server, with settings, bans, allow-list and optionally stats and mods. Keys and passwords are never put in a backup.",
+          "**Notes, notifications and reports** you or your players create, kept up to a fixed number of entries.",
+        ] },
+        "**Connections it makes by itself.** To keep things up to date, EasyServer contacts GitHub and GitHub Pages (update checks, the plugin list and BeamMP server downloads), beamng.com (mod update checks, can be turned off), BeamMP's server list (to check that your server is listed) and an address lookup service (api.ipify.org, or ifconfig.me if that fails) to find your public address. These services see your computer's IP address and that the request comes from EasyServer. Nothing about your players is sent.",
+      ]],
+      ["optin", "Features that send data elsewhere (only if you turn them on)", [
+        "All of these are off until the server owner sets them up. Each sends data straight from your computer to that service, under that service's own terms:",
+        { ul: [
+          "**Discord** (webhooks, bot, chat bridge, join alerts, event ads, weekly recaps): sends the messages you choose to your Discord server. They can include player names, chat, stats, ban reasons and, if you enable it, the server address.",
+          "**Notifications** by email (your own mail server), Telegram, ntfy or a custom webhook: the notification text, which can include player names.",
+          "**Google Drive copies**: nightly backups go to a folder in your own Google Drive. EasyServer asks only for access to the files it creates itself (the `drive.file` permission), reads your Google account email to show which account is connected, and uses this access only to save, list and restore its backups. It doesn't read your other files, share Google data with anyone, or use it for ads. EasyServer's use of information received from Google APIs follows the [Google API Services User Data Policy](https://developers.google.com/terms/api-services-user-data-policy), including the Limited Use requirements. Disconnect any time in the dashboard or in your Google account.",
+          "**VirusTotal mod check** (your own key): sends a fingerprint of each mod file and uploads files VirusTotal hasn't seen before. VirusTotal shares uploaded files with security researchers.",
+          "**DuckDNS**: your chosen domain name and your public IP address, so the name keeps pointing at your server.",
+          "**Port forwarding (UPnP)**: talks only to your own router.",
+          "**Public status page**: shows the public what you pick: server status, map, mods, events and leaderboards. Online player names and your join address are only shown if you turn them on.",
+          "**Raspberry Pi setup**: downloads the system image from raspberrypi.com. The Wi-Fi details you enter are written only to the SD card for the Pi.",
+        ] },
+      ]],
+      ["login", "Sign in with Discord", [
+        "Team accounts can sign in to a dashboard with Discord. Because Discord needs a fixed address and a secret that can't be in open-source code, this goes through a small helper the EasyServer project runs on **Cloudflare Workers** (easyserver-login.easyserver-hq.workers.dev).",
+        "When you sign in, Discord tells the helper your Discord user ID, username and display name (the `identify` permission only: no email, no servers, no messages). The helper signs this information, sends it straight back to the dashboard you came from, and revokes the Discord token. It has no database and keeps no list of users or sign-ins; it's set up with request logs turned off. Cloudflare handles the connection and sees your IP address; see Cloudflare's privacy policy.",
+        "The dashboard then stores your Discord ID and name with your team account, on the owner's computer, until the link is removed.",
+      ]],
+      ["apps", "Phone app and wake helper", [
+        "The **Android app** opens your own dashboard. It needs only internet access, has no analytics or advertising code, and saves on your phone just what it needs to reach and wake your server (the dashboard address and its certificate fingerprint, and the wake-up details).",
+        "The **wake helper** runs on a computer you choose. It saves its pairing and your Discord bot token in a file only it can read, and listens for wake-up requests from your ntfy topic and your Discord bot. Its log records who asked to start the server.",
+      ]],
+      ["owners", "If you run a server: your part", [
+        "Your server keeps data about the people who play on it, so privacy laws such as the EU's GDPR may apply to you, especially on a public server. A server just for friends and family is often treated as private use. In practice:",
+        { ul: [
+          "Tell your players what you keep, for example in the welcome message or on your Discord: names, chat, stats and moderation actions, and whether anything goes to Discord.",
+          "Keep only what you need. Turn chat history off if you don't moderate, and keep the public page's player names off unless your players are happy with it.",
+          "If a player asks you to delete their data, remove their records, bans, notes and reports, and clear the chat history.",
+          "Don't post players' IP addresses publicly. The dashboard hides them until you click.",
+        ] },
+      ]],
+      ["kids", "Children", [
+        "EasyServer is a tool for people who host game servers and isn't aimed at children. We don't knowingly collect data from children. BeamNG.drive and Discord have their own minimum ages.",
+      ]],
+      ["rights", "Your rights and how to reach us", [
+        "Under the GDPR and similar laws you can ask what data someone has about you, have it corrected or deleted, and object to its use. For this website and the sign-in helper, we usually hold nothing that identifies you: GoatCounter totals are anonymous and the helper stores nothing. For data on a game server, contact that server's owner.",
+        "For privacy questions, [open a discussion on GitHub]({ASK}) without any personal details in it and ask for a private contact, or use [private reporting]({GH}/security/advisories/new) for anything sensitive. You can also complain to the data protection authority in your country.",
+      ]],
+      ["changes", "Changes", [
+        "If EasyServer starts handling data in a new way, this page is updated in the same release and the date at the top changes. Every change can be seen in the project's history on GitHub.",
+      ]],
     ],
   },
   notFound: {
