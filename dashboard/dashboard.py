@@ -41,7 +41,7 @@ import zlib
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-EASY_VERSION = "1.15.1"
+EASY_VERSION = "1.15.2"
 # Paid extras (supporter licence, Experimental for supporters only). Off = EasyServer is fully free:
 # no supporter box, and everyone can pick the Rolling release (newest code). Turn on again later.
 PAID_FEATURES = False

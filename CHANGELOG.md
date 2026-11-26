@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.15.2 - Privacy
+
+- **Privacy policy**: the website has a [Privacy page](https://csabika-dev.github.io/beammp-easyserver/privacy.html) that explains what EasyServer, the website and the Discord sign-in helper do with personal data, and what server owners are responsible for.
+- **Dashboard log on Windows**: it holds visitors' IP addresses, so it now starts over every 30 days or at 5 MB, keeping one older file. Before, it grew forever.
+- **Blocked addresses** (BeamMP-only protection): forgotten 30 days after their block ends, instead of being kept for good.
+- **Website video**: loads from YouTube only when you click it.
+
 ## 1.15.1 - Event fixes
 
 - **Event start message**: it no longer says "Switching to … - rejoin in a moment" when the map stays the same, and only tells players to type /race when the map has a race track.

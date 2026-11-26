@@ -21,7 +21,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'   # makes downloads much faster
-$EasyVersion  = '1.15.1'
+$EasyVersion  = '1.15.2'
 $DefaultDir   = 'C:\BeamMP-Server'
 $StateFile    = Join-Path $env:ProgramData 'BeamMP-EasyServer\install-dir.txt'
 $ServerUrl    = 'https://github.com/BeamMP/BeamMP-Server/releases/latest/download/BeamMP-Server.exe'
